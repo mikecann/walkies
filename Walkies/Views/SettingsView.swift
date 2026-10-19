@@ -54,7 +54,7 @@ struct SettingsView: View {
                 Section {
                     Toggle("Always on", isOn: $model.alwaysOn)
                 } footer: {
-                    Text("Walkies records in the background, so there's no Start walk to remember. Just head out. GPS pauses while you're sitting still, but it will still use more battery than starting walks yourself.")
+                    Text("Walkies records in the background, so there's no Start walk to remember. Just head out. A walk only starts counting once you're \(Int(AppModel.autoWalkConfirmDistance)) m from where it began, so GPS wandering about indoors doesn't uncover anything; until then a little shoe shows how far you've got. GPS pauses while you're sitting still, but it will still use more battery than starting walks yourself.")
                 }
 
                 if model.alwaysOn && !model.tracker.hasAlwaysPermission {

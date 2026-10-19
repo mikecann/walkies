@@ -192,3 +192,23 @@ struct CoverageTests {
         #expect(samples.count == 1 + 10 + 4)
     }
 }
+
+struct PendingWalkTests {
+    let home = LocalProjection(origin: Coordinate(lat: -33.638, lon: 115.386))
+
+    func point(_ x: Double, _ y: Double, at t: Double) -> TrackPoint {
+        let c = home.unproject(SIMD2(x, y))
+        return TrackPoint(lat: c.lat, lon: c.lon, time: t, accuracy: 10)
+    }
+
+    @Test func gpsWobbleAtHomeNeverGetsFarEnoughToCount() {
+        // Bouncing 40 m either way for ten minutes adds up to kilometres of "distance".
+        let wobble = (0..<120).map { point($0 % 2 == 0 ? -40 : 40, Double($0 % 3) * 20 - 20, at: Double($0) * 5) }
+        #expect(AppModel.displacement(of: wobble) < AppModel.autoWalkConfirmDistance)
+    }
+
+    @Test func aRealWalkDoes() {
+        let walk = (0..<40).map { point(Double($0) * 6, 0, at: Double($0) * 5) }
+        #expect(AppModel.displacement(of: walk) >= AppModel.autoWalkConfirmDistance)
+    }
+}

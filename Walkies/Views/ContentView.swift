@@ -248,7 +248,10 @@ struct WalkControls: View {
     let onStart: () -> Void
 
     var body: some View {
-        if let walk = model.activeWalk {
+        if model.autoWalkPending {
+            PendingWalkBadge(distance: model.pendingWalkDistance)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else if let walk = model.activeWalk {
             VStack(spacing: 12) {
                 HStack {
                     TimelineView(.periodic(from: walk.startedAt, by: 1)) { _ in
@@ -295,6 +298,47 @@ struct WalkControls: View {
                 }
             }
             .buttonStyle(StickerButtonStyle())
+        }
+    }
+}
+
+/// A walk that might just be GPS wandering about at home: a small shoe and how far
+/// you've got. Tap it and it says what that means, then shrinks back.
+private struct PendingWalkBadge: View {
+    let distance: Double
+    @State private var explaining = false
+
+    var body: some View {
+        Button {
+            withAnimation(.snappy) { explaining.toggle() }
+        } label: {
+            HStack(spacing: 8) {
+                Image("icon-walk").resizable().scaledToFit().frame(width: 24, height: 24)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(explaining ? "Walk pending, \(Int(distance)) m so far" : "\(Int(distance)) m")
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                    if explaining {
+                        Text("Counts once you're \(Int(AppModel.autoWalkConfirmDistance)) m from where you started")
+                            .font(.caption)
+                            .foregroundStyle(Color.ink.opacity(0.6))
+                    }
+                }
+                .foregroundStyle(Color.ink)
+                .multilineTextAlignment(.leading)
+            }
+            .padding(.leading, 8)
+            .padding(.trailing, 12)
+            .padding(.vertical, 6)
+            .stickerCard(in: .rect(cornerRadius: 20))
+        }
+        .buttonStyle(PressScale())
+        .accessibilityLabel("Walk pending, \(Int(distance)) metres so far")
+        .task(id: explaining) {
+            guard explaining else { return }
+            try? await Task.sleep(for: .seconds(5))
+            withAnimation(.snappy) { explaining = false }
         }
     }
 }

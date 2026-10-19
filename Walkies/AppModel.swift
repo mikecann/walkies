@@ -50,6 +50,15 @@ final class AppModel {
     /// GPS drift. Any tiles it uncovered stay uncovered.
     static let minimumAutoWalk = 300.0
 
+    /// An always-on walk only counts once you've got this far (metres, as the crow
+    /// flies) from where it started. GPS indoors can wander tens of metres back and
+    /// forth, which adds up as distance but never carries you this far away.
+    static let autoWalkConfirmDistance = 150.0
+
+    /// True while an always-on walk has started but you haven't gone far enough yet to
+    /// be sure it's a real one. Nothing gets uncovered until it's sure.
+    private(set) var autoWalkPending = false
+
     let tracker = LocationTracker()
     let motion = MotionMonitor()
     @ObservationIgnored private let store = Store()
@@ -69,7 +78,8 @@ final class AppModel {
                 if alwaysOn, walk.isAutomatic, let last = walk.points.last,
                    Date.now.timeIntervalSince1970 - last.time < Self.autoWalkGap {
                     activeWalk = walk
-                    activePath = walk.points.map(\.coordinate)
+                    autoWalkPending = Self.displacement(of: walk.points) < Self.autoWalkConfirmDistance
+                    activePath = autoWalkPending ? [] : walk.points.map(\.coordinate)
                     continue
                 }
                 walk.endedAt = walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt
@@ -199,12 +209,37 @@ final class AppModel {
             activeWalk = Walk(startedAt: Date(timeIntervalSince1970: point.time), automatic: true)
             activePath = []
             freshTiles = [:]
+            autoWalkPending = true
         }
         guard var walk = activeWalk else { return }
         walk.points.append(point)
-        apply(step, at: point, to: &walk)
+        if autoWalkPending {
+            walk.distance += step.distance
+            if Self.displacement(of: walk.points) >= Self.autoWalkConfirmDistance {
+                // It's a real walk: uncover everything since it started in one go.
+                autoWalkPending = false
+                let samples = CoverageTracer.samples(for: walk.points)
+                activePath = samples
+                let uncovered = visit(samples)
+                walk.newTiles += uncovered
+                revealCount += uncovered
+            }
+        } else {
+            apply(step, at: point, to: &walk)
+        }
         activeWalk = walk
         saveIfDue()
+    }
+
+    /// How far a pending walk has got from where it started, in metres.
+    var pendingWalkDistance: Double {
+        activeWalk.map { Self.displacement(of: $0.points) } ?? 0
+    }
+
+    /// How far the furthest point gets from the first, in metres.
+    static func displacement(of points: [TrackPoint]) -> Double {
+        guard let first = points.first?.coordinate else { return 0 }
+        return points.map { first.distance(to: $0.coordinate) }.max() ?? 0
     }
 
     private func apply(_ step: CoverageTracer.Step, at point: TrackPoint, to walk: inout Walk) {
@@ -235,6 +270,8 @@ final class AppModel {
 
     private func finishAutoWalk() {
         guard var walk = activeWalk, walk.isAutomatic else { return }
+        let wasPending = autoWalkPending
+        autoWalkPending = false
         activeWalk = nil
         activePath = []
         freshTiles = [:]
@@ -244,7 +281,7 @@ final class AppModel {
         // Measure again by today's rules, so walks logged by older versions (or GPS
         // wobble at home) don't get kept as real ones. Tiles already uncovered stay.
         walk.distance = CoverageTracer.distance(for: walk.points)
-        if walk.distance >= Self.minimumAutoWalk {
+        if !wasPending, walk.distance >= Self.minimumAutoWalk {
             walks.append(walk)
             store.save(walk)
         } else {
