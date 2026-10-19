@@ -16,12 +16,38 @@ struct CloudTests {
         )
     }
 
-    @Test func cloudsCoverOnlyUnwalkedTiles() {
-        let tiles: Set = [Hex(q: 0, r: 0), Hex(q: 1, r: 0), Hex(q: 0, r: 1), Hex(q: 2, r: -1)]
-        let visited: Set = [Hex(q: 1, r: 0)]
-        let field = CloudField(city: city(tiles: tiles, visited: visited))
-        #expect(field.puffs.count == 3)
-        #expect(field.clearings.count == 1)
+    @Test func wholeSuburbStartsUnderCloud() {
+        let test = city(tiles: [Hex(q: 0, r: 0), Hex(q: 1, r: 0)], visited: [])
+        let cover = test.cloudCover()
+        #expect(cover.clear.isEmpty)
+        #expect(cover.clouded == City.hexes(inside: test.shape(), grid: test.grid))
+        #expect(CloudField(city: test).puffs.count == cover.clouded.count)
+    }
+
+    @Test func noPathTilesClearWhenYouWalkTheNearestStreet() {
+        // Two lone street tiles at opposite sides of the suburb; everything else is bush.
+        let west = Hex(q: -3, r: 0), east = Hex(q: 4, r: 0)
+        let test = city(tiles: [west, east], visited: [west])
+        let cover = test.cloudCover()
+
+        #expect(cover.clear.contains(west))
+        #expect(cover.clear.contains(Hex(q: -4, r: 1)))  // bush next to the walked street
+        #expect(cover.clouded.contains(east))
+        #expect(cover.clouded.contains(Hex(q: 4, r: 1)))  // bush next to the unwalked one
+        #expect(cover.clear.isDisjoint(with: cover.clouded))
+        // Clearing bush doesn't change the score: only street tiles count.
+        #expect(test.progress == 0.5)
+    }
+
+    @Test func tiesAlwaysGoTheSameWay() {
+        // Built in different orders, so the sets are likely to iterate differently.
+        let a: Set = [Hex(q: -2, r: 0), Hex(q: 2, r: 0)]
+        var b = Set<Hex>(minimumCapacity: 64)
+        b.insert(Hex(q: 2, r: 0))
+        b.insert(Hex(q: -2, r: 0))
+        let first = city(tiles: a, visited: [Hex(q: -2, r: 0)]).cloudCover().clear
+        let second = city(tiles: b, visited: [Hex(q: -2, r: 0)]).cloudCover().clear
+        #expect(first == second)
     }
 
     @Test func cloudsAreTheSameEveryTime() {

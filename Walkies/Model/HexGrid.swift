@@ -6,6 +6,12 @@ nonisolated struct Hex: Hashable, Sendable {
     var r: Int32
 }
 
+nonisolated extension Hex {
+    var neighbours: [Hex] {
+        [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)].map { Hex(q: q + Int32($0.0), r: r + Int32($0.1)) }
+    }
+}
+
 // Stored as [q, r] to keep the save files small.
 nonisolated extension Hex: Codable {
     init(from decoder: Decoder) throws {

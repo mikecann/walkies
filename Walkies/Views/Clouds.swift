@@ -34,22 +34,19 @@ nonisolated struct CloudField: Sendable {
 
     init() {}
 
-    /// With `blanket`, clouds also cover tiles in the boundary that have no street or
-    /// path (bush, wetland, canals), so the whole suburb is one sheet of cloud.
-    /// Without it they're left clear, because they don't count towards 100%.
-    init(city: City, blanket: Bool = false) {
+    init(city: City) {
         let grid = city.grid
+        let cover = city.cloudCover()
         let metres = MKMapPointsPerMeterAtLatitude(grid.projection.origin.lat)
         let radius = grid.size * Self.spread * metres
         reach = radius * 1.25
         let hole = grid.size * Self.clearing * metres
-        clearings = city.visited.map { hex in
+        clearings = cover.clear.map { hex in
             let centre = MKMapPoint(grid.projection.unproject(grid.centre(of: hex)).cl)
             return MKMapRect(x: centre.x - hole, y: centre.y - hole, width: hole * 2, height: hole * 2)
         }
         let hexSize = grid.size * metres
-        let clouded = blanket ? city.boundaryHexes().union(city.tiles) : city.tiles
-        puffs = clouded.subtracting(city.visited)
+        puffs = cover.clouded
             .map { hex in
                 // Nudge and resize each cloud a little, always the same way for the same
                 // hex, so the blanket doesn't sit on an obvious honeycomb.

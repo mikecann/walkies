@@ -102,7 +102,7 @@ struct FogMapView: UIViewRepresentable {
 
             // Keep each overlay before adding it: MapKit can ask for its renderer straight
             // away, and the renderer is picked by which overlay it is.
-            let clouds = CloudOverlay(boundary: city.boundary, field: CloudField(city: city, blanket: UserDefaults.standard.bool(forKey: "fullBlanket")))
+            let clouds = CloudOverlay(boundary: city.boundary, field: CloudField(city: city))
             self.clouds = clouds
             add(clouds, to: map)
 
@@ -122,7 +122,7 @@ struct FogMapView: UIViewRepresentable {
 
         private func updateClouds(on map: MKMapView) {
             guard let city, let clouds else { return }
-            clouds.field = CloudField(city: city, blanket: UserDefaults.standard.bool(forKey: "fullBlanket"))
+            clouds.field = CloudField(city: city)
             map.renderer(for: clouds)?.setNeedsDisplay()
         }
 
