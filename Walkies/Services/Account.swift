@@ -4,7 +4,7 @@ import Observation
 import Security
 import UIKit
 
-/// Session tokens from Convex Auth.
+/// Session tokens from Convex Auth, plus who they belong to.
 nonisolated struct Session: Codable, Sendable {
     var accessToken: String
     /// Milliseconds since 1970, as Convex Auth sends them.
@@ -12,20 +12,29 @@ nonisolated struct Session: Codable, Sendable {
     var refreshToken: String
     var refreshTokenExpiresAt: Double
     var userId: String
-    var username: String?
+    var name: String?
+    var email: String?
 }
 
-/// Signing in with a passkey through Convex Auth v2. The username picks the
-/// account: a new one makes an account and a passkey, an existing one asks for its
-/// passkey. Face ID does the rest. The session lives in the Keychain.
+/// Signing in with Apple or Google through Convex Auth v2. Their sign-in pages run
+/// in a secure sheet that ends on the deployment's own site, which the app is
+/// linked to, so the sheet hands the one-time code straight back. The session
+/// lives in the Keychain.
 @Observable
 final class Account {
+    enum Provider: String {
+        case apple = "Apple"
+        case google = "Google"
+    }
+
     private(set) var session: Session?
 
     var isSignedIn: Bool { session != nil }
-    var username: String? { session?.username }
+    /// The name to show for whoever's signed in.
+    var displayName: String? { session?.name ?? session?.email }
+    var email: String? { session?.email }
 
-    @ObservationIgnored private let ceremony = PasskeyCeremony()
+    @ObservationIgnored private let sheet = SignInSheet()
     @ObservationIgnored private var refreshing: Task<Session?, Never>?
 
     init() {
@@ -34,44 +43,30 @@ final class Account {
 
     // MARK: Signing in
 
-    /// Signs in to the account with this username, or creates it if it's free.
-    func signIn(username: String) async throws {
-        let name = username.trimmingCharacters(in: .whitespacesAndNewlines)
+    func signIn(with provider: Provider) async throws {
+        let returnTo = Backend.site.appending(path: "app/signed-in")
         let start: StartResult = try await ConvexClient().mutation(
-            "auth:startSignInWithUsernamePasskey", ["username": name]
+            "auth:startSignInWith\(provider.rawValue)", ["redirectTo": returnTo.absoluteString]
         )
-        if let error = start.userError { throw SignInError(code: error.error) }
-        guard let options = start.options else { throw SignInError(code: "PROTOCOL_ERROR") }
+        guard let page = URL(string: start.redirect) else { throw SignInError.failed }
 
-        if start.step == "register" {
-            let response = try await ceremony.register(options: options)
-            let result: FinishResult = try await ConvexClient().mutation(
-                "auth:finishSignUpWithUsernamePasskey", SignUpArgs(username: name, response: response)
-            )
-            try complete(result, username: name)
-        } else {
-            let response = try await ceremony.assert(options: options)
-            let result: FinishResult = try await ConvexClient().mutation(
-                "auth:finishSignInWithUsernamePasskey", ["response": response]
-            )
-            try complete(result, username: name)
+        let landed = try await sheet.open(page, returningTo: returnTo)
+        let query = URLComponents(url: landed, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        if let error = query.first(where: { $0.name == "convexAuthError" })?.value {
+            throw error == "access_denied" ? SignInError.cancelled : SignInError.failed
         }
-    }
+        guard let code = query.first(where: { $0.name == "convexAuthCode" })?.value else { throw SignInError.failed }
 
-    /// Lets iOS offer whichever Walkies passkey is saved on the phone, no username needed.
-    func signInWithSavedPasskey() async throws {
-        let start: AutofillStart = try await ConvexClient().mutation("auth:startAutofillSignInWithUsernamePasskey")
-        let response = try await ceremony.assert(options: start.options)
-        let result: FinishResult = try await ConvexClient().mutation(
-            "auth:finishSignInWithUsernamePasskey", ["response": response]
+        let result: CompleteResult = try await ConvexClient().mutation(
+            "auth:completeSignInWith\(provider.rawValue)", ["code": code, "state": start.state]
         )
-        try complete(result, username: nil)
-    }
+        guard result.status == "complete", var tokens = result.tokens else { throw SignInError.failed }
 
-    private func complete(_ result: FinishResult, username: String?) throws {
-        if let error = result.userError { throw SignInError(code: error.error) }
-        guard var tokens = result.tokens else { throw SignInError(code: "PROTOCOL_ERROR") }
-        tokens.username = result.username ?? username
+        // Who this is, for Settings. Not essential, so a hiccup here doesn't stop sign-in.
+        if let me: Me = try? await ConvexClient(token: tokens.accessToken).query("users:me") {
+            tokens.name = me.name
+            tokens.email = me.email
+        }
         save(tokens)
     }
 
@@ -101,7 +96,8 @@ final class Account {
                     clear()
                     return nil
                 }
-                tokens.username = current.username
+                tokens.name = current.name
+                tokens.email = current.email
                 save(tokens)
                 return tokens
             } catch {
@@ -133,18 +129,14 @@ final class Account {
     }
 }
 
-nonisolated struct SignInError: LocalizedError {
-    var code: String
+nonisolated enum SignInError: LocalizedError {
+    case cancelled
+    case failed
 
     var errorDescription: String? {
-        switch code {
-        case "USERNAME_TOO_SHORT": "Pick a username first."
-        case "USERNAME_HAS_INVALID_CHARACTERS": "Usernames can't have those characters in them."
-        case "USERNAME_HAS_SURROUNDING_WHITESPACE": "Usernames can't start or end with a space."
-        case "USERNAME_TAKEN": "That username's already taken."
-        case "UNKNOWN_CREDENTIAL", "PASSKEY_NOT_FOUND": "That passkey isn't for a Walkies account."
-        case "CHALLENGE_EXPIRED": "That took a bit too long. Try again."
-        default: "Something went wrong signing in. Try again."
+        switch self {
+        case .cancelled: nil
+        case .failed: "Something went wrong signing in. Try again."
         }
     }
 }
@@ -152,21 +144,13 @@ nonisolated struct SignInError: LocalizedError {
 // MARK: Wire formats
 
 private nonisolated struct StartResult: Decodable {
-    var success: Bool
-    var step: String?
-    var options: PasskeyOptions?
-    var userError: UserError?
+    var redirect: String
+    var state: String
 }
 
-private nonisolated struct AutofillStart: Decodable {
-    var options: PasskeyOptions
-}
-
-private nonisolated struct FinishResult: Decodable {
+private nonisolated struct CompleteResult: Decodable {
     var status: String
     var tokens: Session?
-    var username: String?
-    var userError: UserError?
 }
 
 private nonisolated struct RefreshResult: Decodable {
@@ -174,115 +158,42 @@ private nonisolated struct RefreshResult: Decodable {
     var tokens: Session?
 }
 
-private nonisolated struct UserError: Decodable {
-    var error: String
+private nonisolated struct Me: Decodable {
+    var name: String?
+    var email: String?
 }
 
-private nonisolated struct SignUpArgs: Encodable {
-    var username: String
-    var response: PasskeyResponse
-}
+// MARK: The sign-in sheet
 
-/// The WebAuthn options Convex Auth sends, covering both registration and sign-in.
-nonisolated struct PasskeyOptions: Decodable, Sendable {
-    struct Party: Decodable, Sendable { var id: String }
-    struct User: Decodable, Sendable { var id: String; var name: String }
-    struct Descriptor: Decodable, Sendable { var id: String }
+/// Runs Apple's or Google's sign-in page in a secure sheet that shares Safari's
+/// sign-ins, and catches the moment it lands back on Walkies' own site.
+final class SignInSheet: NSObject, ASWebAuthenticationPresentationContextProviding {
+    private var session: ASWebAuthenticationSession?
 
-    var challenge: String
-    var rp: Party?
-    var user: User?
-    var rpId: String?
-    var allowCredentials: [Descriptor]?
-}
-
-/// A passkey's answer, in the JSON shape the server checks (SimpleWebAuthn's).
-nonisolated struct PasskeyResponse: Encodable, Sendable {
-    struct Body: Encodable, Sendable {
-        var clientDataJSON: String
-        var attestationObject: String?
-        var transports: [String]?
-        var authenticatorData: String?
-        var signature: String?
-        var userHandle: String?
-    }
-    struct NoExtensions: Encodable, Sendable {}
-
-    var id: String
-    var rawId: String
-    var response: Body
-    var clientExtensionResults = NoExtensions()
-    var type = "public-key"
-}
-
-// MARK: Passkeys
-
-/// Runs one passkey request through iOS (Face ID and the passkey sheet).
-final class PasskeyCeremony: NSObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
-    private var continuation: CheckedContinuation<ASAuthorization, Error>?
-
-    func register(options: PasskeyOptions) async throws -> PasskeyResponse {
-        guard let party = options.rp, let user = options.user,
-              let challenge = Data(base64URL: options.challenge), let userID = Data(base64URL: user.id)
-        else { throw SignInError(code: "PROTOCOL_ERROR") }
-        let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: party.id)
-        let request = provider.createCredentialRegistrationRequest(challenge: challenge, name: user.name, userID: userID)
-        request.userVerificationPreference = .required
-        guard let credential = try await perform(request).credential as? ASAuthorizationPlatformPublicKeyCredentialRegistration,
-              let attestation = credential.rawAttestationObject
-        else { throw SignInError(code: "PROTOCOL_ERROR") }
-        let id = credential.credentialID.base64URL
-        return PasskeyResponse(id: id, rawId: id, response: .init(
-            clientDataJSON: credential.rawClientDataJSON.base64URL,
-            attestationObject: attestation.base64URL,
-            transports: ["internal", "hybrid"]
-        ))
-    }
-
-    func assert(options: PasskeyOptions) async throws -> PasskeyResponse {
-        guard let challenge = Data(base64URL: options.challenge) else { throw SignInError(code: "PROTOCOL_ERROR") }
-        let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: options.rpId ?? Backend.site.host()!)
-        let request = provider.createCredentialAssertionRequest(challenge: challenge)
-        request.userVerificationPreference = .required
-        request.allowedCredentials = (options.allowCredentials ?? []).compactMap { descriptor in
-            Data(base64URL: descriptor.id).map(ASAuthorizationPlatformPublicKeyCredentialDescriptor.init)
-        }
-        guard let credential = try await perform(request).credential as? ASAuthorizationPlatformPublicKeyCredentialAssertion
-        else { throw SignInError(code: "PROTOCOL_ERROR") }
-        let id = credential.credentialID.base64URL
-        return PasskeyResponse(id: id, rawId: id, response: .init(
-            clientDataJSON: credential.rawClientDataJSON.base64URL,
-            authenticatorData: credential.rawAuthenticatorData.base64URL,
-            signature: credential.signature.base64URL,
-            userHandle: credential.userID.base64URL
-        ))
-    }
-
-    private func perform(_ request: ASAuthorizationRequest) async throws -> ASAuthorization {
-        try await withCheckedThrowingContinuation { continuation in
-            self.continuation = continuation
-            let controller = ASAuthorizationController(authorizationRequests: [request])
-            controller.delegate = self
-            controller.presentationContextProvider = self
-            controller.performRequests()
+    func open(_ page: URL, returningTo returnTo: URL) async throws -> URL {
+        guard let host = returnTo.host() else { throw SignInError.failed }
+        return try await withCheckedThrowingContinuation { continuation in
+            let session = ASWebAuthenticationSession(
+                url: page,
+                callback: .https(host: host, path: returnTo.path())
+            ) { url, error in
+                if let url {
+                    continuation.resume(returning: url)
+                } else if let error = error as? ASWebAuthenticationSessionError, error.code == .canceledLogin {
+                    continuation.resume(throwing: SignInError.cancelled)
+                } else {
+                    continuation.resume(throwing: error ?? SignInError.failed)
+                }
+            }
+            session.presentationContextProvider = self
+            self.session = session
+            if !session.start() {
+                continuation.resume(throwing: SignInError.failed)
+            }
         }
     }
 
-    nonisolated func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
-        MainActor.assumeIsolated {
-            continuation?.resume(returning: authorization)
-            continuation = nil
-        }
-    }
-
-    nonisolated func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
-        MainActor.assumeIsolated {
-            continuation?.resume(throwing: error)
-            continuation = nil
-        }
-    }
-
-    nonisolated func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+    nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         MainActor.assumeIsolated {
             UIApplication.shared.connectedScenes
                 .compactMap { ($0 as? UIWindowScene)?.keyWindow }
@@ -323,22 +234,5 @@ private nonisolated enum Keychain {
 
     static func delete() {
         SecItemDelete(query as CFDictionary)
-    }
-}
-
-// MARK: Base64URL
-
-nonisolated extension Data {
-    init?(base64URL text: String) {
-        var base64 = text.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
-        base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
-        self.init(base64Encoded: base64)
-    }
-
-    var base64URL: String {
-        base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
     }
 }

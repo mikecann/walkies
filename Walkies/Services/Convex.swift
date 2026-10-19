@@ -10,7 +10,7 @@ nonisolated enum Backend {
     #endif
 
     static let cloud = URL(string: "https://\(name).ap-southeast-2.convex.cloud")!
-    /// Also the passkey domain: passkeys belong to this host.
+    /// Also where Apple and Google sign-in hands back to the app (see Account.swift).
     static let site = URL(string: "https://\(name).ap-southeast-2.convex.site")!
 }
 

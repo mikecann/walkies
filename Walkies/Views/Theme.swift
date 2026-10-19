@@ -95,11 +95,12 @@ struct HexBadge: View {
 /// The big Start walk and End walk buttons: burnt orange with a white die-cut edge.
 struct StickerButtonStyle: ButtonStyle {
     var fill: Color = .burnt
+    var foreground: Color = .white
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.headline)
-            .foregroundStyle(.white)
+            .foregroundStyle(foreground)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
             .background(fill, in: .capsule)

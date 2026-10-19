@@ -2,8 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Lets the app use passkeys for the Convex deployments' own domains. Each
-	     domain serves /.well-known/apple-app-site-association (convex/http.ts).
+	<!-- Links the app to the Convex deployments' own domains. Each serves
+	     /.well-known/apple-app-site-association (convex/http.ts). The sign-in sheet
+	     needs this to catch Apple's and Google's redirect back to /app/signed-in.
 	     The dev one is fetched straight from the domain in developer mode. -->
 	<key>com.apple.developer.associated-domains</key>
 	<array>

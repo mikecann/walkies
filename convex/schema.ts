@@ -6,7 +6,13 @@ import { v } from "convex/values";
 // edited in a way that can conflict: walks never change once finished, tiles only
 // get uncovered and secrets only get found, so syncing is just adding.
 export default defineSchema({
-  users: defineTable({}),
+  users: defineTable({
+    name: v.optional(v.string()),
+    /** From Apple or Google, for reaching people later. Apple's can be a private relay address. */
+    email: v.optional(v.string()),
+    emailVerified: v.optional(v.boolean()),
+    picture: v.optional(v.string()),
+  }),
 
   walks: defineTable({
     userId: v.id("users"),

@@ -15,7 +15,7 @@ Based on an idea from James.
 - **Secrets**: 40 bits of local history, Wardandi Noongar heritage and nature for the Busselton area, in `Walkies/Lore/geographe.json` (research notes and sources in `design/lore/`). Each is hidden under a tile, with nothing on the map to give it away: stories about a spot go under the nearest street tile to it, the rest are spread out. Walk over one and you get a pop-up, or a notification if the phone's in your pocket. Found secrets are pinned on the map and kept in the Secrets book, each with its own sticker. In the code they're `LoreEntry` and "stickers". The art is made by `scripts/make-stickers.mjs` (Gemini 3 Pro Image, then cut out with Vision by `scripts/cutout.swift`).
 - **History**: every GPS fix from every walk is kept. A new city is built by replaying all past walks, so if you add a city later, the walks you've already done there count.
 - **Storage** is local-first: everything is JSON in the app's Application Support folder, and the app works fully offline. Whenever there's signal it syncs with your account on Convex, so a lost phone loses nothing and a new phone gets everything back when you sign in.
-- **Accounts** use Convex Auth v2 (`@convex-dev/auth` 2.0 beta) with passkeys: pick a username, and Face ID makes and unlocks a passkey. Each person only sees their own data.
+- **Accounts** use Convex Auth v2 (`@convex-dev/auth` 2.0 beta) with Sign in with Apple and Google, so every account has an email address to reach people with. Each person only sees their own data.
 
 ## Running it
 
@@ -53,13 +53,39 @@ Deploy with `npx convex deploy`. The auth signing keys were set with `npx @conve
 
 How sync works: walks never change once finished, tiles only get uncovered and secrets only get found, so syncing is just adding. The phone uploads anything the server hasn't got (walk and city files go to Convex file storage), downloads anything it hasn't got, and merges cities by keeping every tile either copy uncovered. See `convex/sync.ts` and `Walkies/Services/Sync.swift`.
 
-Passkeys belong to each deployment's `.convex.site` domain. `convex/http.ts` serves `/.well-known/apple-app-site-association` there, and `Config/Walkies.entitlements` lists both domains. Because of that entitlement, the app needs an explicit App ID with Associated Domains, so Xcode has to be signed in to the developer account to build for a phone.
+Sign-in runs Apple's or Google's page in an `ASWebAuthenticationSession`. Convex Auth's callback (`/oauth/apple/callback`, `/oauth/google/callback`) sends the browser on to `/app/signed-in?convexAuthCode=…` on the same deployment, which the sheet catches (the app is linked to that domain through `/.well-known/apple-app-site-association` in `convex/http.ts` and `Config/Walkies.entitlements`). The app then calls `completeSignInWith…` with the code.
+
+### Setting up Apple and Google sign-in
+
+Each deployment needs its own return URLs registered:
+
+- dev: `https://resolute-pig-177.ap-southeast-2.convex.site`
+- prod: `https://savory-bee-296.ap-southeast-2.convex.site`
+
+**Apple** (developer.apple.com > Certificates, IDs & Profiles):
+1. Identifiers > App IDs > `com.mikecann.walkies`: tick Sign in with Apple.
+2. Identifiers > + > Services IDs: make one, e.g. `com.mikecann.walkies.signin`. Tick Sign in with Apple > Configure: primary App ID `com.mikecann.walkies`, domains `resolute-pig-177.ap-southeast-2.convex.site` and `savory-bee-296.ap-southeast-2.convex.site`, return URLs `<site>/oauth/apple/callback` for both.
+3. Keys > +: tick Sign in with Apple (configure it for `com.mikecann.walkies`), download the `AuthKey_<ID>.p8` and note the key ID.
+
+**Google** (console.cloud.google.com, a project for Walkies):
+1. APIs & Services > OAuth consent screen: External, add yourself and your dad as test users.
+2. Credentials > Create credentials > OAuth client ID > Web application. Authorised redirect URIs: `<site>/oauth/google/callback` for both sites. Copy the client ID and secret.
+
+Then put them in a JSON file (see the top of `scripts/set-oauth-keys.mjs`) and run it for each deployment:
+
+```bash
+node scripts/set-oauth-keys.mjs dev ~/Downloads/walkies-oauth.json
+```
+
+```bash
+node scripts/set-oauth-keys.mjs prod ~/Downloads/walkies-oauth.json
+```
 
 ## Code map
 
 - `Walkies/Model/` is the maths: a flat local projection (`Geo`), the hex grid, boundaries and point-in-polygon, cities, walks, and the GPS filter (`CoverageTracer`).
 - `Walkies/Services/` talks to OpenStreetMap (`OSMClient`), builds a city's tiles (`CityBuilder`), runs GPS (`LocationTracker`) and saves files (`Store`).
-- `Walkies/Services/Account.swift` is passkey sign-in and the session (Keychain, token refresh), `Sync.swift` is the sync engine, and `Convex.swift` calls Convex over its HTTP API.
+- `Walkies/Services/Account.swift` is Apple and Google sign-in and the session (Keychain, token refresh), `Sync.swift` is the sync engine, and `Convex.swift` calls Convex over its HTTP API.
 - `convex/` is the backend: auth, schema and sync functions.
 - `Walkies/AppModel.swift` ties it together: GPS fixes in, tiles uncovered, saved every 30 seconds.
 - `Walkies/Views/` is SwiftUI, apart from `FogMapView`, which wraps `MKMapView`, and `Clouds.swift`, a custom MapKit overlay renderer. It draws a soft cloud sprite over every unwalked hex (all the grey undersides first, then all the white tops, so they merge into one blanket), cuts soft holes over walked hexes, and dots the hidden streets on top. The sprites are drawn in code at launch.

@@ -35,7 +35,10 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    LabeledContent("Signed in as", value: account.username ?? "you")
+                    LabeledContent("Signed in as", value: account.displayName ?? "you")
+                    if let email = account.email, email != account.displayName {
+                        LabeledContent("Email", value: email)
+                    }
                     LabeledContent("Sync", value: syncText)
                     Button("Sync now") {
                         Task { await sync.sync() }

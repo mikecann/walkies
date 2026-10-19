@@ -1,14 +1,11 @@
-import AuthenticationServices
 import SwiftUI
 
 struct SignInView: View {
     @Environment(Account.self) private var account
     let onSignedIn: () -> Void
 
-    @State private var username = ""
-    @State private var working = false
+    @State private var working: Account.Provider?
     @State private var errorMessage: String?
-    @FocusState private var typing: Bool
 
     var body: some View {
         ScrollView {
@@ -21,36 +18,25 @@ struct SignInView: View {
                         .font(.system(size: 44, weight: .heavy, design: .rounded))
                     Text("Walk the dog and clear the clouds off your suburb, one street at a time.")
                         .font(.body)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.ink.opacity(0.65))
                         .multilineTextAlignment(.center)
                 }
 
                 VStack(spacing: 12) {
-                    TextField("Pick a username", text: $username)
-                        .textContentType(.username)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.continue)
-                        .focused($typing)
-                        .onSubmit(continueWithUsername)
-                        .padding(14)
-                        .stickerCard(in: .rect(cornerRadius: 16))
-
-                    Button(action: continueWithUsername) {
-                        if working {
-                            ProgressView().tint(.white)
-                        } else {
-                            Label("Continue", systemImage: "faceid")
+                    Button { signIn(with: .apple) } label: {
+                        label("Sign in with Apple", provider: .apple) {
+                            Image(systemName: "apple.logo").font(.title3)
                         }
                     }
-                    .buttonStyle(StickerButtonStyle())
-                    .disabled(working || username.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .buttonStyle(StickerButtonStyle(fill: .black))
 
-                    Button("Use a passkey that's already on this phone") {
-                        run { try await account.signInWithSavedPasskey() }
+                    Button { signIn(with: .google) } label: {
+                        label("Continue with Google", provider: .google) {
+                            GoogleG()
+                        }
+                        .foregroundStyle(Color.ink)
                     }
-                    .font(.subheadline)
-                    .disabled(working)
+                    .buttonStyle(StickerButtonStyle(fill: .white, foreground: .ink))
 
                     if let errorMessage {
                         Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
@@ -59,18 +45,29 @@ struct SignInView: View {
                             .multilineTextAlignment(.leading)
                     }
                 }
+                .disabled(working != nil)
 
-                Text("A new username makes a new account. Walkies uses a passkey instead of a password: your phone keeps it, Face ID unlocks it, and your walks are kept safe in your account.")
+                Text("Your walks are kept on your phone and backed up to your account. Walkies uses your email to let you know about things like new secrets.")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.ink.opacity(0.6))
                     .multilineTextAlignment(.center)
             }
             .padding(24)
             .frame(maxWidth: 480)
             .frame(maxWidth: .infinity)
         }
-        .scrollDismissesKeyboard(.interactively)
         .background(Color.cream)
+    }
+
+    private func label(_ title: String, provider: Account.Provider, @ViewBuilder icon: () -> some View) -> some View {
+        HStack(spacing: 10) {
+            if working == provider {
+                ProgressView()
+            } else {
+                icon()
+            }
+            Text(title)
+        }
     }
 
     private var stickers: some View {
@@ -92,23 +89,15 @@ struct SignInView: View {
             .shadow(color: .black.opacity(0.15), radius: 6, y: 4)
     }
 
-    private func continueWithUsername() {
-        guard !username.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        typing = false
-        run { try await account.signIn(username: username) }
-    }
-
-    private func run(_ attempt: @escaping () async throws -> Void) {
-        working = true
+    private func signIn(with provider: Account.Provider) {
+        working = provider
         errorMessage = nil
         Task {
             do {
-                try await attempt()
+                try await account.signIn(with: provider)
                 onSignedIn()
-            } catch let error as ASAuthorizationError where error.code == .canceled {
-                // Closed the passkey sheet: nothing to say.
-            } catch let error as ASAuthorizationError {
-                errorMessage = "This phone couldn't use a passkey for Walkies (\(error.localizedDescription))."
+            } catch SignInError.cancelled {
+                // Closed the sheet: nothing to say.
             } catch let error as URLError {
                 errorMessage = "Can't reach Walkies (\(error.code.rawValue)). Check your connection and try again."
             } catch is ConvexError {
@@ -116,7 +105,21 @@ struct SignInView: View {
             } catch {
                 errorMessage = error.localizedDescription
             }
-            working = false
+            working = nil
         }
+    }
+}
+
+/// Google's "G", drawn in its four colours.
+private struct GoogleG: View {
+    var body: some View {
+        Text("G")
+            .font(.system(size: 20, weight: .bold, design: .rounded))
+            .foregroundStyle(
+                AngularGradient(
+                    colors: [.red, .yellow, .green, .blue, .blue, .red],
+                    center: .center
+                )
+            )
     }
 }
