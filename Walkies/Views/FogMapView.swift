@@ -60,7 +60,9 @@ private enum NeighbourPill {
 }
 
 struct MapFocusRequest: Equatable {
-    enum Target { case city, user }
+    /// `arrive`: opening the app. Go to where you are, or the selected place if
+    /// there's no fix yet.
+    enum Target { case city, user, arrive }
     var id = 0
     var target = Target.city
 
@@ -121,6 +123,8 @@ struct FogMapView: UIViewRepresentable {
         private var focusID = -1
         private var pathCount = -1
         private var hasShownUser = false
+        /// Waiting for a GPS fix to open the map on.
+        private var arriving = false
         private var following = false
         private var tilted: Bool?
         private var pins: [StickerPin] = []
@@ -165,8 +169,11 @@ struct FogMapView: UIViewRepresentable {
             }
             selectedID = view.selectedID
             if view.flyID != flyID, !cities.isEmpty {
+                let first = flyID == -1
                 flyID = view.flyID
-                zoomToCity(on: map)
+                // Opening the app goes to where you are (an `arrive` focus request), so
+                // the first time round there's no place to fly to.
+                if !first { zoomToCity(on: map) }
             }
 
             onPickNeighbour = view.onPickNeighbour
@@ -184,8 +191,19 @@ struct FogMapView: UIViewRepresentable {
             if view.focus.id != focusID {
                 let first = focusID == -1
                 focusID = view.focus.id
-                if !first {
+                if !first || view.focus.target == .arrive {
                     switch view.focus.target {
+                    case .arrive:
+                        following = false
+                        arriving = true
+                        arrive(on: map)
+                        // No fix after a few seconds (no signal, or location's off): show
+                        // the selected place instead.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [self] in
+                            guard arriving else { return }
+                            arriving = false
+                            zoomToCity(on: map)
+                        }
                     case .city:
                         following = false
                         zoomToCity(on: map)
@@ -293,11 +311,34 @@ struct FogMapView: UIViewRepresentable {
             }
         }
 
+        /// Opens the map on you, at about neighbourhood level, once there's a recent fix
+        /// and the map has its real size.
+        private func arrive(on map: MKMapView) {
+            guard arriving else { return }
+            guard map.bounds.width > 0, map.bounds.height > 0 else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [self] in arrive(on: map) }
+                return
+            }
+            guard let location = map.userLocation.location, location.timestamp.timeIntervalSinceNow > -120 else { return }
+            arriving = false
+            map.setCamera(
+                MKMapCamera(lookingAtCenter: location.coordinate, fromDistance: 1500, pitch: pitch, heading: 0),
+                animated: map.window != nil && hasShownUser
+            )
+            hasShownUser = true
+        }
+
         private func zoomToCity(on map: MKMapView) {
             guard let city = cities.first(where: { $0.id == selectedID }) else { return }
             let rect = MKMultiPolygon(Self.polygons(city.boundary)).boundingMapRect
             let padding = UIEdgeInsets(top: 150, left: 20, bottom: 150, right: 20)
-            // Wait a tick so the map has its real size the first time round.
+            // Fitting a place to a map with no size yet sends the camera somewhere random
+            // (which is what happens if iOS relaunches the app in the background), so
+            // wait until it has one.
+            guard map.bounds.width > 0, map.bounds.height > 0 else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [self] in zoomToCity(on: map) }
+                return
+            }
             DispatchQueue.main.async { [self] in
                 guard pitch > 0 else {
                     map.setVisibleMapRect(rect, edgePadding: padding, animated: true)
@@ -323,7 +364,9 @@ struct FogMapView: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView, didUpdate userLocation: MKUserLocation) {
             guard let location = userLocation.location else { return }
-            if following {
+            if arriving {
+                arrive(on: mapView)
+            } else if following {
                 mapView.setCenter(location.coordinate, animated: true)
             } else if cities.isEmpty, !hasShownUser {
                 // With no city to frame yet, start on wherever you are instead of the whole planet.

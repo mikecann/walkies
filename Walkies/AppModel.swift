@@ -15,6 +15,9 @@ final class AppModel {
     private(set) var flyToSelected = 0
     /// Where you were at the last GPS fix, for things like sorting secrets by distance.
     private(set) var lastLocation: CLLocation?
+    /// Set when the app opens, so the next fix selects the place you're in. Otherwise the
+    /// selection only follows you on a walk, so looking at another place sticks.
+    @ObservationIgnored var placeYouOnNextFix = true
     private(set) var activeWalk: Walk?
     /// Accepted fixes from the current walk, for drawing the line on the map.
     private(set) var activePath: [Coordinate] = []
@@ -217,7 +220,10 @@ final class AppModel {
         } else if activeWalk != nil {
             recordWalk(point)
         }
-        if activeWalk != nil { followIntoPlace(at: point.coordinate) }
+        if activeWalk != nil || placeYouOnNextFix {
+            placeYouOnNextFix = false
+            followIntoPlace(at: point.coordinate)
+        }
     }
 
     /// On a walk, whichever of your places you're in becomes the selected one, so the

@@ -124,9 +124,12 @@ struct ContentView: View {
             )
         }
         .sensoryFeedback(.success, trigger: model.revealCount)
-        .onChange(of: scenePhase) { _, phase in
+        .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .background { model.saveNow() }
             if phase == .active {
+                // Open on where you are, in whichever of your places that is.
+                focus.send(.arrive)
+                model.placeYouOnNextFix = true
                 model.finishStaleAutoWalk()
                 model.refreshNeighbours()
                 sync.schedule()
