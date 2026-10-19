@@ -20,9 +20,14 @@ final class AppModel {
     private(set) var revealCount = 0
     /// Set when a walk ends, to show the summary.
     var finishedWalk: Walk?
-    /// Tilted map with Apple's 3D buildings and trees.
-    var tilted3D = UserDefaults.standard.bool(forKey: "tilted3D") {
-        didSet { UserDefaults.standard.set(tilted3D, forKey: "tilted3D") }
+    /// Tilted, isometric-style map with Apple's 3D buildings and trees. On unless
+    /// you turn it off. (A new key, so phones that had the old flat default get it too.)
+    var tilted3D = UserDefaults.standard.object(forKey: "map3D") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(tilted3D, forKey: "map3D") }
+    }
+    /// Whether the first-run setup (location, motion, notifications, Always on) is done.
+    var setupDone = UserDefaults.standard.bool(forKey: "setupDone") {
+        didSet { UserDefaults.standard.set(setupDone, forKey: "setupDone") }
     }
     /// Record walks by themselves in the background, so there's no Start walk to press.
     var alwaysOn = false {
@@ -251,17 +256,12 @@ final class AppModel {
         requestSync?()
     }
 
-    /// New tiles from today's walks, for the always-on status.
-    var newTilesToday: Int {
-        let today = Calendar.current.startOfDay(for: .now)
-        return walks.filter { $0.startedAt >= today }.reduce(0) { $0 + $1.newTiles } + (activeWalk?.newTiles ?? 0)
-    }
-
     // MARK: Always on
 
     /// Called at launch, including when iOS relaunches the app in the background.
     func resumeAlwaysOn() {
-        motion.start()
+        // Starting motion asks for permission, so leave that to the setup the first time.
+        if setupDone { motion.start() }
         if alwaysOn {
             tracker.startAlwaysOn()
         }
@@ -439,6 +439,7 @@ final class AppModel {
     /// Forgets everything on this phone, for signing out. It's all in the account.
     func wipeLocalData() {
         alwaysOn = false
+        setupDone = false
         tracker.stop()
         activeWalk = nil
         activePath = []

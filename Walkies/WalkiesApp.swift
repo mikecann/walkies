@@ -23,13 +23,25 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 struct WalkiesApp: App {
     @UIApplicationDelegateAdaptor private var delegate: AppDelegate
 
+    /// `-skipSignIn` on a simulator debug build goes straight in, for checking screens
+    /// without an Apple or Google account. Nothing syncs.
+    private static var skipSignIn: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        ProcessInfo.processInfo.arguments.contains("-skipSignIn")
+        #else
+        false
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             Group {
-                if delegate.account.isSignedIn {
-                    ContentView()
-                } else {
+                if !delegate.account.isSignedIn && !Self.skipSignIn {
                     SignInView { delegate.sync.schedule() }
+                } else if !delegate.model.setupDone {
+                    SetupView()
+                } else {
+                    ContentView()
                 }
             }
             // The cream-paper look is a light design, so the app stays light.

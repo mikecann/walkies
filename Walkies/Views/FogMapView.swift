@@ -36,7 +36,7 @@ struct FogMapView: UIViewRepresentable {
     var revision: Int
     var path: [Coordinate]
     var focus: MapFocusRequest
-    /// Tilted, with Apple's 3D buildings and trees.
+    /// Tilted to a game-like isometric angle, with Apple's 3D buildings and trees.
     var tilted: Bool
     let handle: MapHandle
     var stickers: [StickerPin] = []
@@ -55,6 +55,7 @@ struct FogMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
+        context.coordinator.handle = handle
         context.coordinator.update(map, with: self)
     }
 
@@ -69,6 +70,7 @@ struct FogMapView: UIViewRepresentable {
         private var tilted: Bool?
         private var pins: [StickerPin] = []
         private var onSelectSticker: (String) -> Void = { _ in }
+        weak var handle: MapHandle?
 
         private var outline: MKMultiPolygon?
         private var uncovered: MKMultiPolygon?
@@ -130,13 +132,18 @@ struct FogMapView: UIViewRepresentable {
             }
         }
 
+        /// The isometric angle. MapKit flattens it a little by itself when zoomed far out.
         private var pitch: CGFloat { tilted == true ? 55 : 0 }
 
-        /// Keeps the same spot in the middle, just leans the camera in or out.
+        /// Keeps the same spot in the middle, just leans the camera in or out. Built
+        /// fresh rather than changing the pitch on a copy, which keeps the camera's
+        /// height and so pulls it much further away.
         private func tilt(_ map: MKMapView, animated: Bool) {
-            let camera = map.camera.copy() as! MKMapCamera
-            camera.pitch = pitch
-            map.setCamera(camera, animated: animated)
+            let now = map.camera
+            map.setCamera(
+                MKMapCamera(lookingAtCenter: now.centerCoordinate, fromDistance: now.centerCoordinateDistance, pitch: pitch, heading: now.heading),
+                animated: animated
+            )
         }
 
         private func redrawAll(on map: MKMapView) {
@@ -197,9 +204,28 @@ struct FogMapView: UIViewRepresentable {
         private func zoomToCity(on map: MKMapView) {
             guard let outline else { return }
             let rect = outline.boundingMapRect
+            let padding = UIEdgeInsets(top: 150, left: 20, bottom: 150, right: 20)
             // Wait a tick so the map has its real size the first time round.
-            DispatchQueue.main.async {
-                map.setVisibleMapRect(rect, edgePadding: UIEdgeInsets(top: 150, left: 20, bottom: 150, right: 20), animated: true)
+            DispatchQueue.main.async { [self] in
+                guard pitch > 0 else {
+                    map.setVisibleMapRect(rect, edgePadding: padding, animated: true)
+                    return
+                }
+                // MapKit only fits a rect looking straight down. So fit it flat without
+                // animating, note that camera, put the old one back before anything's
+                // drawn, then fly to the fitted spot tilted.
+                let before = map.camera.copy() as! MKMapCamera
+                let flatStart = before.copy() as! MKMapCamera
+                flatStart.pitch = 0
+                map.setCamera(flatStart, animated: false)
+                map.setVisibleMapRect(rect, edgePadding: padding, animated: false)
+                let fitted = map.camera
+                let target = MKMapCamera(
+                    lookingAtCenter: fitted.centerCoordinate, fromDistance: fitted.centerCoordinateDistance,
+                    pitch: pitch, heading: fitted.heading
+                )
+                map.setCamera(before, animated: false)
+                map.setCamera(target, animated: true)
             }
         }
 
@@ -210,7 +236,7 @@ struct FogMapView: UIViewRepresentable {
             } else if city == nil, !hasShownUser {
                 // With no city to frame yet, start on wherever you are instead of the whole planet.
                 hasShownUser = true
-                mapView.setRegion(MKCoordinateRegion(center: location.coordinate, latitudinalMeters: 2000, longitudinalMeters: 2000), animated: true)
+                mapView.setCamera(MKMapCamera(lookingAtCenter: location.coordinate, fromDistance: 2000, pitch: pitch, heading: 0), animated: true)
             }
         }
 
@@ -219,9 +245,22 @@ struct FogMapView: UIViewRepresentable {
         func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
             let touched = mapView.subviews.first?.gestureRecognizers?.contains { $0.state == .began || $0.state == .changed } ?? false
             if touched { following = false }
+            handle?.moving = true
+        }
+
+        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            handle?.moving = false
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            // The clouds draw your position on top of themselves instead.
+            if annotation is MKUserLocation {
+                let view = mapView.dequeueReusableAnnotationView(withIdentifier: "me")
+                    ?? MKAnnotationView(annotation: annotation, reuseIdentifier: "me")
+                view.annotation = annotation
+                view.isHidden = true
+                return view
+            }
             guard let sticker = annotation as? StickerAnnotation, let entry = LoreLibrary.entry(id: sticker.id) else { return nil }
             let view = mapView.dequeueReusableAnnotationView(withIdentifier: "sticker")
                 ?? MKAnnotationView(annotation: annotation, reuseIdentifier: "sticker")

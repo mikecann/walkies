@@ -96,9 +96,6 @@ struct ContentView: View {
                 sync.schedule()
             }
         }
-        .task {
-            model.tracker.requestPermissionIfNeeded()
-        }
     }
 }
 
@@ -239,25 +236,9 @@ struct WalkControls: View {
             .padding(14)
             .stickerCard(in: .rect(cornerRadius: 26))
         } else if model.alwaysOn {
-            HStack(spacing: 12) {
-                Image("icon-walk")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 36, height: 36)
-                    .symbolEffect(.pulse)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Always on").font(.headline)
-                    Text(model.newTilesToday == 0
-                         ? "Just head out. Your walk will be picked up."
-                         : "\(model.newTilesToday) new \(model.newTilesToday == 1 ? "tile" : "tiles") today")
-                        .font(.subheadline)
-                        .foregroundStyle(Color.ink.opacity(0.65))
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity)
-            .stickerCard(in: .rect(cornerRadius: 26))
+            // Nothing to press: walks get picked up by themselves. Just keep the
+            // buttons on the right where they are.
+            Color.clear.frame(maxWidth: .infinity, maxHeight: 1)
         } else {
             Button(action: onStart) {
                 HStack(spacing: 8) {

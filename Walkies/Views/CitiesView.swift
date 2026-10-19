@@ -9,12 +9,15 @@ struct CitiesView: View {
             Group {
                 if model.cities.isEmpty {
                     ContentUnavailableView {
-                        Label("No cities yet", systemImage: "map")
+                        Label("No places yet", systemImage: "map")
                     } description: {
                         Text("Add your suburb or town, then go for a walk to start uncovering it.")
                     } actions: {
-                        NavigationLink("Add a city") { AddCityView { dismiss() } }
-                            .buttonStyle(.borderedProminent)
+                        NavigationLink { AddCityView { dismiss() } } label: {
+                            Label("Add a place", systemImage: "plus")
+                        }
+                        .buttonStyle(StickerButtonStyle())
+                        .frame(width: 220)
                     }
                 } else {
                     List {
@@ -33,7 +36,7 @@ struct CitiesView: View {
             }
             .scrollContentBackground(.hidden)
             .background(Color.cream)
-            .navigationTitle("Cities")
+            .navigationTitle("Places")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -41,9 +44,11 @@ struct CitiesView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink { AddCityView { dismiss() } } label: {
-                        Image(systemName: "plus")
+                        Label("Add", systemImage: "plus")
+                            .labelStyle(.titleAndIcon)
+                            .font(.body.weight(.semibold))
                     }
-                    .accessibilityLabel("Add a city")
+                    .accessibilityLabel("Add a place")
                 }
             }
         }

@@ -7,6 +7,11 @@ enum Notifier {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
+    /// The same, waiting for the answer.
+    static func requestPermission() async {
+        _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+    }
+
     /// Only when the app isn't on screen; when it is, the secret pops up in the app instead.
     static func stickersFound(_ entries: [LoreEntry]) {
         guard UIApplication.shared.applicationState != .active else { return }

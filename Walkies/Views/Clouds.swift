@@ -92,12 +92,18 @@ nonisolated struct CloudField: Sendable {
 }
 
 /// Lets the cloud layer ask the map where things are on screen right now.
+@Observable
 final class MapHandle {
-    weak var map: MKMapView?
+    @ObservationIgnored weak var map: MKMapView?
+    /// True while the map is being dragged, pinched or flown somewhere, so the
+    /// clouds redraw every frame and keep up with it.
+    var moving = false
 }
 
 /// The clouds, drawn on top of the map about 30 times a second so they can drift
-/// and breathe. They follow the map by asking it where each cloud is on screen.
+/// and breathe, and every frame while the map moves. They follow the map by asking
+/// it where the ground is on screen. Your position is drawn on top, since MapKit's
+/// own dot would be hidden under them.
 struct CloudLayer: View {
     let field: CloudField
     /// Changes whenever the field does, to spot tiles that have just cleared.
@@ -113,18 +119,22 @@ struct CloudLayer: View {
     static let revealTime = 1.6
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
+        TimelineView(.animation(minimumInterval: handle.moving ? nil : 1.0 / 30)) { timeline in
             Canvas { context, size in
                 guard let map = handle.map, size.width > 0 else { return }
                 let now = timeline.date
                 let clock = reduceMotion ? 0 : now.timeIntervalSinceReferenceDate
                 let reveal = min(1, now.timeIntervalSince(changedAt) / Self.revealTime)
+                let projection = Projection(map: map)
                 CloudPainter(
                     field: field, leaving: reveal < 1 ? leaving : [], reveal: reveal,
-                    fresh: Set(leaving.map(\.hex)), projection: Projection(map: map),
+                    fresh: Set(leaving.map(\.hex)), projection: projection,
                     bounds: CGRect(origin: .zero, size: size), clock: clock
                 )
                 .draw(in: &context)
+                if let location = map.userLocation.location {
+                    YouAreHere(location: location, projection: projection, clock: clock).draw(in: &context)
+                }
             }
         }
         .allowsHitTesting(false)
@@ -143,39 +153,179 @@ struct CloudLayer: View {
     }
 }
 
-/// Turns map points into screen points. Flat maps are one cheap affine transform;
-/// tilted ones ask MapKit point by point.
+/// Turns map points into screen points. The ground is flat, so wherever the camera
+/// is, flat or tilted, one perspective transform (a homography) maps it onto the
+/// screen. It's measured each frame from four spots spread across the screen: far
+/// enough apart that MapKit's rounding doesn't make the clouds wobble when you're
+/// zoomed out.
 private struct Projection {
     let map: MKMapView
-    private let affine: CGAffineTransform?
+    /// Ground to screen, h33 = 1. Ground is in map points relative to `origin`, over `unit`.
+    private let h: [Double]?
+    private let origin: MKMapPoint
+    private let unit: Double
+    private let width: Double
 
     init(map: MKMapView) {
         self.map = map
-        if map.camera.pitch < 1 {
-            let p0 = MKMapPoint(map.centerCoordinate)
-            let d = 1000.0
-            let s0 = map.convert(p0.coordinate, toPointTo: map)
-            let s1 = map.convert(MKMapPoint(x: p0.x + d, y: p0.y).coordinate, toPointTo: map)
-            let s2 = map.convert(MKMapPoint(x: p0.x, y: p0.y + d).coordinate, toPointTo: map)
-            let a = (s1.x - s0.x) / d, b = (s1.y - s0.y) / d
-            let c = (s2.x - s0.x) / d, dd = (s2.y - s0.y) / d
-            affine = CGAffineTransform(a: a, b: b, c: c, d: dd, tx: s0.x - a * p0.x - c * p0.y, ty: s0.y - b * p0.x - dd * p0.y)
+        let size = map.bounds.size
+        let width = max(1, Double(size.width))
+        let screen = [(0.1, 0.4), (0.9, 0.4), (0.9, 0.95), (0.1, 0.95)].map {
+            CGPoint(x: $0.0 * size.width, y: $0.1 * size.height)
+        }
+        let coordinates = screen.map { map.convert($0, toCoordinateFrom: map) }
+        let ground = coordinates.map(MKMapPoint.init)
+        let origin = ground[0]
+        let unit = max(1, hypot(ground[2].x - origin.x, ground[2].y - origin.y))
+        self.width = width
+        self.origin = origin
+        self.unit = unit
+        if coordinates.allSatisfy(CLLocationCoordinate2DIsValid) {
+            h = Self.solve(
+                ground: ground.map { (($0.x - origin.x) / unit, ($0.y - origin.y) / unit) },
+                screen: screen.map { (Double($0.x) / width, Double($0.y) / width) }
+            )
         } else {
-            affine = nil
+            h = nil
         }
     }
 
+    /// How close to the camera's own plane the ground can come before it's treated
+    /// as behind the camera. 1 is the ground at the 10%, 40% spot on screen.
+    private static let near = 0.02
+
+    /// Screen position before dividing by depth (z), which is about 1 everywhere on a
+    /// flat map and shrinks towards 0 as the ground nears the camera when tilted.
+    private func homogeneous(_ p: MKMapPoint) -> SIMD3<Double> {
+        guard let h else {
+            let s = map.convert(p.coordinate, toPointTo: map)
+            return SIMD3(Double(s.x) / width, Double(s.y) / width, 1)
+        }
+        let x = (p.x - origin.x) / unit, y = (p.y - origin.y) / unit
+        return SIMD3(h[0] * x + h[1] * y + h[2], h[3] * x + h[4] * y + h[5], h[6] * x + h[7] * y + 1)
+    }
+
+    private func screen(_ v: SIMD3<Double>) -> CGPoint {
+        let z = max(v.z, Self.near)
+        return CGPoint(x: v.x / z * width, y: v.y / z * width)
+    }
+
     func point(_ p: MKMapPoint) -> CGPoint {
-        if let affine { return CGPoint(x: p.x, y: p.y).applying(affine) }
-        return map.convert(p.coordinate, toPointTo: map)
+        screen(homogeneous(p))
+    }
+
+    func isInFront(_ p: MKMapPoint) -> Bool {
+        homogeneous(p).z >= Self.near
+    }
+
+    /// A line on screen, split where it passes behind the camera.
+    func runs(_ points: [MKMapPoint]) -> [[CGPoint]] {
+        let v = points.map(homogeneous)
+        var runs: [[CGPoint]] = []
+        var run: [CGPoint] = []
+        for i in v.indices {
+            let inFront = v[i].z >= Self.near
+            if i > 0, (v[i - 1].z >= Self.near) != inFront {
+                run.append(screen(crossing(v[i - 1], v[i])))
+                if !inFront {
+                    runs.append(run)
+                    run = []
+                }
+            }
+            if inFront { run.append(screen(v[i])) }
+        }
+        if run.count > 1 { runs.append(run) }
+        return runs.filter { $0.count > 1 }
+    }
+
+    /// A closed outline on screen, with any part behind the camera cut off.
+    func polygon(_ points: [MKMapPoint]) -> [CGPoint] {
+        let v = points.map(homogeneous)
+        var out: [CGPoint] = []
+        for i in v.indices {
+            let previous = v[(i + v.count - 1) % v.count], current = v[i]
+            let inFront = current.z >= Self.near, wasInFront = previous.z >= Self.near
+            if inFront != wasInFront { out.append(screen(crossing(previous, current))) }
+            if inFront { out.append(screen(current)) }
+        }
+        return out
+    }
+
+    private func crossing(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> SIMD3<Double> {
+        a + (b - a) * ((Self.near - a.z) / (b.z - a.z))
+    }
+
+    /// Screen points per map point in the middle of the screen, to decide what's
+    /// worth drawing at this zoom and how big a cloud right by the camera may get.
+    var centreScale: Double {
+        let c = MKMapPoint(map.centerCoordinate)
+        return ellipse(centre: c, radius: 1000).width / 2000
     }
 
     /// A circle on the ground as it looks on screen: squashed when the map is tilted.
+    /// Null if it's behind the camera.
     func ellipse(centre: MKMapPoint, radius: Double) -> CGRect {
+        guard isInFront(centre) else { return .null }
         let c = point(centre)
-        let rx = hypot(point(MKMapPoint(x: centre.x + radius, y: centre.y)).x - c.x, point(MKMapPoint(x: centre.x + radius, y: centre.y)).y - c.y)
-        let ry = hypot(point(MKMapPoint(x: centre.x, y: centre.y + radius)).x - c.x, point(MKMapPoint(x: centre.x, y: centre.y + radius)).y - c.y)
+        let east = point(MKMapPoint(x: centre.x + radius, y: centre.y))
+        let south = point(MKMapPoint(x: centre.x, y: centre.y + radius))
+        let rx = hypot(east.x - c.x, east.y - c.y)
+        let ry = hypot(south.x - c.x, south.y - c.y)
         return CGRect(x: c.x - rx, y: c.y - ry, width: rx * 2, height: ry * 2)
+    }
+
+    /// The eight unknowns of the homography taking four ground points to four screen
+    /// points, by Gaussian elimination.
+    private static func solve(ground: [(Double, Double)], screen: [(Double, Double)]) -> [Double]? {
+        var m: [[Double]] = []
+        for ((x, y), (u, v)) in zip(ground, screen) {
+            m.append([x, y, 1, 0, 0, 0, -x * u, -y * u, u])
+            m.append([0, 0, 0, x, y, 1, -x * v, -y * v, v])
+        }
+        for col in 0..<8 {
+            guard let pivot = (col..<8).max(by: { abs(m[$0][col]) < abs(m[$1][col]) }), abs(m[pivot][col]) > 1e-12 else { return nil }
+            m.swapAt(col, pivot)
+            for row in 0..<8 where row != col {
+                let f = m[row][col] / m[col][col]
+                guard f != 0 else { continue }
+                for k in col...8 { m[row][k] -= f * m[col][k] }
+            }
+        }
+        return (0..<8).map { m[$0][8] / m[$0][$0] }
+    }
+}
+
+/// Where you are: an orange dot in a white ring with a slow pulse, like the walk's
+/// route line, drawn over the clouds.
+private struct YouAreHere {
+    let location: CLLocation
+    let projection: Projection
+    let clock: Double
+
+    func draw(in context: inout GraphicsContext) {
+        let centre = projection.point(MKMapPoint(location.coordinate))
+        let orange = Color.walkiesOrange
+
+        // How sure the GPS is, as a faint patch on the ground.
+        let accuracy = location.horizontalAccuracy * MKMapPointsPerMeterAtLatitude(location.coordinate.latitude)
+        if location.horizontalAccuracy > 0 {
+            let patch = projection.ellipse(centre: MKMapPoint(location.coordinate), radius: accuracy)
+            if patch.width > 30 {
+                context.fill(Path(ellipseIn: patch), with: .color(orange.opacity(0.12)))
+            }
+        }
+
+        let pulse = (clock / 2).truncatingRemainder(dividingBy: 1)
+        let ring = 11 + 22 * pulse
+        context.stroke(
+            Path(ellipseIn: CGRect(x: centre.x - ring, y: centre.y - ring, width: ring * 2, height: ring * 2)),
+            with: .color(orange.opacity(0.55 * (1 - pulse))), lineWidth: 3
+        )
+
+        var dot = context
+        dot.addFilter(.shadow(color: .black.opacity(0.3), radius: 4, y: 2))
+        dot.fill(Path(ellipseIn: CGRect(x: centre.x - 11, y: centre.y - 11, width: 22, height: 22)), with: .color(.white))
+        context.fill(Path(ellipseIn: CGRect(x: centre.x - 7.5, y: centre.y - 7.5, width: 15, height: 15)), with: .color(orange))
     }
 }
 
@@ -197,12 +347,13 @@ private struct CloudPainter {
         // Where each cloud is this frame: bobbing gently around its tile and swelling a touch.
         var placed: [(puff: CloudField.Puff, rect: CGRect, top: CGRect, fade: Double)] = []
         for puff in field.puffs {
-            let base = projection.ellipse(centre: puff.centre, radius: puff.radius)
+            let base = capped(projection.ellipse(centre: puff.centre, radius: puff.radius), radius: puff.radius)
             guard base.intersects(visible) else { continue }
             placed.append((puff, drift(base, puff.phase), drift(base, puff.phase + 0.7), 1))
         }
         for puff in leaving {
-            let base = projection.ellipse(centre: puff.centre, radius: puff.radius * (1 + 0.5 * ease))
+            let radius = puff.radius * (1 + 0.5 * ease)
+            let base = capped(projection.ellipse(centre: puff.centre, radius: radius), radius: radius)
             guard base.intersects(visible) else { continue }
             placed.append((puff, drift(base, puff.phase), drift(base, puff.phase + 0.7), 1 - ease))
         }
@@ -242,7 +393,7 @@ private struct CloudPainter {
             layer.blendMode = .destinationOut
             for clearing in field.clearings {
                 let grow = fresh.contains(clearing.hex) ? 0.3 + 0.7 * ease : 1
-                let rect = projection.ellipse(centre: clearing.centre, radius: clearing.radius * grow)
+                let rect = capped(projection.ellipse(centre: clearing.centre, radius: clearing.radius * grow), radius: clearing.radius * grow)
                 guard rect.intersects(visible) else { continue }
                 layer.draw(eraser, in: rect)
             }
@@ -256,10 +407,34 @@ private struct CloudPainter {
         return rect.offsetBy(dx: dx, dy: dy).insetBy(dx: rect.width * (1 - swell) / 2, dy: rect.height * (1 - swell) / 2)
     }
 
-    /// Screen points per metre on the ground, to decide what's worth drawing at this zoom.
+    /// Screen points per map point mid-screen, worked out once a frame.
+    private let centreScale: Double
+
+    init(field: CloudField, leaving: [CloudField.Puff], reveal: Double, fresh: Set<Hex>, projection: Projection, bounds: CGRect, clock: Double) {
+        self.field = field
+        self.leaving = leaving
+        self.reveal = reveal
+        self.fresh = fresh
+        self.projection = projection
+        self.bounds = bounds
+        self.clock = clock
+        centreScale = projection.centreScale
+    }
+
+    /// Clouds right by a tilted camera would balloon to fill the screen, so none get
+    /// more than twice the size they'd be mid-screen.
+    private func capped(_ rect: CGRect, radius: Double) -> CGRect {
+        guard !rect.isNull else { return rect }
+        let limit = radius * 2 * centreScale * 2
+        let biggest = max(rect.width, rect.height)
+        guard limit > 0, biggest > limit else { return rect }
+        let f = limit / biggest
+        return CGRect(x: rect.midX - rect.width * f / 2, y: rect.midY - rect.height * f / 2, width: rect.width * f, height: rect.height * f)
+    }
+
+    /// Screen points per map point mid-screen, to decide what's worth drawing at this zoom.
     private var scale: Double? {
-        guard let first = field.puffs.first else { return nil }
-        return projection.ellipse(centre: first.centre, radius: 100).width / 200
+        field.puffs.isEmpty ? nil : centreScale
     }
 
     /// A faint dashed honeycomb over the clouds, fading in as you zoom closer.
@@ -267,11 +442,10 @@ private struct CloudPainter {
         guard let scale, scale > 0.15, !field.gridEdges.isEmpty else { return }
         var path = Path()
         var i = 0
+        let near = bounds.insetBy(dx: -40, dy: -40)
         while i < field.gridEdges.count {
-            let a = projection.point(field.gridEdges[i]), b = projection.point(field.gridEdges[i + 1])
-            if bounds.insetBy(dx: -40, dy: -40).contains(a) || bounds.insetBy(dx: -40, dy: -40).contains(b) {
-                path.move(to: a)
-                path.addLine(to: b)
+            for run in projection.runs([field.gridEdges[i], field.gridEdges[i + 1]]) where near.contains(run[0]) || near.contains(run[1]) {
+                path.addLines(run)
             }
             i += 2
         }
@@ -289,7 +463,7 @@ private struct CloudPainter {
 
         var clip = Path()
         for ring in field.outline {
-            clip.addLines(ring.map(projection.point))
+            clip.addLines(projection.polygon(ring))
             clip.closeSubpath()
         }
         context.clip(to: clip)
@@ -297,7 +471,7 @@ private struct CloudPainter {
         for kind in [RoadLine.Kind.road, .path] where kind == .road || scale > 0.12 {
             var path = Path()
             for line in field.lines where line.kind == kind {
-                path.addLines(line.points.map(projection.point))
+                for run in projection.runs(line.points) { path.addLines(run) }
             }
             context.stroke(
                 path,

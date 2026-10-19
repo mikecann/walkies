@@ -74,7 +74,7 @@ struct SettingsView: View {
                 Section {
                     Toggle("3D view", isOn: $model.tilted3D)
                 } footer: {
-                    Text("Tilts the map and shows Apple's 3D buildings and trees, where it has them. The whole-suburb view stays flat.")
+                    Text("Tilts the map to a game-like angle and shows Apple's 3D buildings and trees, where it has them.")
                 }
 
                 Section {
