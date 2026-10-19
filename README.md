@@ -1,6 +1,6 @@
 # Walkies
 
-An iPhone app that turns dog walks into exploring. Add your suburb and it disappears under clouds on a satellite map. Go for a walk and the clouds clear off the hex tiles you walk through. The goal is to get your suburb to 100%.
+An iPhone app that turns your walks into exploring. Add your suburb and it disappears under clouds on a satellite map. Go for a walk and the clouds clear off the hex tiles you walk through. The goal is to get your suburb to 100%.
 
 Based on an idea from James.
 
@@ -91,7 +91,7 @@ What's set up now (2026-10-19): Services ID `com.mikecann.walkies.signin` (shown
 - `convex/` is the backend: auth, schema and sync functions.
 - `Walkies/AppModel.swift` ties it together: GPS fixes in, tiles uncovered, saved every 30 seconds.
 - `Walkies/Views/` is SwiftUI, apart from `FogMapView`, which wraps `MKMapView`, and `Clouds.swift`, a custom MapKit overlay renderer. It draws a soft cloud sprite over every unwalked hex (all the grey undersides first, then all the white tops, so they merge into one blanket), cuts soft holes over walked hexes, and dots the hidden streets on top. The sprites are drawn in code at launch.
-- `scripts/make-icon.swift` draws the app icon.
+- The app icon and the Start walk and Secrets icons were drawn by Gemini 3 Pro Image. The concepts and their prompts are in `design/app-icon/`; the icon is `icon-cloud`.
 
 ## Ideas for later
 

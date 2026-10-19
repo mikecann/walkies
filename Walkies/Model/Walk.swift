@@ -61,7 +61,7 @@ nonisolated struct CoverageTracer: Sendable {
 
     /// Fixes less accurate than this (metres) are ignored.
     static let maxAccuracy = 30.0
-    /// Faster than a jog with the dog (m/s, about 12 km/h) doesn't count, so cycling
+    /// Faster than a jog (m/s, about 12 km/h) doesn't count, so cycling
     /// and driving don't uncover anything. Checked against the GPS's own speed reading.
     static let maxSpeed = 3.3
     /// Slower than this (m/s) by the GPS's own speed reading is standing about, not walking.

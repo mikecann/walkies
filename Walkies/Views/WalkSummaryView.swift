@@ -7,7 +7,7 @@ struct WalkSummaryView: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            Image(systemName: "pawprint.fill")
+            Image(systemName: "shoeprints.fill")
                 .font(.system(size: 40))
                 .foregroundStyle(Color.walkiesOrange)
 

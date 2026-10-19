@@ -16,7 +16,7 @@ struct SignInView: View {
                 VStack(spacing: 8) {
                     Text("Walkies")
                         .font(.system(size: 44, weight: .heavy, design: .rounded))
-                    Text("Walk the dog and clear the clouds off your suburb, one street at a time.")
+                    Text("Clear the clouds off your suburb one street at a time, and find the secrets hiding underneath.")
                         .font(.body)
                         .foregroundStyle(Color.ink.opacity(0.65))
                         .multilineTextAlignment(.center)

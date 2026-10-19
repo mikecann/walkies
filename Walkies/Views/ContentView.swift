@@ -240,7 +240,7 @@ struct WalkControls: View {
             .stickerCard(in: .rect(cornerRadius: 26))
         } else if model.alwaysOn {
             HStack(spacing: 12) {
-                Image("icon-paw")
+                Image("icon-walk")
                     .resizable()
                     .scaledToFit()
                     .frame(width: 36, height: 36)
@@ -261,7 +261,7 @@ struct WalkControls: View {
         } else {
             Button(action: onStart) {
                 HStack(spacing: 8) {
-                    Image("icon-paw").resizable().scaledToFit().frame(width: 26, height: 26)
+                    Image("icon-walk").resizable().scaledToFit().frame(width: 26, height: 26)
                     Text("Start walk").font(.title3.weight(.semibold))
                 }
             }
