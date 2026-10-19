@@ -17,6 +17,10 @@ nonisolated struct City: Codable, Identifiable, Sendable {
     /// Which tile each lore sticker is hidden under, by lore id.
     var stickers: [String: Hex]?
     var createdAt = Date()
+    /// When anything about it last changed on this phone, so sync knows to send it.
+    var updatedAt: Date?
+
+    var lastChanged: Date { updatedAt ?? createdAt }
 
     var progress: Double {
         tiles.isEmpty ? 0 : Double(visited.count) / Double(tiles.count)

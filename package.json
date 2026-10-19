@@ -1,0 +1,17 @@
+{
+  "name": "walkies-backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "convex dev",
+    "deploy": "convex deploy",
+    "typecheck": "tsc -p convex --noEmit"
+  },
+  "dependencies": {
+    "@convex-dev/auth": "2.0.0-beta.0",
+    "convex": "1.47.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

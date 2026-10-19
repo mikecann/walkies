@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Lets the app use passkeys for the Convex deployments' own domains. Each
+	     domain serves /.well-known/apple-app-site-association (convex/http.ts).
+	     The dev one is fetched straight from the domain in developer mode. -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>webcredentials:savory-bee-296.ap-southeast-2.convex.site</string>
+		<string>webcredentials:resolute-pig-177.ap-southeast-2.convex.site?mode=developer</string>
+	</array>
+</dict>
+</plist>

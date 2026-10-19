@@ -20,6 +20,7 @@
 		A1B2C3D40000000000000020 /* Walkies.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Walkies.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D40000000000000021 /* WalkiesTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WalkiesTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D40000000000000022 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A1B2C3D40000000000000023 /* Walkies.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Walkies.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -76,6 +77,7 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D40000000000000022 /* Info.plist */,
+				A1B2C3D40000000000000023 /* Walkies.entitlements */,
 			);
 			path = Config;
 			sourceTree = "<group>";
@@ -281,6 +283,7 @@
 				DEVELOPMENT_TEAM = 4DTAZSZL6B;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				CODE_SIGN_ENTITLEMENTS = Config/Walkies.entitlements;
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Walkies;
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "With Always on, Walkies records your walks in the background, so you never have to press Start walk.";
@@ -316,6 +319,7 @@
 				DEVELOPMENT_TEAM = 4DTAZSZL6B;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				CODE_SIGN_ENTITLEMENTS = Config/Walkies.entitlements;
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Walkies;
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "With Always on, Walkies records your walks in the background, so you never have to press Start walk.";

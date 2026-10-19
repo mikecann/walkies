@@ -5,12 +5,16 @@ import UIKit
 /// for always-on tracking and no window ever appears.
 final class AppDelegate: NSObject, UIApplicationDelegate {
     let model = AppModel()
+    let account = Account()
+    lazy var sync = SyncEngine(model: model, account: account)
 
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        model.requestSync = { [weak self] in self?.sync.schedule() }
         model.resumeAlwaysOn()
+        sync.schedule()
         return true
     }
 }
@@ -21,8 +25,16 @@ struct WalkiesApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environment(delegate.model)
+            Group {
+                if delegate.account.isSignedIn {
+                    ContentView()
+                } else {
+                    SignInView { delegate.sync.schedule() }
+                }
+            }
+            .environment(delegate.model)
+            .environment(delegate.account)
+            .environment(delegate.sync)
         }
     }
 }

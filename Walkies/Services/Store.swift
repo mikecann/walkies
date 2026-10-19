@@ -32,6 +32,22 @@ nonisolated struct Store {
 
     private var stickersURL: URL { root.appending(path: "stickers.json") }
 
+    func loadSyncState() -> SyncState {
+        read(SyncState.self, from: syncURL) ?? SyncState()
+    }
+
+    func save(syncState: SyncState) {
+        write(syncState, to: syncURL)
+    }
+
+    private var syncURL: URL { root.appending(path: "sync.json") }
+
+    /// Deletes everything the app has saved, for signing out.
+    func wipe() {
+        try? FileManager.default.removeItem(at: root)
+        try? FileManager.default.createDirectory(at: walksDir, withIntermediateDirectories: true)
+    }
+
     func loadWalks() -> [Walk] {
         let files = (try? FileManager.default.contentsOfDirectory(at: walksDir, includingPropertiesForKeys: nil)) ?? []
         return files

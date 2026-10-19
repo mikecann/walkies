@@ -92,6 +92,7 @@ final class AppModel {
                       let i = cities.firstIndex(where: { $0.id == id })
                 else { return }
                 cities[i].roads = CityBuilder.roadLines(from: ways)
+                cities[i].updatedAt = .now
                 tilesRevision += 1
                 store.save(cities)
             }
@@ -152,6 +153,7 @@ final class AppModel {
         store.save(walk)
         store.save(cities)
         finishedWalk = walk
+        requestSync?()
     }
 
     func saveNow() {
@@ -242,6 +244,7 @@ final class AppModel {
             store.delete(walk)
         }
         store.save(cities)
+        requestSync?()
     }
 
     /// New tiles from today's walks, for the always-on status.
@@ -286,10 +289,11 @@ final class AppModel {
             var city = cities[i]
             let fresh = city.visit(points, within: shape(for: city))
             guard !fresh.isEmpty else { continue }
+            city.updatedAt = .now
             cities[i] = city
             freshTiles[city.id, default: []].formUnion(fresh)
             uncovered += fresh.count
-            unlockStickers(in: city, on: fresh, notify: true)
+            unlockStickers(in: city, on: fresh, notify: true, popUp: true)
         }
         if uncovered > 0 { tilesRevision += 1 }
         return uncovered
@@ -319,20 +323,22 @@ final class AppModel {
             let missing = entries.filter { placed[$0.id] == nil }
             guard !missing.isEmpty else { continue }
             cities[i].stickers = placed.merging(cities[i].placeStickers(missing)) { old, _ in old }
-            unlockStickers(in: cities[i], on: cities[i].visited, notify: false)
+            cities[i].updatedAt = .now
+            unlockStickers(in: cities[i], on: cities[i].visited, notify: false, popUp: true)
         }
         store.save(cities)
     }
 
-    private func unlockStickers(in city: City, on hexes: Set<Hex>, notify: Bool) {
+    private func unlockStickers(in city: City, on hexes: Set<Hex>, notify: Bool, popUp: Bool) {
         guard let placed = city.stickers else { return }
         let ids = placed.filter { hexes.contains($0.value) && foundStickers[$0.key] == nil }.map(\.key)
         guard !ids.isEmpty else { return }
         let entries = LoreLibrary.entries(for: city).filter { ids.contains($0.id) }
         for entry in entries { foundStickers[entry.id] = .now }
         store.save(stickers: foundStickers)
-        stickerQueue.append(contentsOf: entries)
+        if popUp { stickerQueue.append(contentsOf: entries) }
         if notify { Notifier.stickersFound(entries) }
+        requestSync?()
     }
 
     private func authorizationChanged() {
@@ -344,12 +350,15 @@ final class AppModel {
     // MARK: Cities
 
     func add(_ city: City) {
+        var city = city
+        city.updatedAt = .now
         cities.append(city)
         shapes[city.id] = city.shape()
         selectedCityID = city.id
         placeStickers()
         tilesRevision += 1
         store.save(cities)
+        requestSync?()
     }
 
     func deleteCities(at offsets: IndexSet) {
@@ -360,6 +369,85 @@ final class AppModel {
             self.selectedCityID = cities.first?.id
         }
         store.save(cities)
+        requestSync?()
+    }
+
+    // MARK: Sync
+
+    /// Asks the sync engine to push and pull shortly. Set by the app delegate.
+    @ObservationIgnored var requestSync: (() -> Void)?
+
+    /// A walk from the server that this phone hasn't got: keep it and replay it over every city.
+    func addRemote(_ walk: Walk) {
+        guard walk.endedAt != nil, walk.id != activeWalk?.id, !walks.contains(where: { $0.id == walk.id }) else { return }
+        walks.append(walk)
+        walks.sort { $0.startedAt < $1.startedAt }
+        store.save(walk)
+        replay([walk])
+    }
+
+    /// A city from the server. A new one is added; one this phone already has is merged,
+    /// keeping every tile either copy uncovered.
+    func addRemote(_ remote: City) {
+        if let i = cities.firstIndex(where: { $0.id == remote.id }) {
+            var city = cities[i]
+            let hadMore = !city.visited.isSubset(of: remote.visited)
+            city.visited.formUnion(remote.visited)
+            city.tiles.formUnion(remote.tiles)
+            city.roads = city.roads ?? remote.roads
+            city.stickers = (city.stickers ?? [:]).merging(remote.stickers ?? [:]) { _, theirs in theirs }
+            // If this phone had tiles the server didn't, send the merged copy back.
+            city.updatedAt = hadMore ? .now : max(city.lastChanged, remote.lastChanged)
+            cities[i] = city
+        } else {
+            cities.append(remote)
+            if selectedCityID == nil { selectedCityID = remote.id }
+        }
+        shapes[remote.id] = nil
+        replay(walks, onlyCity: remote.id)
+    }
+
+    /// Secrets found on another phone, keeping the earliest time each was found.
+    func addRemoteSecrets(_ remote: [String: Date]) {
+        var changed = false
+        for (id, date) in remote where foundStickers[id].map({ date < $0 }) ?? true {
+            foundStickers[id] = date
+            changed = true
+        }
+        if changed { store.save(stickers: foundStickers) }
+    }
+
+    /// Runs walks over the cities again, quietly unlocking any secrets they pass.
+    private func replay(_ walks: [Walk], onlyCity: UUID? = nil) {
+        for i in cities.indices where onlyCity == nil || cities[i].id == onlyCity {
+            var city = cities[i]
+            let shape = shape(for: city)
+            for walk in walks {
+                _ = city.visit(CoverageTracer.samples(for: walk.points), within: shape)
+            }
+            cities[i] = city
+            unlockStickers(in: city, on: city.visited, notify: false, popUp: false)
+        }
+        tilesRevision += 1
+        store.save(cities)
+    }
+
+    /// Forgets everything on this phone, for signing out. It's all in the account.
+    func wipeLocalData() {
+        alwaysOn = false
+        tracker.stop()
+        activeWalk = nil
+        activePath = []
+        freshTiles = [:]
+        finishedWalk = nil
+        cities = []
+        walks = []
+        shapes = [:]
+        foundStickers = [:]
+        stickerQueue = []
+        selectedCityID = nil
+        tilesRevision += 1
+        store.wipe()
     }
 
     private func shape(for city: City) -> BoundaryShape {

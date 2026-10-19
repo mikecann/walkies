@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    @Environment(SyncEngine.self) private var sync
     @Environment(\.scenePhase) private var scenePhase
     @State private var showingCities = false
     @State private var showingSettings = false
@@ -81,7 +82,10 @@ struct ContentView: View {
         .sensoryFeedback(.success, trigger: model.revealCount)
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { model.saveNow() }
-            if phase == .active { model.finishStaleAutoWalk() }
+            if phase == .active {
+                model.finishStaleAutoWalk()
+                sync.schedule()
+            }
         }
         .task {
             model.tracker.requestPermissionIfNeeded()
