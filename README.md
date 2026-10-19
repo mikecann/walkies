@@ -87,6 +87,14 @@ What's set up now (2026-10-19): Services ID `com.mikecann.walkies.signin` (shown
 
 Signing in with Apple and Google gives the same account when both vouch for the same email (`existingUser` in `convex/users.ts`). Users made twice before that was in place are folded together by `users:mergeDuplicateUsers`, which points the newer one at the older with `mergedInto`; every function finds who's signed in with `currentUserId`, which follows it.
 
+### Chef (feature requests)
+
+Settings has "Suggest a feature", which opens Chef, Seth Raphael's feedback board (`@convex-dev/feedback`, private and pre-release, from `sethconvex/feedback-chef`). People type a request or send a screenshot with a voice note and follow it through; the admin (Mike's prod account) sees the approval queue in the same sheet. Cloud builds aren't set up.
+
+- Backend: the component in `convex/convex.config.ts`, the API in `convex/chef.ts` (written by `npx chef init --no-cloud`, then pointed at `currentUserId` so merged accounts are one person). The package is vendored in `vendor/` from a pinned commit.
+- App: the `ChefKit` Swift package, pinned to the same commit. `Walkies/Services/ChefConnection.swift` lets it use Walkies' own HTTP client and sign-in, polling where ChefKit expects live subscriptions. Its floating button is hidden; Settings opens it with `ChefKit.present()`.
+- Admin: `npx convex run chef:chefSetAdmin '{"userId":"<users _id>"}' --prod`.
+
 ## Code map
 
 - `Walkies/Model/` is the maths: a flat local projection (`Geo`), the hex grid, boundaries and point-in-polygon, cities, walks, and the GPS filter (`CoverageTracer`).

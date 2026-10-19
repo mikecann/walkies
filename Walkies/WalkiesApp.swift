@@ -1,3 +1,4 @@
+import ChefKit
 import SwiftUI
 import UIKit
 
@@ -13,6 +14,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         model.requestSync = { [weak self] in self?.sync.schedule() }
+        // Chef (Seth's feedback board): opened from Settings rather than floating over the map.
+        ChefKit.install(client: ChefConnection(account: account))
+        ChefKit.isHidden = true
         model.resumeAlwaysOn()
         sync.schedule()
         return true
@@ -37,7 +41,10 @@ struct WalkiesApp: App {
         WindowGroup {
             Group {
                 if !delegate.account.isSignedIn && !Self.skipSignIn {
-                    SignInView { delegate.sync.schedule() }
+                    SignInView {
+                        delegate.sync.schedule()
+                        ChefKit.retryPending()
+                    }
                 } else if !delegate.model.setupDone {
                     SetupView()
                 } else {

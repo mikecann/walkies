@@ -1,0 +1,23 @@
+{
+  "originHash" : "caa9a46a6280c797febf81a85f4aa15c17f0be0031c56a1ff1fa716cd982daf4",
+  "pins" : [
+    {
+      "identity" : "convex-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/get-convex/convex-swift",
+      "state" : {
+        "revision" : "125b71b2f8725931a5b0e8252f0799ef2adad120",
+        "version" : "0.8.1"
+      }
+    },
+    {
+      "identity" : "feedback-chef",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sethconvex/feedback-chef",
+      "state" : {
+        "revision" : "dc9056d4bfb52cac5719d29f39d5bf61c211ac21"
+      }
+    }
+  ],
+  "version" : 3
+}

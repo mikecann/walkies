@@ -1,3 +1,4 @@
+import ChefKit
 import SwiftUI
 
 struct SettingsView: View {
@@ -83,6 +84,16 @@ struct SettingsView: View {
                     Toggle("3D view", isOn: $model.tilted3D)
                 } footer: {
                     Text("Tilts the map to a game-like angle and shows Apple's 3D buildings and trees, where it has them.")
+                }
+
+                Section {
+                    Button {
+                        ChefKit.present()
+                    } label: {
+                        Label("Suggest a feature", systemImage: "lightbulb")
+                    }
+                } footer: {
+                    Text("Ideas for Walkies, or something that's not working right. Type it, or send a screenshot with a voice note. You can follow what happens to it here too.")
                 }
 
                 Section {

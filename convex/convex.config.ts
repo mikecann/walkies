@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import core from "@convex-dev/auth/convex.config.js";
 import apple from "@convex-dev/auth/components/apple/convex.config.js";
 import google from "@convex-dev/auth/components/google/convex.config.js";
+import feedback from "@convex-dev/feedback/convex.config.js";
 
 const app = defineApp({
   env: {
@@ -46,5 +47,8 @@ app.use(google, {
     CLIENT_SECRET: app.env.AUTH_GOOGLE_CLIENT_SECRET,
   },
 });
+
+// Chef: requests, voting and approvals.
+app.use(feedback);
 
 export default app;

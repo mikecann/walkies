@@ -9,6 +9,7 @@
  */
 
 import type * as auth from "../auth.js";
+import type * as chef from "../chef.js";
 import type * as http from "../http.js";
 import type * as sync from "../sync.js";
 import type * as users from "../users.js";
@@ -21,6 +22,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
+  chef: typeof chef;
   http: typeof http;
   sync: typeof sync;
   users: typeof users;
@@ -56,4 +58,5 @@ export declare const components: {
   auth: import("@convex-dev/auth/_generated/component.js").ComponentApi<"auth">;
   authApple: import("@convex-dev/auth/components/apple/_generated/component.js").ComponentApi<"authApple">;
   authGoogle: import("@convex-dev/auth/components/google/_generated/component.js").ComponentApi<"authGoogle">;
+  feedback: import("@convex-dev/feedback/_generated/component.js").ComponentApi<"feedback">;
 };

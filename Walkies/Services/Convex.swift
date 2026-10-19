@@ -88,11 +88,22 @@ nonisolated struct ConvexClient: Sendable {
             throw ConvexError.badResponse((response as? HTTPURLResponse)?.statusCode ?? 0)
         }
         guard envelope.status == "success" else {
-            throw ConvexError.server(envelope.errorMessage ?? "Unknown error")
+            throw ConvexError.server(Self.message(from: body) ?? envelope.errorMessage ?? "Unknown error")
         }
         if let value = envelope.value { return value }
         if let nothing = Nothing() as? Result { return nothing }
         throw ConvexError.server("\(path) returned nothing")
+    }
+
+    /// For a ConvexError thrown on the server: its `message`, or its `code` when that's all
+    /// it has (Chef looks for "UNAUTHENTICATED").
+    private static func message(from body: Data) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let data = json["errorData"]
+        else { return nil }
+        if let text = data as? String { return text }
+        guard let object = data as? [String: Any] else { return nil }
+        return object["message"] as? String ?? object["code"] as? String
     }
 
     private static func check(_ response: URLResponse) throws {

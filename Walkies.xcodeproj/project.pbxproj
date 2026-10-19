@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A1B2C3D40000000000000302 /* ChefKit in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D40000000000000301 /* ChefKit */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		A1B2C3D40000000000000001 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -41,6 +45,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1B2C3D40000000000000302 /* ChefKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -102,6 +107,7 @@
 			);
 			name = Walkies;
 			packageProductDependencies = (
+				A1B2C3D40000000000000301 /* ChefKit */,
 			);
 			productName = Walkies;
 			productReference = A1B2C3D40000000000000020 /* Walkies.app */;
@@ -158,6 +164,9 @@
 			);
 			mainGroup = A1B2C3D40000000000000050;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A1B2C3D40000000000000300 /* XCRemoteSwiftPackageReference "feedback-chef" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A1B2C3D40000000000000051 /* Products */;
 			projectDirPath = "";
@@ -288,7 +297,9 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Walkies;
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "With Always on, Walkies records your walks in the background, so you never have to press Start walk.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Walkies uses your location to uncover the tiles you walk through.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Walkies records a voice note when you suggest a feature, so you can say it rather than type it.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "Walkies uses motion to tell walking from cycling or driving, so only walks uncover tiles.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Walkies writes out your voice note as you speak when you suggest a feature.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -324,7 +335,9 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Walkies;
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "With Always on, Walkies records your walks in the background, so you never have to press Start walk.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Walkies uses your location to uncover the tiles you walk through.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Walkies records a voice note when you suggest a feature, so you can say it rather than type it.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "Walkies uses motion to tell walking from cycling or driving, so only walks uncover tiles.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Walkies writes out your voice note as you speak when you suggest a feature.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -386,6 +399,25 @@
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A1B2C3D40000000000000300 /* XCRemoteSwiftPackageReference "feedback-chef" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sethconvex/feedback-chef";
+			requirement = {
+				kind = revision;
+				revision = dc9056d4bfb52cac5719d29f39d5bf61c211ac21;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A1B2C3D40000000000000301 /* ChefKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D40000000000000300 /* XCRemoteSwiftPackageReference "feedback-chef" */;
+			productName = ChefKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCConfigurationList section */
 		A1B2C3D40000000000000070 /* Build configuration list for PBXNativeTarget "Walkies" */ = {
