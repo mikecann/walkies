@@ -1,6 +1,7 @@
 import AuthenticationServices
 import Foundation
 import Observation
+import OSLog
 import Security
 import UIKit
 
@@ -17,9 +18,9 @@ nonisolated struct Session: Codable, Sendable {
 }
 
 /// Signing in with Apple or Google through Convex Auth v2. Their sign-in pages run
-/// in a secure sheet that ends on the deployment's own site, which the app is
-/// linked to, so the sheet hands the one-time code straight back. The session
-/// lives in the Keychain.
+/// in a secure sheet that ends on the deployment's own site, which bounces to
+/// walkies://signed-in so the sheet hands the one-time code straight back. The
+/// session lives in the Keychain.
 @Observable
 final class Account {
     enum Provider: String {
@@ -44,15 +45,28 @@ final class Account {
     // MARK: Signing in
 
     func signIn(with provider: Provider) async throws {
+        do {
+            try await performSignIn(with: provider)
+        } catch {
+            log.error("\(provider.rawValue, privacy: .public): \(String(describing: error), privacy: .public)")
+            throw error
+        }
+    }
+
+    private func performSignIn(with provider: Provider) async throws {
         let returnTo = Backend.site.appending(path: "app/signed-in")
+        log.info("\(provider.rawValue, privacy: .public): starting on \(Backend.site.host() ?? "?", privacy: .public)")
         let start: StartResult = try await ConvexClient().mutation(
             "auth:startSignInWith\(provider.rawValue)", ["redirectTo": returnTo.absoluteString]
         )
         guard let page = URL(string: start.redirect) else { throw SignInError.failed }
 
-        let landed = try await sheet.open(page, returningTo: returnTo)
+        log.info("\(provider.rawValue, privacy: .public): opening \(page.host() ?? "?", privacy: .public)")
+        let landed = try await sheet.open(page)
+        log.info("\(provider.rawValue, privacy: .public): back on \(landed.scheme ?? "?", privacy: .public)://\(landed.host() ?? "", privacy: .public)")
         let query = URLComponents(url: landed, resolvingAgainstBaseURL: false)?.queryItems ?? []
         if let error = query.first(where: { $0.name == "convexAuthError" })?.value {
+            log.error("\(provider.rawValue, privacy: .public): provider said \(error, privacy: .public)")
             throw error == "access_denied" ? SignInError.cancelled : SignInError.failed
         }
         guard let code = query.first(where: { $0.name == "convexAuthCode" })?.value else { throw SignInError.failed }
@@ -60,6 +74,7 @@ final class Account {
         let result: CompleteResult = try await ConvexClient().mutation(
             "auth:completeSignInWith\(provider.rawValue)", ["code": code, "state": start.state]
         )
+        log.info("\(provider.rawValue, privacy: .public): finished with \(result.status, privacy: .public)")
         guard result.status == "complete", var tokens = result.tokens else { throw SignInError.failed }
 
         // Who this is, for Settings. Not essential, so a hiccup here doesn't stop sign-in.
@@ -132,14 +147,19 @@ final class Account {
 nonisolated enum SignInError: LocalizedError {
     case cancelled
     case failed
+    /// The sign-in sheet couldn't open, with iOS's error code.
+    case sheet(Int)
 
     var errorDescription: String? {
         switch self {
         case .cancelled: nil
         case .failed: "Something went wrong signing in. Try again."
+        case .sheet(let code): "Couldn't open the sign-in page (\(code)). Try again."
         }
     }
 }
+
+private nonisolated let log = Logger(subsystem: "com.mikecann.walkies", category: "signin")
 
 // MARK: Wire formats
 
@@ -170,25 +190,35 @@ private nonisolated struct Me: Decodable {
 final class SignInSheet: NSObject, ASWebAuthenticationPresentationContextProviding {
     private var session: ASWebAuthenticationSession?
 
-    func open(_ page: URL, returningTo returnTo: URL) async throws -> URL {
-        guard let host = returnTo.host() else { throw SignInError.failed }
+    /// The deployment's /app/signed-in page passes its query on to walkies://signed-in,
+    /// which the sheet catches.
+    func open(_ page: URL) async throws -> URL {
+        let opened = Date.now
         return try await withCheckedThrowingContinuation { continuation in
             let session = ASWebAuthenticationSession(
                 url: page,
-                callback: .https(host: host, path: returnTo.path())
+                callback: .customScheme("walkies")
             ) { url, error in
                 if let url {
                     continuation.resume(returning: url)
-                } else if let error = error as? ASWebAuthenticationSessionError, error.code == .canceledLogin {
+                    return
+                }
+                let nsError = error.map { $0 as NSError }
+                log.error("Sheet ended after \(Date.now.timeIntervalSince(opened), format: .fixed(precision: 1), privacy: .public)s: \(nsError?.domain ?? "no error", privacy: .public) \(nsError?.code ?? 0, privacy: .public)")
+                // A cancel that comes back before anyone could have seen the sheet is
+                // iOS refusing to open it, not someone closing it.
+                if let error = error as? ASWebAuthenticationSessionError, error.code == .canceledLogin,
+                   Date.now.timeIntervalSince(opened) > 1.5 {
                     continuation.resume(throwing: SignInError.cancelled)
                 } else {
-                    continuation.resume(throwing: error ?? SignInError.failed)
+                    continuation.resume(throwing: SignInError.sheet(nsError?.code ?? 0))
                 }
             }
             session.presentationContextProvider = self
             self.session = session
             if !session.start() {
-                continuation.resume(throwing: SignInError.failed)
+                log.error("Sheet refused to start")
+                continuation.resume(throwing: SignInError.sheet(-1))
             }
         }
     }

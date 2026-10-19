@@ -3,8 +3,8 @@
 <plist version="1.0">
 <dict>
 	<!-- Links the app to the Convex deployments' own domains. Each serves
-	     /.well-known/apple-app-site-association (convex/http.ts). The sign-in sheet
-	     needs this to catch Apple's and Google's redirect back to /app/signed-in.
+	     /.well-known/apple-app-site-association (convex/http.ts), for passwords and
+	     passkeys later. Sign-in doesn't rely on it: it comes back on walkies://.
 	     The dev one is fetched straight from the domain in developer mode. -->
 	<key>com.apple.developer.associated-domains</key>
 	<array>
