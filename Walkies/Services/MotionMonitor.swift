@@ -7,6 +7,8 @@ import Observation
 final class MotionMonitor {
     /// True while the phone is reasonably sure you're cycling or in a vehicle.
     private(set) var onWheels = false
+    /// True while the phone is reasonably sure you're not moving at all.
+    private(set) var still = false
 
     private let manager = CMMotionActivityManager()
     @ObservationIgnored private var started = false
@@ -23,6 +25,7 @@ final class MotionMonitor {
     }
 
     private func update(with activity: CMMotionActivity) {
+        still = activity.stationary && !activity.walking && !activity.running && activity.confidence != .low
         if activity.walking || activity.running {
             onWheels = false
         } else if (activity.cycling || activity.automotive), activity.confidence != .low {

@@ -13,6 +13,8 @@ nonisolated struct TrackPoint: Codable, Hashable, Sendable {
     var speed: Double?
     /// The motion chip thought you were on a bike or in a car at the time.
     var wheels: Bool?
+    /// The motion chip thought you were standing still.
+    var still: Bool?
 
     var coordinate: Coordinate { Coordinate(lat: lat, lon: lon) }
 }
@@ -62,33 +64,62 @@ nonisolated struct CoverageTracer: Sendable {
     /// Faster than a jog with the dog (m/s, about 12 km/h) doesn't count, so cycling
     /// and driving don't uncover anything. Checked against the GPS's own speed reading.
     static let maxSpeed = 3.3
-    /// The same check between two fixes is noisier (a couple of metres of jitter over
-    /// a one-second gap looks like a sprint), so it gets some slack.
+    /// Slower than this (m/s) by the GPS's own speed reading is standing about, not walking.
+    static let minSpeed = 0.4
+    /// You have to get at least this far (metres) from the last counted spot, and further
+    /// than the GPS's own error, before it counts. Otherwise the GPS wobbling round one
+    /// spot indoors adds up to a walk.
+    static let minStep = 8.0
+    /// Seconds since the last counted spot after which a fix with no speed reading is
+    /// treated as drift.
+    static let maxDriftGap = 60.0
+    /// The same speed check between counted spots is noisier, so it gets some slack.
     static let maxSpeedBetweenFixes = 5.0
     /// Don't join the dots across a GPS dropout longer than this (metres).
     static let maxGap = 150.0
     /// Spacing (metres) of the points we sample between fixes.
     static let spacing = 10.0
 
-    private var last: TrackPoint?
+    /// The last spot that counted. New fixes are measured from here, not from the
+    /// previous fix, so lots of tiny wobbles never add up.
+    private var anchor: TrackPoint?
 
     mutating func add(_ point: TrackPoint) -> Step {
         guard point.accuracy >= 0, point.accuracy <= Self.maxAccuracy else { return .none }
-        defer { last = point }
-        if point.wheels == true { return .none }
-        if let speed = point.speed, speed > Self.maxSpeed { return .none }
-        // A spot only counts once two on-foot fixes in a row agree, so the first fix
-        // after launch or after a GPS jump can't sneak a tile in from a car seat.
-        guard let prev = last else { return .none }
+        // On a bike or in a car: start again from scratch once you're back on foot.
+        if point.wheels == true || (point.speed ?? 0) > Self.maxSpeed {
+            anchor = nil
+            return .none
+        }
+        // Standing still: wait, keeping the anchor where it was.
+        if point.still == true { return .none }
+        if let speed = point.speed, speed < Self.minSpeed { return .none }
+        // A spot only counts once you've walked on from somewhere that counted, so the
+        // first fix after launch or a GPS jump can't sneak a tile in.
+        guard let prev = anchor else {
+            anchor = point
+            return .none
+        }
 
         let d = prev.coordinate.distance(to: point.coordinate)
+        if d < max(Self.minStep, point.accuracy) { return .none }
+        anchor = point
         let dt = point.time - prev.time
+        // Creeping that far over minutes with no speed reading is the GPS drifting, not
+        // walking: walking gives a fix every second or two.
+        if point.speed == nil, dt > Self.maxDriftGap { return .none }
         if dt > 0, d / dt > Self.maxSpeedBetweenFixes { return .none }
         if d > Self.maxGap { return .none }
 
         let n = max(1, Int((d / Self.spacing).rounded(.up)))
         let samples = (1...n).map { prev.coordinate.lerp(to: point.coordinate, Double($0) / Double(n)) }
         return Step(samples: samples, distance: d)
+    }
+
+    /// How far these points really walked, by the same rules.
+    static func distance(for points: [TrackPoint]) -> Double {
+        var tracer = CoverageTracer()
+        return points.reduce(0) { $0 + tracer.add($1).distance }
     }
 
     static func samples(for points: [TrackPoint]) -> [Coordinate] {

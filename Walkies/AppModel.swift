@@ -40,9 +40,9 @@ final class AppModel {
         return override > 0 ? override : 10 * 60
     }
 
-    /// Shorter than this with no new tiles and it wasn't really a walk: pottering
-    /// round the house, or GPS drift.
-    static let minimumAutoWalk = 100.0
+    /// Shorter than this and it wasn't really a walk: pottering round the house, or
+    /// GPS drift. Any tiles it uncovered stay uncovered.
+    static let minimumAutoWalk = 300.0
 
     let tracker = LocationTracker()
     let motion = MotionMonitor()
@@ -167,6 +167,7 @@ final class AppModel {
         guard location.timestamp.timeIntervalSinceNow > -10 else { return }
         var point = TrackPoint(location)
         if motion.onWheels { point.wheels = true }
+        if motion.still { point.still = true }
         if alwaysOn {
             recordAlwaysOn(point)
         } else if activeWalk != nil {
@@ -237,7 +238,10 @@ final class AppModel {
         tracer = CoverageTracer()
         tilesRevision += 1
         walk.endedAt = walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt
-        if walk.distance >= Self.minimumAutoWalk || walk.newTiles > 0 {
+        // Measure again by today's rules, so walks logged by older versions (or GPS
+        // wobble at home) don't get kept as real ones. Tiles already uncovered stay.
+        walk.distance = CoverageTracer.distance(for: walk.points)
+        if walk.distance >= Self.minimumAutoWalk {
             walks.append(walk)
             store.save(walk)
         } else {

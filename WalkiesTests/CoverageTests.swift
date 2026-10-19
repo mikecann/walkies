@@ -57,16 +57,76 @@ struct CoverageTests {
         var crawling = fix(east: 5, at: 10) // 0.5 m/s in traffic, still in the car
         crawling.wheels = true
         #expect(tracer.add(crawling).samples.isEmpty)
-        // Out of the car and walking again.
-        #expect(!tracer.add(fix(east: 15, at: 20)).samples.isEmpty)
+        // Out of the car and walking again: counts from the first spot on foot.
+        #expect(tracer.add(fix(east: 15, at: 20)).samples.isEmpty)
+        #expect(!tracer.add(fix(east: 30, at: 31)).samples.isEmpty)
     }
 
-    @Test func gpsJitterAtWalkingPaceStillCounts() {
+    @Test func anHourIndoorsIsNotAWalk() {
+        // What a phone left on the kitchen bench really logs: a fix a second or two,
+        // wandering up to ~30 m around one spot, ~14 m accuracy, GPS speed ~0.1 m/s.
+        var rng = SystemRandomNumberGenerator()
+        var tracer = CoverageTracer()
+        var total = 0.0
+        for second in stride(from: 0.0, through: 3600, by: 2) {
+            let east = Double.random(in: -20...20, using: &rng)
+            var point = fix(east: east, at: second, accuracy: 14)
+            point.speed = Double.random(in: 0...0.25, using: &rng)
+            total += tracer.add(point).distance
+        }
+        #expect(total == 0)
+    }
+
+    @Test func wobbleWithNoGPSSpeedIsCaughtByTheMotionChip() {
+        var tracer = CoverageTracer()
+        var total = 0.0
+        for second in stride(from: 0.0, through: 600, by: 2) {
+            var point = fix(east: second.truncatingRemainder(dividingBy: 40) - 20, at: second, accuracy: 14)
+            point.still = true
+            total += tracer.add(point).distance
+        }
+        #expect(total == 0)
+    }
+
+    @Test func slowDriftWithNoSpeedReadingDoesNotCount() {
+        var tracer = CoverageTracer()
+        _ = tracer.add(fix(east: 0, at: 0, accuracy: 6))
+        // 18 minutes later the GPS has crept 10 m.
+        #expect(tracer.add(fix(east: 10, at: 1080, accuracy: 6)).samples.isEmpty)
+    }
+
+    @Test func aRealWalkStillCountsInFull() {
+        // A fix a second at 1.4 m/s for 500 m.
+        var tracer = CoverageTracer()
+        var total = 0.0
+        for second in stride(from: 0.0, through: 357, by: 1) {
+            var point = fix(east: second * 1.4, at: second, accuracy: 6)
+            point.speed = 1.4
+            total += tracer.add(point).distance
+        }
+        #expect(total > 480 && total <= 501)
+        #expect(CoverageTracer.distance(for: (0...357).map { second in
+            var point = fix(east: Double(second) * 1.4, at: Double(second), accuracy: 6)
+            point.speed = 1.4
+            return point
+        }) == total)
+    }
+
+    @Test func stoppingForASniffDoesNotBreakTheWalk() {
         var tracer = CoverageTracer()
         _ = tracer.add(fix(east: 0, at: 0))
-        var step = fix(east: 4, at: 1) // 4 m in a second looks quick, but the GPS speed is a stroll
-        step.speed = 1.4
-        #expect(!tracer.add(step).samples.isEmpty)
+        #expect(!tracer.add(fix(east: 20, at: 15)).samples.isEmpty)
+        // A minute sniffing a fence post.
+        for second in stride(from: 16.0, through: 75, by: 3) {
+            var point = fix(east: 21, at: second)
+            point.speed = 0.1
+            #expect(tracer.add(point).samples.isEmpty)
+        }
+        // Walking on picks up from the last spot that counted.
+        var walkingOn = fix(east: 40, at: 90)
+        walkingOn.speed = 1.3
+        let step = tracer.add(walkingOn)
+        #expect(abs(step.distance - 20) < 0.5)
     }
 
     @Test func bigGapsAreNotJoinedUp() {
