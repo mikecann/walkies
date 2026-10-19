@@ -1,20 +1,27 @@
 import CoreImage
 import MapKit
-import os
+import SwiftUI
 
-/// Everything the cloud layer draws, worked out up front in map points.
+/// Everything the cloud layer draws, worked out in map points whenever the tiles change.
 nonisolated struct CloudField: Sendable {
     struct Puff: Sendable {
-        /// Where the cloud sprite goes. Bigger than the hex, so neighbours merge into one blanket.
-        var rect: MKMapRect
-        /// The hex underneath, for clipping the dotted roads.
-        var corners: [MKMapPoint]
+        var hex: Hex
+        var centre: MKMapPoint
+        /// Bigger than the hex, so neighbours merge into one blanket.
+        var radius: Double
         var variant: Int
+        /// Where this cloud is in its drift, so they don't all bob in time.
+        var phase: Double
+    }
+
+    struct Clearing: Sendable {
+        var hex: Hex
+        var centre: MKMapPoint
+        var radius: Double
     }
 
     struct Line: Sendable {
         var points: [MKMapPoint]
-        var rect: MKMapRect
         var kind: RoadLine.Kind
     }
 
@@ -25,12 +32,13 @@ nonisolated struct CloudField: Sendable {
     /// street gets swallowed by the clouds either side of it.
     static let clearing = 1.25
 
+    /// North first, so clouds further south sit in front of them.
     var puffs: [Puff] = []
     /// Where to cut the clouds away over walked hexes.
-    var clearings: [MKMapRect] = []
+    var clearings: [Clearing] = []
     var lines: [Line] = []
-    /// Cloud sprite radius in map points.
-    var reach = 0.0
+    /// The suburb's outline, so the dotted roads stop at its edge.
+    var outline: [[MKMapPoint]] = []
 
     init() {}
 
@@ -38,156 +46,225 @@ nonisolated struct CloudField: Sendable {
         let grid = city.grid
         let cover = city.cloudCover()
         let metres = MKMapPointsPerMeterAtLatitude(grid.projection.origin.lat)
-        let radius = grid.size * Self.spread * metres
-        reach = radius * 1.25
-        let hole = grid.size * Self.clearing * metres
-        clearings = cover.clear.map { hex in
-            let centre = MKMapPoint(grid.projection.unproject(grid.centre(of: hex)).cl)
-            return MKMapRect(x: centre.x - hole, y: centre.y - hole, width: hole * 2, height: hole * 2)
-        }
         let hexSize = grid.size * metres
+        func centre(of hex: Hex) -> MKMapPoint {
+            MKMapPoint(grid.projection.unproject(grid.centre(of: hex)).cl)
+        }
+
+        clearings = cover.clear.map { Clearing(hex: $0, centre: centre(of: $0), radius: hexSize * Self.clearing) }
         puffs = cover.clouded
             .map { hex in
                 // Nudge and resize each cloud a little, always the same way for the same
                 // hex, so the blanket doesn't sit on an obvious honeycomb.
                 var rng = SplitMix64(seed: UInt64(bitPattern: Int64(Self.hash(hex))))
-                let centre = MKMapPoint(grid.projection.unproject(grid.centre(of: hex)).cl)
-                let x = centre.x + (rng.unit() - 0.5) * 0.5 * hexSize
-                let y = centre.y + (rng.unit() - 0.5) * 0.5 * hexSize
-                let r = radius * (0.88 + rng.unit() * 0.35)
+                let c = centre(of: hex)
                 return Puff(
-                    rect: MKMapRect(x: x - r, y: y - r, width: r * 2, height: r * 2),
-                    corners: grid.corners(of: hex).map { MKMapPoint($0.cl) },
-                    variant: Int(rng.next() % UInt64(CloudSprites.count))
+                    hex: hex,
+                    centre: MKMapPoint(x: c.x + (rng.unit() - 0.5) * 0.5 * hexSize, y: c.y + (rng.unit() - 0.5) * 0.5 * hexSize),
+                    radius: hexSize * Self.spread * (0.88 + rng.unit() * 0.35),
+                    variant: Int(rng.next() % UInt64(CloudSprites.count)),
+                    phase: rng.unit() * 2 * .pi
                 )
             }
-            // North first, so clouds further south sit in front of them.
-            .sorted { $0.rect.midY < $1.rect.midY }
-        lines = (city.roads ?? []).map { road in
-            let points = road.points.map { MKMapPoint($0.cl) }
-            return Line(points: points, rect: Self.bounds(of: points), kind: road.kind)
-        }
+            .sorted { $0.centre.y < $1.centre.y }
+        lines = (city.roads ?? []).map { Line(points: $0.points.map { MKMapPoint($0.cl) }, kind: $0.kind) }
+        outline = city.boundary.polygons.map { $0.outer.map { MKMapPoint($0.cl) } }
     }
 
     private static func hash(_ hex: Hex) -> Int {
         (Int(hex.q) &* 73_856_093) ^ (Int(hex.r) &* 19_349_663)
     }
-
-    private static func bounds(of points: [MKMapPoint]) -> MKMapRect {
-        let xs = points.map(\.x), ys = points.map(\.y)
-        let x = xs.min() ?? 0, y = ys.min() ?? 0
-        return MKMapRect(x: x, y: y, width: (xs.max() ?? 0) - x, height: (ys.max() ?? 0) - y)
-    }
 }
 
-/// One overlay covering the whole city. MapKit draws it in tiles on background
-/// threads, so the field it reads is behind a lock.
-nonisolated final class CloudOverlay: NSObject, MKOverlay {
-    let coordinate: CLLocationCoordinate2D
-    let boundingMapRect: MKMapRect
-    private let state: OSAllocatedUnfairLock<CloudField>
-
-    init(boundary: Boundary, field: CloudField) {
-        let b = boundary.bounds
-        let nw = MKMapPoint(CLLocationCoordinate2D(latitude: b.north, longitude: b.west))
-        let se = MKMapPoint(CLLocationCoordinate2D(latitude: b.south, longitude: b.east))
-        let rect = MKMapRect(x: nw.x, y: nw.y, width: se.x - nw.x, height: se.y - nw.y)
-        // Leave room for clouds spilling past the edge and their shadows.
-        boundingMapRect = rect.insetBy(dx: -field.reach * 2, dy: -field.reach * 2)
-        coordinate = boundary.centre.cl
-        state = OSAllocatedUnfairLock(initialState: field)
-    }
-
-    var field: CloudField {
-        get { state.withLock { $0 } }
-        set { state.withLock { $0 = newValue } }
-    }
+/// Lets the cloud layer ask the map where things are on screen right now.
+final class MapHandle {
+    weak var map: MKMapView?
 }
 
-nonisolated final class CloudRenderer: MKOverlayRenderer {
-    override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
-        guard let overlay = overlay as? CloudOverlay else { return }
-        let field = overlay.field
-        let near = mapRect.insetBy(dx: -field.reach, dy: -field.reach)
-        let puffs = field.puffs.filter { $0.rect.intersects(near) }
-        guard !puffs.isEmpty else { return }
-        let sprites = CloudSprites.shared
-        context.interpolationQuality = .high
+/// The clouds, drawn on top of the map about 30 times a second so they can drift
+/// and breathe. They follow the map by asking it where each cloud is on screen.
+struct CloudLayer: View {
+    let field: CloudField
+    /// Changes whenever the field does, to spot tiles that have just cleared.
+    let key: String
+    let handle: MapHandle
 
-        // Shadows on the ground, with the sun to the north-west. One transparency
-        // layer so overlapping shadows don't stack up darker.
-        let shift = field.reach * 0.3
-        context.saveGState()
-        context.setAlpha(0.35)
-        context.beginTransparencyLayer(auxiliaryInfo: nil)
-        for puff in puffs {
-            draw(sprites.shadows[puff.variant], in: rect(for: puff.rect.offsetBy(dx: shift, dy: shift * 1.2)), context)
-        }
-        context.endTransparencyLayer()
-        context.restoreGState()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var shown: (key: String, field: CloudField)?
+    /// Clouds over tiles that have just cleared, fading out as they drift apart.
+    @State private var leaving: [CloudField.Puff] = []
+    @State private var changedAt = Date.distantPast
 
-        // Every shaded underside first, then every sunlit top, so the middle of the
-        // blanket is one continuous white and the grey only shows round its edges.
-        context.beginTransparencyLayer(auxiliaryInfo: nil)
-        for puff in puffs {
-            draw(sprites.bases[puff.variant], in: rect(for: puff.rect), context)
-        }
-        for puff in puffs {
-            draw(sprites.tops[puff.variant], in: rect(for: puff.rect), context)
-        }
-        let clearings = field.clearings.filter { $0.intersects(near) }
-        if !clearings.isEmpty {
-            context.setBlendMode(.destinationOut)
-            for clearing in clearings {
-                draw(sprites.eraser, in: rect(for: clearing), context)
+    static let revealTime = 1.6
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
+            Canvas { context, size in
+                guard let map = handle.map, size.width > 0 else { return }
+                let now = timeline.date
+                let clock = reduceMotion ? 0 : now.timeIntervalSinceReferenceDate
+                let reveal = min(1, now.timeIntervalSince(changedAt) / Self.revealTime)
+                CloudPainter(
+                    field: field, leaving: reveal < 1 ? leaving : [], reveal: reveal,
+                    fresh: Set(leaving.map(\.hex)), projection: Projection(map: map),
+                    bounds: CGRect(origin: .zero, size: size), clock: clock
+                )
+                .draw(in: &context)
             }
         }
-        context.endTransparencyLayer()
+        .allowsHitTesting(false)
+        .onAppear { shown = (key, field) }
+        .onChange(of: key) {
+            // Only animate tiles clearing in the same city, not a whole new one appearing.
+            if let old = shown, old.key.prefix(36) == key.prefix(36) {
+                let still = Set(field.puffs.map(\.hex))
+                leaving = old.field.puffs.filter { !still.contains($0.hex) }
+                changedAt = .now
+            } else {
+                leaving = []
+            }
+            shown = (key, field)
+        }
+    }
+}
 
-        // Zoomed out, the dots just turn into noise: roads from a couple of km across, paths
-        // closer in. MapKit can draw tiles a zoom level up, so these are higher than they look.
-        if zoomScale > 0.025 {
-            let lines = field.lines.filter { $0.rect.intersects(mapRect) && ($0.kind == .road || zoomScale > 0.05) }
-            drawRoads(lines, over: puffs, zoomScale: zoomScale, in: context)
+/// Turns map points into screen points. Flat maps are one cheap affine transform;
+/// tilted ones ask MapKit point by point.
+private struct Projection {
+    let map: MKMapView
+    private let affine: CGAffineTransform?
+
+    init(map: MKMapView) {
+        self.map = map
+        if map.camera.pitch < 1 {
+            let p0 = MKMapPoint(map.centerCoordinate)
+            let d = 1000.0
+            let s0 = map.convert(p0.coordinate, toPointTo: map)
+            let s1 = map.convert(MKMapPoint(x: p0.x + d, y: p0.y).coordinate, toPointTo: map)
+            let s2 = map.convert(MKMapPoint(x: p0.x, y: p0.y + d).coordinate, toPointTo: map)
+            let a = (s1.x - s0.x) / d, b = (s1.y - s0.y) / d
+            let c = (s2.x - s0.x) / d, dd = (s2.y - s0.y) / d
+            affine = CGAffineTransform(a: a, b: b, c: c, d: dd, tx: s0.x - a * p0.x - c * p0.y, ty: s0.y - b * p0.x - dd * p0.y)
+        } else {
+            affine = nil
         }
     }
 
-    /// Images are stored y-up and the map draws y-down, so flip each one.
-    private func draw(_ image: CGImage, in rect: CGRect, _ context: CGContext) {
-        context.saveGState()
-        context.translateBy(x: rect.minX, y: rect.maxY)
-        context.scaleBy(x: 1, y: -1)
-        context.draw(image, in: CGRect(origin: .zero, size: rect.size))
-        context.restoreGState()
+    func point(_ p: MKMapPoint) -> CGPoint {
+        if let affine { return CGPoint(x: p.x, y: p.y).applying(affine) }
+        return map.convert(p.coordinate, toPointTo: map)
     }
 
-    /// The hidden streets as dotted lines, only over clouded hexes.
-    private func drawRoads(_ lines: [CloudField.Line], over puffs: [CloudField.Puff], zoomScale: MKZoomScale, in context: CGContext) {
-        guard !lines.isEmpty else { return }
-        let clip = CGMutablePath()
-        for puff in puffs {
-            clip.addLines(between: puff.corners.map { point(for: $0) })
+    /// A circle on the ground as it looks on screen: squashed when the map is tilted.
+    func ellipse(centre: MKMapPoint, radius: Double) -> CGRect {
+        let c = point(centre)
+        let rx = hypot(point(MKMapPoint(x: centre.x + radius, y: centre.y)).x - c.x, point(MKMapPoint(x: centre.x + radius, y: centre.y)).y - c.y)
+        let ry = hypot(point(MKMapPoint(x: centre.x, y: centre.y + radius)).x - c.x, point(MKMapPoint(x: centre.x, y: centre.y + radius)).y - c.y)
+        return CGRect(x: c.x - rx, y: c.y - ry, width: rx * 2, height: ry * 2)
+    }
+}
+
+private struct CloudPainter {
+    let field: CloudField
+    let leaving: [CloudField.Puff]
+    /// 0 to 1 through the latest tiles clearing.
+    let reveal: Double
+    let fresh: Set<Hex>
+    let projection: Projection
+    let bounds: CGRect
+    let clock: Double
+
+    func draw(in context: inout GraphicsContext) {
+        let sprites = CloudSprites.shared
+        let visible = bounds.insetBy(dx: -bounds.width * 0.2, dy: -bounds.height * 0.2)
+        let ease = 1 - pow(1 - reveal, 3)
+
+        // Where each cloud is this frame: bobbing gently around its tile and swelling a touch.
+        var placed: [(puff: CloudField.Puff, rect: CGRect, top: CGRect, fade: Double)] = []
+        for puff in field.puffs {
+            let base = projection.ellipse(centre: puff.centre, radius: puff.radius)
+            guard base.intersects(visible) else { continue }
+            placed.append((puff, drift(base, puff.phase), drift(base, puff.phase + 0.7), 1))
+        }
+        for puff in leaving {
+            let base = projection.ellipse(centre: puff.centre, radius: puff.radius * (1 + 0.5 * ease))
+            guard base.intersects(visible) else { continue }
+            placed.append((puff, drift(base, puff.phase), drift(base, puff.phase + 0.7), 1 - ease))
+        }
+        guard !placed.isEmpty else { return }
+
+        let bases = sprites.bases.map { context.resolve(Image(decorative: $0, scale: 1)) }
+        let tops = sprites.tops.map { context.resolve(Image(decorative: $0, scale: 1)) }
+        let shadows = sprites.shadows.map { context.resolve(Image(decorative: $0, scale: 1)) }
+        let eraser = context.resolve(Image(decorative: sprites.eraser, scale: 1))
+
+        // Shadows on the ground, with the sun to the north-west.
+        context.drawLayer { layer in
+            layer.opacity = 0.35
+            for p in placed {
+                layer.opacity = 0.35 * p.fade
+                let r = p.rect
+                layer.draw(shadows[p.puff.variant], in: r.offsetBy(dx: r.width * 0.15, dy: r.height * 0.18))
+            }
+        }
+
+        context.drawLayer { layer in
+            // Every shaded underside first, then every sunlit top, so the middle of the
+            // blanket is one continuous white and the grey only shows round its edges.
+            for p in placed {
+                layer.opacity = p.fade
+                layer.draw(bases[p.puff.variant], in: p.rect)
+            }
+            for p in placed {
+                layer.opacity = p.fade
+                layer.draw(tops[p.puff.variant], in: p.top)
+            }
+            layer.opacity = 1
+            drawRoads(in: &layer)
+
+            // Soft holes over walked tiles. New ones open up rather than just appearing.
+            layer.blendMode = .destinationOut
+            for clearing in field.clearings {
+                let grow = fresh.contains(clearing.hex) ? 0.3 + 0.7 * ease : 1
+                let rect = projection.ellipse(centre: clearing.centre, radius: clearing.radius * grow)
+                guard rect.intersects(visible) else { continue }
+                layer.draw(eraser, in: rect)
+            }
+        }
+    }
+
+    private func drift(_ rect: CGRect, _ phase: Double) -> CGRect {
+        let dx = sin(clock * 0.23 + phase) * 0.07 * rect.width
+        let dy = cos(clock * 0.19 + phase * 1.7) * 0.06 * rect.height
+        let swell = 1 + 0.05 * sin(clock * 0.31 + phase * 2.3)
+        return rect.offsetBy(dx: dx, dy: dy).insetBy(dx: rect.width * (1 - swell) / 2, dy: rect.height * (1 - swell) / 2)
+    }
+
+    /// The hidden streets as dotted lines, inside the suburb only.
+    private func drawRoads(in context: inout GraphicsContext) {
+        // A ground distance in screen points, to decide when the dots are worth drawing.
+        guard let first = field.puffs.first else { return }
+        let scale = projection.ellipse(centre: first.centre, radius: 100).width / 200
+        guard scale > 0.05 else { return }
+
+        var clip = Path()
+        for ring in field.outline {
+            clip.addLines(ring.map(projection.point))
             clip.closeSubpath()
         }
-        context.saveGState()
-        context.addPath(clip)
-        context.clip()
-        context.setLineCap(.round)
-        context.setLineJoin(.round)
+        context.clip(to: clip)
 
-        for kind in [RoadLine.Kind.road, .path] {
-            let path = CGMutablePath()
-            for line in lines where line.kind == kind {
-                path.addLines(between: line.points.map { point(for: $0) })
+        for kind in [RoadLine.Kind.road, .path] where kind == .road || scale > 0.12 {
+            var path = Path()
+            for line in field.lines where line.kind == kind {
+                path.addLines(line.points.map(projection.point))
             }
-            // Sizes in screen points, converted to map points.
-            context.setLineWidth((kind == .road ? 4.5 : 3.5) / zoomScale)
-            context.setLineDash(phase: 0, lengths: [0.01 / zoomScale, (kind == .road ? 11 : 8) / zoomScale])
-            context.setStrokeColor(CGColor(red: 0.32, green: 0.42, blue: 0.6, alpha: kind == .road ? 0.75 : 0.55))
-            context.addPath(path)
-            context.strokePath()
+            context.stroke(
+                path,
+                with: .color(Color(red: 0.32, green: 0.42, blue: 0.6).opacity(kind == .road ? 0.75 : 0.55)),
+                style: StrokeStyle(lineWidth: kind == .road ? 4.5 : 3.5, lineCap: .round, dash: [0.01, kind == .road ? 11 : 8])
+            )
         }
-        context.restoreGState()
     }
 }
 

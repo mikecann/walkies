@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var showingCities = false
     @State private var showingSettings = false
     @State private var focus = MapFocusRequest()
+    @State private var mapHandle = MapHandle()
 
     var body: some View {
         @Bindable var model = model
@@ -15,8 +16,13 @@ struct ContentView: View {
             fresh: model.selectedFreshTiles,
             revision: model.tilesRevision,
             path: model.activePath,
-            focus: focus
+            focus: focus,
+            tilted: model.tilted3D,
+            handle: mapHandle
         )
+        .overlay {
+            CloudLayer(field: model.cloudField, key: model.cloudKey, handle: mapHandle)
+        }
         .ignoresSafeArea()
         .safeAreaInset(edge: .top) {
             CityCard(city: model.selectedCity) { showingCities = true }

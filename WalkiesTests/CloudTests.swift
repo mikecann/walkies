@@ -54,7 +54,7 @@ struct CloudTests {
         let tiles: Set = [Hex(q: 0, r: 0), Hex(q: 3, r: -2), Hex(q: -4, r: 1)]
         let a = CloudField(city: city(tiles: tiles, visited: []))
         let b = CloudField(city: city(tiles: tiles, visited: []))
-        let rects = { (field: CloudField) in field.puffs.map { [$0.rect.origin.x, $0.rect.origin.y, $0.rect.size.width] } }
+        let rects = { (field: CloudField) in field.puffs.map { [$0.centre.x, $0.centre.y, $0.radius, $0.phase] } }
         #expect(rects(a) == rects(b))
         #expect(a.puffs.map(\.variant) == b.puffs.map(\.variant))
     }

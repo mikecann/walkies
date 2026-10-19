@@ -20,6 +20,10 @@ final class AppModel {
     private(set) var revealCount = 0
     /// Set when a walk ends, to show the summary.
     var finishedWalk: Walk?
+    /// Tilted map with Apple's 3D buildings and trees.
+    var tilted3D = UserDefaults.standard.bool(forKey: "tilted3D") {
+        didSet { UserDefaults.standard.set(tilted3D, forKey: "tilted3D") }
+    }
     /// Record walks by themselves in the background, so there's no Start walk to press.
     var alwaysOn = false {
         didSet {
@@ -93,6 +97,20 @@ final class AppModel {
     }
 
     var selectedCity: City? { cities.first { $0.id == selectedCityID } }
+
+    /// What the cloud layer draws for the selected city. Working out which tiles are
+    /// clouded takes a moment on a big city, so it's only redone when the tiles change.
+    @ObservationIgnored private var cachedField: (key: String, field: CloudField)?
+
+    var cloudKey: String { "\(selectedCityID?.uuidString ?? "none")-\(tilesRevision)" }
+
+    var cloudField: CloudField {
+        let key = cloudKey
+        if let cachedField, cachedField.key == key { return cachedField.field }
+        let field = selectedCity.map(CloudField.init) ?? CloudField()
+        cachedField = (key, field)
+        return field
+    }
 
     var selectedFreshTiles: Set<Hex> {
         selectedCityID.flatMap { freshTiles[$0] } ?? []

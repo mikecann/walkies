@@ -12,23 +12,27 @@ struct MapFocusRequest: Equatable {
     }
 }
 
-/// The satellite map with clouds over every tile you haven't walked yet, the hidden
-/// streets dotted across them, and orange outlines on tiles uncovered this walk.
+/// The satellite map, with the suburb's outline, your route and orange outlines on
+/// tiles uncovered this walk. The clouds are drawn over the top by `CloudLayer`.
 struct FogMapView: UIViewRepresentable {
     var city: City?
     var fresh: Set<Hex>
     var revision: Int
     var path: [Coordinate]
     var focus: MapFocusRequest
+    /// Tilted, with Apple's 3D buildings and trees.
+    var tilted: Bool
+    let handle: MapHandle
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
         map.delegate = context.coordinator
-        map.preferredConfiguration = MKHybridMapConfiguration(elevationStyle: .flat)
+        map.preferredConfiguration = MKHybridMapConfiguration(elevationStyle: tilted ? .realistic : .flat)
         map.pointOfInterestFilter = .excludingAll
         map.showsUserLocation = true
+        handle.map = map
         return map
     }
 
@@ -44,13 +48,20 @@ struct FogMapView: UIViewRepresentable {
         private var pathCount = -1
         private var hasShownUser = false
         private var following = false
+        private var tilted: Bool?
 
-        private var clouds: CloudOverlay?
         private var outline: MKMultiPolygon?
         private var uncovered: MKMultiPolygon?
         private var line: MKPolyline?
 
         func update(_ map: MKMapView, with view: FogMapView) {
+            if view.tilted != tilted {
+                let first = tilted == nil
+                tilted = view.tilted
+                map.preferredConfiguration = MKHybridMapConfiguration(elevationStyle: view.tilted ? .realistic : .flat)
+                if !first { tilt(map, animated: true) }
+            }
+
             let cityChanged = view.city?.id != city?.id
             city = view.city
             fresh = view.fresh
@@ -61,7 +72,6 @@ struct FogMapView: UIViewRepresentable {
                 zoomToCity(on: map)
             } else if view.revision != revision {
                 revision = view.revision
-                updateClouds(on: map)
                 drawUncovered(on: map)
             }
 
@@ -84,7 +94,7 @@ struct FogMapView: UIViewRepresentable {
                             // Street level, where you can see the dotted roads to head for.
                             let distance = map.region.span.latitudeDelta > 0.008 ? 900 : map.camera.centerCoordinateDistance
                             map.setCamera(
-                                MKMapCamera(lookingAtCenter: location.coordinate, fromDistance: distance, pitch: 0, heading: 0),
+                                MKMapCamera(lookingAtCenter: location.coordinate, fromDistance: distance, pitch: pitch, heading: map.camera.heading),
                                 animated: true
                             )
                         }
@@ -93,19 +103,23 @@ struct FogMapView: UIViewRepresentable {
             }
         }
 
+        private var pitch: CGFloat { tilted == true ? 55 : 0 }
+
+        /// Keeps the same spot in the middle, just leans the camera in or out.
+        private func tilt(_ map: MKMapView, animated: Bool) {
+            let camera = map.camera.copy() as! MKMapCamera
+            camera.pitch = pitch
+            map.setCamera(camera, animated: animated)
+        }
+
         private func redrawAll(on map: MKMapView) {
-            map.removeOverlays([clouds, outline, uncovered].compactMap { $0 })
-            clouds = nil
+            map.removeOverlays([outline, uncovered].compactMap { $0 })
             outline = nil
             uncovered = nil
             guard let city else { return }
 
             // Keep each overlay before adding it: MapKit can ask for its renderer straight
             // away, and the renderer is picked by which overlay it is.
-            let clouds = CloudOverlay(boundary: city.boundary, field: CloudField(city: city))
-            self.clouds = clouds
-            add(clouds, to: map)
-
             let outline = MKMultiPolygon(city.boundary.polygons.map { poly in
                 var outer = poly.outer.map(\.cl)
                 let holes = poly.holes.map { hole -> MKPolygon in
@@ -118,12 +132,6 @@ struct FogMapView: UIViewRepresentable {
             add(outline, to: map)
 
             drawUncovered(on: map)
-        }
-
-        private func updateClouds(on map: MKMapView) {
-            guard let city, let clouds else { return }
-            clouds.field = CloudField(city: city)
-            map.renderer(for: clouds)?.setNeedsDisplay()
         }
 
         private func drawUncovered(on map: MKMapView) {
@@ -150,8 +158,7 @@ struct FogMapView: UIViewRepresentable {
             map.addOverlay(newLine, level: .aboveLabels)
         }
 
-        /// Everything sits above the map's labels, so street names stay hidden under
-        /// the clouds. The walk's route line always stays on top.
+        /// Everything sits above the map's labels, and the walk's route line stays on top.
         private func add(_ overlay: MKOverlay, to map: MKMapView) {
             if let line {
                 map.insertOverlay(overlay, below: line)
@@ -188,9 +195,6 @@ struct FogMapView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
-            if let clouds = overlay as? CloudOverlay {
-                return CloudRenderer(overlay: clouds)
-            }
             if let multi = overlay as? MKMultiPolygon {
                 let r = MKMultiPolygonRenderer(multiPolygon: multi)
                 if multi === uncovered {
