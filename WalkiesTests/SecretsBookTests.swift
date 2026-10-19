@@ -44,6 +44,30 @@ struct SecretsBookTests {
         #expect(sections.first?.total == 2)
     }
 
+    @Test func currentAreaMatchesSelectedCityIgnoringCase() {
+        let entries = [entry("one", area: "Geographe"), entry("two", area: "Ludlow")]
+        #expect(SecretsBook.currentAreaName(entries: entries, selectedCityName: "geographe") == "Geographe")
+        #expect(SecretsBook.currentAreaName(entries: entries, selectedCityName: "Ludlow") == "Ludlow")
+    }
+
+    @Test func noCurrentAreaWithoutMatchingCity() {
+        let entries = [entry("one", area: "Geographe")]
+        #expect(SecretsBook.currentAreaName(entries: entries, selectedCityName: nil) == nil)
+        #expect(SecretsBook.currentAreaName(entries: entries, selectedCityName: "Ludlow") == nil)
+        #expect(SecretsBook.currentAreaName(entries: [], selectedCityName: "Geographe") == nil)
+    }
+
+    @Test func currentAreaUsesTheSameFallbackNameAsSections() {
+        #expect(SecretsBook.currentAreaName(entries: [entry("general")], selectedCityName: "Around Busselton") == "Around Busselton")
+    }
+
+    @Test func currentAreaStillMatchesWhenFilterHidesIt() {
+        let entries = [entry("one", area: "Geographe"), entry("two", area: "Ludlow")]
+        let sections = SecretsBook.sections(entries: entries, found: ["two": foundAt], location: nil, places: [], filter: .found)
+        #expect(sections.map(\.name) == ["Ludlow"])
+        #expect(SecretsBook.currentAreaName(entries: entries, selectedCityName: "Geographe") == "Geographe")
+    }
+
     @Test func nearestUsesClosestPinAndLeavesUnpinnedAreasLast() {
         let entries = [
             entry("far", area: "Zebra", east: 2000), entry("near", area: "Zebra", east: 100),

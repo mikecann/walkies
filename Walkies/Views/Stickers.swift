@@ -61,9 +61,11 @@ struct StickerBookView: View {
     @AppStorage("secretsBookFilter") private var filter = SecretsBook.Filter.all
     @State private var open: LoreEntry?
     @State private var visibleCount = 6
+    @State private var expandedAreas: Set<String> = []
 
     var body: some View {
         let entries = LoreLibrary.all
+        let currentAreaName = SecretsBook.currentAreaName(entries: entries, selectedCityName: model.selectedCity?.name)
         let found = entries.filter { model.foundStickers[$0.id] != nil }.count
         let areas = SecretsBook.sections(
             entries: entries, found: model.foundStickers,
@@ -143,6 +145,9 @@ struct StickerBookView: View {
             }
             .onChange(of: sort) { visibleCount = 6 }
             .onChange(of: filter) { visibleCount = 6 }
+            .onChange(of: currentAreaName, initial: true) {
+                if let currentAreaName { expandedAreas.insert(currentAreaName) }
+            }
             .sheet(item: $open) { entry in
                 LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id])
             }
@@ -150,39 +155,66 @@ struct StickerBookView: View {
     }
 
     private func areaSection(_ area: SecretsBook.Area) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(area.name)
-                    .font(.system(.title2, design: .rounded, weight: .heavy))
-                HStack {
-                    Text("\(area.found) of \(area.total) found")
-                    Spacer()
-                    if let distance = area.distance {
-                        Text("\(Format.distance(distance)) away")
-                    }
-                }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                ProgressBar(value: area.progress)
-                if !area.isAdded {
-                    Text("Not one of your places yet. Add it from the map to start finding these.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(16)
-            .stickerCard(in: RoundedRectangle(cornerRadius: 20))
+        let isExpanded = expandedAreas.contains(area.id)
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 12)], spacing: 20) {
-                ForEach(area.entries) { entry in
-                    let isFound = model.foundStickers[entry.id] != nil
-                    Button {
-                        open = entry
-                    } label: {
-                        StickerTile(entry: entry, found: isFound)
+        return VStack(alignment: .leading, spacing: 16) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    if isExpanded {
+                        expandedAreas.remove(area.id)
+                    } else {
+                        expandedAreas.insert(area.id)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!isFound)
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text(area.name)
+                            .font(.system(.title2, design: .rounded, weight: .heavy))
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                            .accessibilityHidden(true)
+                    }
+                    HStack {
+                        Text("\(area.found) of \(area.total) found")
+                        Spacer()
+                        if let distance = area.distance {
+                            Text("\(Format.distance(distance)) away")
+                        }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    ProgressBar(value: area.progress)
+                    if !area.isAdded {
+                        Text("Not one of your places yet. Add it from the map to start finding these.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(16)
+                .stickerCard(in: RoundedRectangle(cornerRadius: 20))
+            }
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .combine)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityHint(isExpanded ? "Hide secrets in this area" : "Show secrets in this area")
+
+            // Don't build tiles or ask UIKit for their images until this area is opened.
+            if isExpanded {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 12)], spacing: 20) {
+                    ForEach(area.entries) { entry in
+                        let isFound = model.foundStickers[entry.id] != nil
+                        Button {
+                            open = entry
+                        } label: {
+                            StickerTile(entry: entry, found: isFound)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!isFound)
+                    }
                 }
             }
         }

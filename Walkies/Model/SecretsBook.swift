@@ -42,12 +42,24 @@ nonisolated enum SecretsBook {
         var progress: Double { total == 0 ? 0 : Double(found) / Double(total) }
     }
 
+    /// Use the full library so a filter hiding your area doesn't change its expansion.
+    static func currentAreaName(entries: [LoreEntry], selectedCityName: String?) -> String? {
+        guard let selectedCityName else { return nil }
+        return entries.lazy.map(areaName).first {
+            $0.caseInsensitiveCompare(selectedCityName) == .orderedSame
+        }
+    }
+
+    private static func areaName(for entry: LoreEntry) -> String {
+        entry.suburb ?? "Around Busselton"
+    }
+
     static func sections(
         entries: [LoreEntry], found: [String: Date], location: Coordinate?, places: [City],
         selectedCity: City? = nil, sort: Sort = .nearest, filter: Filter = .all
     ) -> [Area] {
         let origin = location ?? selectedCity?.boundary.centre
-        let grouped = Dictionary(grouping: entries) { $0.suburb ?? "Around Busselton" }
+        let grouped = Dictionary(grouping: entries, by: areaName)
         let areas = grouped.compactMap { name, entries -> Area? in
             let visible = entries.filter { entry in
                 switch filter {
