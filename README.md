@@ -10,7 +10,8 @@ Based on an idea from James.
 - **Tiles** are hexes 50 m from centre to corner, so about 87 m across. Only tiles with a street or path through them count towards the total, so canals, the estuary and the middle of the bay don't stop you finishing. If you walk through a tile that wasn't counted (a beach, or a park with no mapped paths) it gets added and counts.
 - **The map** is Apple's satellite view with labels. The whole suburb starts under cloud, and the streets underneath are drawn across the clouds as dotted lines so you can plan where to go. Bits with no street or path (bush, wetland, canals) don't count towards 100%, so each one clears when you walk the street nearest to it. The look came from a round of concept art in `design/concepts/`, and `design/compare/` shows why the no-path bits are clouded too.
 - **Walks** keep tracking with the phone locked in your pocket, using "While Using the App" location permission plus the background location mode. Tiles turn orange as you uncover them, and the phone buzzes if the app's open.
-- **GPS filtering**: fixes worse than 30 m accuracy are ignored, anything faster than 4.5 m/s doesn't count (so driving home doesn't uncover anything), and gaps over 150 m aren't joined up.
+- **Always on** (in Settings, the gear button): with "Always" location permission, walks start by themselves when you're moving on foot and end after 10 minutes without moving. GPS pauses while you're still, and iOS relaunches the app after a few hundred metres if it was closed. Only on-foot points are saved. Without it, you press Start walk.
+- **Walking only**: fixes worse than 30 m accuracy are ignored, anything faster than about 12 km/h (by the GPS's own speed reading) doesn't count, and the phone's motion chip vetoes anything it thinks is cycling or driving, however slow. A spot only counts once two on-foot fixes in a row agree, and gaps over 150 m aren't joined up.
 - **History**: every GPS fix from every walk is kept. A new city is built by replaying all past walks, so if you add a city later, the walks you've already done there count.
 - **Storage** is JSON in the app's Application Support folder. No account, no server.
 
@@ -31,6 +32,8 @@ To fake a walk in the simulator, start a walk in the app and then:
 ```bash
 scripts/sim-walk.sh scripts/routes/navigation-way.txt
 ```
+
+To test always-on without waiting 10 minutes for a walk to end, launch with a shorter gap: `xcrun simctl launch booted com.mikecann.walkies -autoWalkGap 20`.
 
 ## Code map
 

@@ -30,7 +30,15 @@ nonisolated struct Store {
     }
 
     func save(_ walk: Walk) {
-        write(walk, to: walksDir.appending(path: "\(walk.id.uuidString).json"))
+        write(walk, to: file(for: walk))
+    }
+
+    func delete(_ walk: Walk) {
+        try? FileManager.default.removeItem(at: file(for: walk))
+    }
+
+    private func file(for walk: Walk) -> URL {
+        walksDir.appending(path: "\(walk.id.uuidString).json")
     }
 
     private func read<T: Decodable>(_ type: T.Type, from url: URL) -> T? {

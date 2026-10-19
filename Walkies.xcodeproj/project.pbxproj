@@ -283,7 +283,9 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Walkies;
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "With Always on, Walkies records your walks in the background, so you never have to press Start walk.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Walkies uses your location to uncover the tiles you walk through.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "Walkies uses motion to tell walking from cycling or driving, so only walks uncover tiles.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -316,7 +318,9 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Walkies;
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "With Always on, Walkies records your walks in the background, so you never have to press Start walk.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Walkies uses your location to uncover the tiles you walk through.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "Walkies uses motion to tell walking from cycling or driving, so only walks uncover tiles.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

@@ -20,8 +20,28 @@ final class AppModel {
     private(set) var revealCount = 0
     /// Set when a walk ends, to show the summary.
     var finishedWalk: Walk?
+    /// Record walks by themselves in the background, so there's no Start walk to press.
+    var alwaysOn = false {
+        didSet {
+            guard alwaysOn != oldValue else { return }
+            UserDefaults.standard.set(alwaysOn, forKey: "alwaysOn")
+            alwaysOn ? turnOnAlwaysOn() : turnOffAlwaysOn()
+        }
+    }
+
+    /// In always-on mode, a walk ends after this long without moving on foot.
+    /// Overridable with `-autoWalkGap <seconds>` for testing in the simulator.
+    static var autoWalkGap: TimeInterval {
+        let override = UserDefaults.standard.double(forKey: "autoWalkGap")
+        return override > 0 ? override : 10 * 60
+    }
+
+    /// Shorter than this with no new tiles and it wasn't really a walk: pottering
+    /// round the house, or GPS drift.
+    static let minimumAutoWalk = 100.0
 
     let tracker = LocationTracker()
+    let motion = MotionMonitor()
     @ObservationIgnored private let store = Store()
     @ObservationIgnored private var tracer = CoverageTracer()
     @ObservationIgnored private var shapes: [UUID: BoundaryShape] = [:]
@@ -30,12 +50,22 @@ final class AppModel {
 
     init() {
         cities = store.loadCities()
-        walks = store.loadWalks()
+        alwaysOn = UserDefaults.standard.bool(forKey: "alwaysOn")
 
-        // A walk without an end means the app was killed mid-walk. Close it off.
-        for i in walks.indices where walks[i].endedAt == nil {
-            walks[i].endedAt = walks[i].points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walks[i].startedAt
-            store.save(walks[i])
+        // A walk without an end means the app was killed mid-walk. If iOS has just
+        // relaunched us during an always-on walk, carry on with it; otherwise close it off.
+        for var walk in store.loadWalks() {
+            if walk.endedAt == nil {
+                if alwaysOn, walk.isAutomatic, let last = walk.points.last,
+                   Date.now.timeIntervalSince1970 - last.time < Self.autoWalkGap {
+                    activeWalk = walk
+                    activePath = walk.points.map(\.coordinate)
+                    continue
+                }
+                walk.endedAt = walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt
+                store.save(walk)
+            }
+            walks.append(walk)
         }
 
         let saved = UserDefaults.standard.string(forKey: "selectedCity").flatMap(UUID.init)
@@ -71,7 +101,7 @@ final class AppModel {
     // MARK: Walks
 
     func startWalk() {
-        guard activeWalk == nil else { return }
+        guard activeWalk == nil, !alwaysOn else { return }
         switch tracker.authorization {
         case .notDetermined:
             startWhenAllowed = true
@@ -111,25 +141,120 @@ final class AppModel {
 
     private func record(_ location: CLLocation) {
         // iOS can hand over a cached fix from wherever you last were when tracking starts.
-        guard var walk = activeWalk, location.timestamp.timeIntervalSinceNow > -10 else { return }
-        let point = TrackPoint(location)
-        walk.points.append(point)
-
-        let step = tracer.add(point)
-        walk.distance += step.distance
-        if !step.samples.isEmpty {
-            activePath.append(point.coordinate)
-            let uncovered = visit(step.samples)
-            if uncovered > 0 {
-                walk.newTiles += uncovered
-                revealCount += uncovered
-            }
+        guard location.timestamp.timeIntervalSinceNow > -10 else { return }
+        var point = TrackPoint(location)
+        if motion.onWheels { point.wheels = true }
+        if alwaysOn {
+            recordAlwaysOn(point)
+        } else if activeWalk != nil {
+            recordWalk(point)
         }
-        activeWalk = walk
+    }
 
+    /// A walk you started yourself: keep every fix.
+    private func recordWalk(_ point: TrackPoint) {
+        guard var walk = activeWalk else { return }
+        walk.points.append(point)
+        apply(tracer.add(point), at: point, to: &walk)
+        activeWalk = walk
+        saveIfDue()
+    }
+
+    /// Always on: a walk starts the moment you're moving on foot and ends once you've
+    /// stopped for a while. Only on-foot fixes are kept, so drives don't fill the phone.
+    private func recordAlwaysOn(_ point: TrackPoint) {
+        if let last = activeWalk?.points.last, point.time - last.time > Self.autoWalkGap {
+            finishAutoWalk()
+        }
+        let step = tracer.add(point)
+        guard !step.samples.isEmpty else { return }
+        if activeWalk == nil {
+            activeWalk = Walk(startedAt: Date(timeIntervalSince1970: point.time), automatic: true)
+            activePath = []
+            freshTiles = [:]
+        }
+        guard var walk = activeWalk else { return }
+        walk.points.append(point)
+        apply(step, at: point, to: &walk)
+        activeWalk = walk
+        saveIfDue()
+    }
+
+    private func apply(_ step: CoverageTracer.Step, at point: TrackPoint, to walk: inout Walk) {
+        walk.distance += step.distance
+        guard !step.samples.isEmpty else { return }
+        activePath.append(point.coordinate)
+        let uncovered = visit(step.samples)
+        if uncovered > 0 {
+            walk.newTiles += uncovered
+            revealCount += uncovered
+        }
+    }
+
+    private func saveIfDue() {
         if Date.now.timeIntervalSince(lastSave) > 30 {
             saveNow()
         }
+    }
+
+    /// Closes an always-on walk that's gone quiet. New fixes do this too, but there
+    /// may not be any for a while, so the app checks again whenever it comes back.
+    func finishStaleAutoWalk() {
+        guard let last = activeWalk?.points.last,
+              Date.now.timeIntervalSince1970 - last.time > Self.autoWalkGap
+        else { return }
+        finishAutoWalk()
+    }
+
+    private func finishAutoWalk() {
+        guard var walk = activeWalk, walk.isAutomatic else { return }
+        activeWalk = nil
+        activePath = []
+        freshTiles = [:]
+        tracer = CoverageTracer()
+        tilesRevision += 1
+        walk.endedAt = walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt
+        if walk.distance >= Self.minimumAutoWalk || walk.newTiles > 0 {
+            walks.append(walk)
+            store.save(walk)
+        } else {
+            store.delete(walk)
+        }
+        store.save(cities)
+    }
+
+    /// New tiles from today's walks, for the always-on status.
+    var newTilesToday: Int {
+        let today = Calendar.current.startOfDay(for: .now)
+        return walks.filter { $0.startedAt >= today }.reduce(0) { $0 + $1.newTiles } + (activeWalk?.newTiles ?? 0)
+    }
+
+    // MARK: Always on
+
+    /// Called at launch, including when iOS relaunches the app in the background.
+    func resumeAlwaysOn() {
+        motion.start()
+        if alwaysOn {
+            tracker.startAlwaysOn()
+        }
+    }
+
+    private func turnOnAlwaysOn() {
+        // Hand over from a walk you started yourself, without the summary popping up.
+        if activeWalk != nil {
+            endWalk()
+            finishedWalk = nil
+        }
+        tracer = CoverageTracer()
+        if !tracker.hasAlwaysPermission {
+            tracker.requestAlwaysPermission()
+        }
+        tracker.startAlwaysOn()
+    }
+
+    private func turnOffAlwaysOn() {
+        tracker.stopAlwaysOn()
+        finishAutoWalk()
     }
 
     /// Marks these points as visited in every city. Returns how many tiles were new.

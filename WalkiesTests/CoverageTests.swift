@@ -33,12 +33,53 @@ struct CoverageTests {
         #expect(step.distance == 0)
     }
 
+    @Test func cyclingSpeedDoesNotCount() {
+        var tracer = CoverageTracer()
+        _ = tracer.add(fix(east: 0, at: 0))
+        var ride = fix(east: 9, at: 2) // 4.5 m/s between fixes would pass on its own...
+        ride.speed = 4.5                // ...but the GPS says you're doing 16 km/h
+        #expect(tracer.add(ride).samples.isEmpty)
+    }
+
+    @Test func joggingCounts() {
+        var tracer = CoverageTracer()
+        _ = tracer.add(fix(east: 0, at: 0))
+        var jog = fix(east: 30, at: 10)
+        jog.speed = 3.0
+        #expect(!tracer.add(jog).samples.isEmpty)
+    }
+
+    @Test func motionChipSaysCarSoNothingCounts() {
+        var tracer = CoverageTracer()
+        var parked = fix(east: 0, at: 0)
+        parked.wheels = true
+        #expect(tracer.add(parked).samples.isEmpty)
+        var crawling = fix(east: 5, at: 10) // 0.5 m/s in traffic, still in the car
+        crawling.wheels = true
+        #expect(tracer.add(crawling).samples.isEmpty)
+        // Out of the car and walking again.
+        #expect(!tracer.add(fix(east: 15, at: 20)).samples.isEmpty)
+    }
+
+    @Test func gpsJitterAtWalkingPaceStillCounts() {
+        var tracer = CoverageTracer()
+        _ = tracer.add(fix(east: 0, at: 0))
+        var step = fix(east: 4, at: 1) // 4 m in a second looks quick, but the GPS speed is a stroll
+        step.speed = 1.4
+        #expect(!tracer.add(step).samples.isEmpty)
+    }
+
     @Test func bigGapsAreNotJoinedUp() {
         var tracer = CoverageTracer()
         _ = tracer.add(fix(east: 0, at: 0))
-        let step = tracer.add(fix(east: 400, at: 300))
-        #expect(step.samples.count == 1)
-        #expect(step.distance == 0)
+        #expect(tracer.add(fix(east: 400, at: 300)).samples.isEmpty)
+        // Counting picks up again from where it landed.
+        #expect(!tracer.add(fix(east: 415, at: 310)).samples.isEmpty)
+    }
+
+    @Test func aLoneFirstFixDoesNotCount() {
+        var tracer = CoverageTracer()
+        #expect(tracer.add(fix(east: 0, at: 0)).samples.isEmpty)
     }
 
     @Test func walkingAStreetUncoversTilesInsideTheCity() {

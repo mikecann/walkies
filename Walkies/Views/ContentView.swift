@@ -4,6 +4,7 @@ struct ContentView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     @State private var showingCities = false
+    @State private var showingSettings = false
     @State private var focus = MapFocusRequest()
 
     var body: some View {
@@ -24,6 +25,8 @@ struct ContentView: View {
         .safeAreaInset(edge: .bottom) {
             VStack(alignment: .trailing, spacing: 12) {
                 HStack(spacing: 10) {
+                    MapButton(systemImage: "gearshape") { showingSettings = true }
+                    Spacer()
                     if model.selectedCity != nil {
                         MapButton(systemImage: "map") { focus.send(.city) }
                     }
@@ -40,12 +43,16 @@ struct ContentView: View {
         .sheet(isPresented: $showingCities) {
             CitiesView()
         }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView()
+        }
         .sheet(item: $model.finishedWalk) { walk in
             WalkSummaryView(walk: walk, city: model.selectedCity)
         }
         .sensoryFeedback(.success, trigger: model.revealCount)
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { model.saveNow() }
+            if phase == .active { model.finishStaleAutoWalk() }
         }
         .task {
             model.tracker.requestPermissionIfNeeded()
@@ -129,17 +136,23 @@ struct WalkControls: View {
                     Stat(value: Format.distance(walk.distance), label: "Distance")
                     Stat(value: "\(walk.newTiles)", label: "New tiles", tint: .walkiesOrange)
                 }
-                Button {
-                    model.endWalk()
-                } label: {
-                    Text("End walk")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 4)
+                if walk.isAutomatic {
+                    Label("Recording this walk automatically", systemImage: "location.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Button {
+                        model.endWalk()
+                    } label: {
+                        Text("End walk")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 4)
+                    }
+                    .prominentButton()
+                    .tint(.red)
+                    .controlSize(.large)
                 }
-                .prominentButton()
-                .tint(.red)
-                .controlSize(.large)
             }
             .padding(16)
             .glassCard(in: .rect(cornerRadius: 28))
@@ -157,6 +170,25 @@ struct WalkControls: View {
             }
             .frame(maxWidth: .infinity)
             .padding(16)
+            .glassCard(in: .rect(cornerRadius: 28))
+        } else if model.alwaysOn {
+            HStack(spacing: 14) {
+                Image(systemName: "location.fill")
+                    .font(.title2)
+                    .foregroundStyle(Color.walkiesOrange)
+                    .symbolEffect(.pulse)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Always on").font(.headline)
+                    Text(model.newTilesToday == 0
+                         ? "Just head out. Your walk will be picked up."
+                         : "\(model.newTilesToday) new \(model.newTilesToday == 1 ? "tile" : "tiles") today")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity)
             .glassCard(in: .rect(cornerRadius: 28))
         } else {
             Button(action: onStart) {
