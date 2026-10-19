@@ -1,6 +1,7 @@
 import Foundation
 import simd
 import Testing
+import UIKit
 @testable import Walkies
 
 struct LoreTests {
@@ -88,11 +89,30 @@ struct LoreTests {
         #expect(assigned.count == 1)
     }
 
+    @Test func storiesAboutAWholeSuburbGoToThatSuburb() {
+        var ludlow = city(east: 1000)
+        ludlow.name = "Ludlow"
+        var story = entry("forestry-school")
+        story.suburb = "Ludlow"
+        let assigned = assign([story], to: [city(), ludlow])
+        #expect(assigned[ludlow.id] == ["forestry-school"])
+        #expect(assigned.count == 1)
+    }
+
     @Test func newStickersSkipTilesThatAlreadyHaveOne() {
         let test = city()
         let first = test.placeStickers((0..<6).map { entry("old-\($0)") })
         let second = test.placeStickers((0..<6).map { entry("new-\($0)") }, avoiding: Set(first.values))
         #expect(Set(first.values).isDisjoint(with: second.values))
+    }
+
+    @Test func shippedLoreLoadsWithUniqueIdsAndArt() {
+        let all = LoreLibrary.all
+        #expect(all.count > 100)
+        #expect(Set(all.map(\.id)).count == all.count)
+        for entry in all {
+            #expect(UIImage(named: "sticker-\(entry.id)") != nil, "no sticker for \(entry.id)")
+        }
     }
 
     @Test func stableHashDoesNotChangeBetweenLaunches() {

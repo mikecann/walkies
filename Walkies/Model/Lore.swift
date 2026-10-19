@@ -41,8 +41,9 @@ nonisolated enum LoreLibrary {
 
     /// Which secrets each place gets. A story about a spot belongs to the place that
     /// spot is in, so it's found where it happened, and waits there until you add
-    /// that place. The few that aren't about one spot go to the first Busselton-area
-    /// place you added.
+    /// that place. One about a whole suburb goes to that suburb, scattered over its
+    /// streets. The few from the first batch that aren't about anywhere in particular
+    /// go to the first Busselton-area place you added.
     static func assign(
         _ entries: [LoreEntry] = all,
         to cities: [City],
@@ -53,6 +54,10 @@ nonisolated enum LoreLibrary {
         for entry in entries {
             if let place = entry.place {
                 if let owner = cities.first(where: { contains($0, place.coordinate) }) {
+                    out[owner.id, default: []].append(entry)
+                }
+            } else if let suburb = entry.suburb {
+                if let owner = cities.first(where: { $0.name.caseInsensitiveCompare(suburb) == .orderedSame }) {
                     out[owner.id, default: []].append(entry)
                 }
             } else if let home {
