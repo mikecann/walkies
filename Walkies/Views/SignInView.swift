@@ -34,22 +34,16 @@ struct SignInView: View {
                         .focused($typing)
                         .onSubmit(continueWithUsername)
                         .padding(14)
-                        .background(.background.secondary, in: .rect(cornerRadius: 14))
+                        .stickerCard(in: .rect(cornerRadius: 16))
 
                     Button(action: continueWithUsername) {
-                        Group {
-                            if working {
-                                ProgressView()
-                            } else {
-                                Label("Continue", systemImage: "faceid")
-                            }
+                        if working {
+                            ProgressView().tint(.white)
+                        } else {
+                            Label("Continue", systemImage: "faceid")
                         }
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
                     }
-                    .prominentButton()
-                    .controlSize(.large)
+                    .buttonStyle(StickerButtonStyle())
                     .disabled(working || username.trimmingCharacters(in: .whitespaces).isEmpty)
 
                     Button("Use a passkey that's already on this phone") {
@@ -76,6 +70,7 @@ struct SignInView: View {
             .frame(maxWidth: .infinity)
         }
         .scrollDismissesKeyboard(.interactively)
+        .background(Color.cream)
     }
 
     private var stickers: some View {

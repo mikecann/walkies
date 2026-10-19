@@ -97,6 +97,8 @@ struct SettingsView: View {
             } message: {
                 Text(cantSignOut ?? "")
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.cream)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

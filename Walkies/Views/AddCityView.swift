@@ -67,7 +67,7 @@ struct AddCityView: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding(28)
-                .glassCard(in: .rect(cornerRadius: 24))
+                .stickerCard(in: .rect(cornerRadius: 24))
             }
         }
         .navigationTitle("Add a city")

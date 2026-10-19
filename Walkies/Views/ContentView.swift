@@ -28,28 +28,37 @@ struct ContentView: View {
         .overlay {
             CloudLayer(field: model.cloudField, key: model.cloudKey, handle: mapHandle)
         }
+        .overlay(alignment: .top) {
+            // Keeps the status bar readable over dark water.
+            LinearGradient(colors: [Color.cream.opacity(0.85), Color.cream.opacity(0)], startPoint: .top, endPoint: .bottom)
+                .frame(height: 100)
+                .allowsHitTesting(false)
+        }
         .ignoresSafeArea()
         .safeAreaInset(edge: .top) {
-            CityCard(city: model.selectedCity) { showingCities = true }
-                .padding(.horizontal)
+            HStack(alignment: .top) {
+                PlaceChip(city: model.selectedCity, secrets: secretsCount) { showingCities = true }
+                Spacer(minLength: 12)
+                VStack(spacing: 10) {
+                    HexBadge(icon: .art("icon-gear"), label: "Settings") { showingSettings = true }
+                    if !model.stickersHere.isEmpty {
+                        HexBadge(icon: .art("icon-book"), label: "Secrets") { showingStickers = true }
+                    }
+                }
+            }
+            .padding(.horizontal)
         }
         .safeAreaInset(edge: .bottom) {
-            VStack(alignment: .trailing, spacing: 12) {
-                HStack(spacing: 10) {
-                    MapButton(systemImage: "gearshape") { showingSettings = true }
-                    if !model.stickersHere.isEmpty {
-                        MapButton(systemImage: "book.closed.fill") { showingStickers = true }
-                            .accessibilityLabel("Secrets")
-                    }
-                    Spacer()
-                    if model.selectedCity != nil {
-                        MapButton(systemImage: "map") { focus.send(.city) }
-                    }
-                    MapButton(systemImage: "location.fill") { focus.send(.user) }
-                }
+            HStack(alignment: .bottom, spacing: 10) {
                 WalkControls {
                     model.startWalk()
                     focus.send(.user)
+                }
+                VStack(spacing: 10) {
+                    if model.selectedCity != nil {
+                        HexBadge(icon: .art("icon-map"), fill: .badgeGreen, label: "Whole place") { focus.send(.city) }
+                    }
+                    HexBadge(icon: .symbol("location.fill"), fill: .badgeTeal, label: "Where am I") { focus.send(.user) }
                 }
             }
             .padding(.horizontal)
@@ -94,6 +103,12 @@ struct ContentView: View {
 }
 
 extension ContentView {
+    private var secretsCount: (found: Int, total: Int)? {
+        let here = model.stickersHere
+        guard !here.isEmpty else { return nil }
+        return (here.filter { model.foundStickers[$0.entry.id] != nil }.count, here.count)
+    }
+
     /// Found stickers in the selected city, pinned on the tile they were under.
     private var stickerPins: [StickerPin] {
         guard let city = model.selectedCity else { return [] }
@@ -114,65 +129,72 @@ extension ContentView {
     }
 }
 
-private struct MapButton: View {
-    let systemImage: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.title3)
-                .frame(width: 48, height: 48)
-        }
-        .buttonStyle(.plain)
-        .glassCard(in: .circle, interactive: true)
-    }
-}
-
-struct CityCard: View {
+/// The place you're exploring, kept small: name and percentage. Tap it for the
+/// details and to switch places.
+struct PlaceChip: View {
     let city: City?
-    let onTap: () -> Void
+    /// Found and total secrets here, when the place has any.
+    let secrets: (found: Int, total: Int)?
+    let onChangePlace: () -> Void
+
+    @State private var open = false
 
     var body: some View {
-        Button(action: onTap) {
-            Group {
-                if let city {
+        if let city {
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    withAnimation(.snappy) { open.toggle() }
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(city.name).font(.headline).lineLimit(1).fixedSize()
+                        Text(city.progress.percentText)
+                            .font(.headline.monospacedDigit())
+                            .foregroundStyle(Color.walkiesOrange)
+                            .contentTransition(.numericText())
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(Color.ink.opacity(0.5))
+                            .rotationEffect(.degrees(open ? 180 : 0))
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 11)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+
+                if open {
                     VStack(alignment: .leading, spacing: 10) {
-                        HStack(alignment: .center) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 4) {
-                                    Text(city.name).font(.headline)
-                                    Image(systemName: "chevron.down")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Text("\(city.visited.count) of \(city.tiles.count) tiles")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                    .contentTransition(.numericText())
-                            }
-                            Spacer()
-                            Text(city.progress.percentText)
-                                .font(.system(size: 34, weight: .bold, design: .rounded))
-                                .monospacedDigit()
-                                .contentTransition(.numericText())
-                        }
                         ProgressBar(value: city.progress)
+                        Text("\(city.visited.count) of \(city.tiles.count) tiles explored")
+                            .font(.subheadline)
+                        if let secrets {
+                            Text("\(secrets.found) of \(secrets.total) secrets found")
+                                .font(.subheadline)
+                        }
+                        Button("Change place", action: onChangePlace)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.burnt)
+                            .padding(.top, 2)
                     }
-                } else {
-                    HStack {
-                        Label("Add a city to start exploring", systemImage: "plus.circle.fill")
-                            .font(.headline)
-                        Spacer()
-                    }
+                    .foregroundStyle(Color.ink.opacity(0.75))
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 14)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
-            .padding(16)
-            .contentShape(.rect)
+            .frame(minWidth: open ? 250 : nil, alignment: .leading)
+            .stickerCard(in: .rect(cornerRadius: open ? 22 : 24))
+            .animation(.snappy, value: city.visited.count)
+        } else {
+            Button(action: onChangePlace) {
+                Label("Add a place to explore", systemImage: "plus")
+                    .font(.headline)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 11)
+            }
+            .buttonStyle(.plain)
+            .stickerCard(in: .capsule)
         }
-        .buttonStyle(.plain)
-        .glassCard(in: .rect(cornerRadius: 24), interactive: true)
-        .animation(.snappy, value: city?.visited.count)
     }
 }
 
@@ -182,7 +204,7 @@ struct WalkControls: View {
 
     var body: some View {
         if let walk = model.activeWalk {
-            VStack(spacing: 14) {
+            VStack(spacing: 12) {
                 HStack {
                     TimelineView(.periodic(from: walk.startedAt, by: 1)) { _ in
                         Stat(value: Format.duration(walk.duration), label: "Time")
@@ -192,24 +214,15 @@ struct WalkControls: View {
                 }
                 if walk.isAutomatic {
                     Label("Recording this walk automatically", systemImage: "location.fill")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(.footnote)
+                        .foregroundStyle(Color.ink.opacity(0.6))
                 } else {
-                    Button {
-                        model.endWalk()
-                    } label: {
-                        Text("End walk")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 4)
-                    }
-                    .prominentButton()
-                    .tint(.red)
-                    .controlSize(.large)
+                    Button("End walk") { model.endWalk() }
+                        .buttonStyle(StickerButtonStyle())
                 }
             }
-            .padding(16)
-            .glassCard(in: .rect(cornerRadius: 28))
+            .padding(14)
+            .stickerCard(in: .rect(cornerRadius: 26))
         } else if model.tracker.isDenied {
             VStack(spacing: 10) {
                 Text("Walkies needs your location to uncover tiles.")
@@ -220,16 +233,17 @@ struct WalkControls: View {
                         UIApplication.shared.open(url)
                     }
                 }
-                .prominentButton()
+                .buttonStyle(StickerButtonStyle())
             }
             .frame(maxWidth: .infinity)
-            .padding(16)
-            .glassCard(in: .rect(cornerRadius: 28))
+            .padding(14)
+            .stickerCard(in: .rect(cornerRadius: 26))
         } else if model.alwaysOn {
-            HStack(spacing: 14) {
-                Image(systemName: "location.fill")
-                    .font(.title2)
-                    .foregroundStyle(Color.walkiesOrange)
+            HStack(spacing: 12) {
+                Image("icon-paw")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 36, height: 36)
                     .symbolEffect(.pulse)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Always on").font(.headline)
@@ -237,22 +251,21 @@ struct WalkControls: View {
                          ? "Just head out. Your walk will be picked up."
                          : "\(model.newTilesToday) new \(model.newTilesToday == 1 ? "tile" : "tiles") today")
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.ink.opacity(0.65))
                 }
-                Spacer()
+                Spacer(minLength: 0)
             }
-            .padding(16)
+            .padding(14)
             .frame(maxWidth: .infinity)
-            .glassCard(in: .rect(cornerRadius: 28))
+            .stickerCard(in: .rect(cornerRadius: 26))
         } else {
             Button(action: onStart) {
-                Label("Start walk", systemImage: "pawprint.fill")
-                    .font(.title3.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
+                HStack(spacing: 8) {
+                    Image("icon-paw").resizable().scaledToFit().frame(width: 26, height: 26)
+                    Text("Start walk").font(.title3.weight(.semibold))
+                }
             }
-            .prominentButton()
-            .controlSize(.large)
+            .buttonStyle(StickerButtonStyle())
         }
     }
 }
@@ -260,7 +273,7 @@ struct WalkControls: View {
 private struct Stat: View {
     let value: String
     let label: String
-    var tint: Color = .primary
+    var tint: Color = .ink
 
     var body: some View {
         VStack(spacing: 2) {
@@ -271,7 +284,7 @@ private struct Stat: View {
                 .contentTransition(.numericText())
             Text(label)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(tint == .ink ? Color.ink.opacity(0.6) : tint)
         }
         .frame(maxWidth: .infinity)
     }

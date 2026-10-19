@@ -31,6 +31,8 @@ struct CitiesView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.cream)
             .navigationTitle("Cities")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

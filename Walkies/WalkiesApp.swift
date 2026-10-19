@@ -32,6 +32,9 @@ struct WalkiesApp: App {
                     SignInView { delegate.sync.schedule() }
                 }
             }
+            // The cream-paper look is a light design, so the app stays light.
+            .preferredColorScheme(.light)
+            .tint(Color.burnt)
             .environment(delegate.model)
             .environment(delegate.account)
             .environment(delegate.sync)

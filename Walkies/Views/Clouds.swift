@@ -39,6 +39,9 @@ nonisolated struct CloudField: Sendable {
     var lines: [Line] = []
     /// The suburb's outline, so the dotted roads stop at its edge.
     var outline: [[MKMapPoint]] = []
+    /// The edges of the tiles under cloud, drawn as a faint dashed grid. Each edge
+    /// once, as a pair of points, so shared edges don't double up their dashes.
+    var gridEdges: [MKMapPoint] = []
 
     init() {}
 
@@ -69,6 +72,18 @@ nonisolated struct CloudField: Sendable {
             .sorted { $0.centre.y < $1.centre.y }
         lines = (city.roads ?? []).map { Line(points: $0.points.map { MKMapPoint($0.cl) }, kind: $0.kind) }
         outline = city.boundary.polygons.map { $0.outer.map { MKMapPoint($0.cl) } }
+
+        // Edge i runs between corners i and i + 1 and faces this neighbour.
+        let facing: [(Int32, Int32)] = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)]
+        for hex in cover.clouded {
+            let corners = grid.corners(of: hex).map { MKMapPoint($0.cl) }
+            for i in 0..<6 {
+                let n = Hex(q: hex.q + facing[i].0, r: hex.r + facing[i].1)
+                guard !cover.clouded.contains(n) || (hex.q, hex.r) < (n.q, n.r) else { continue }
+                gridEdges.append(corners[i])
+                gridEdges.append(corners[(i + 1) % 6])
+            }
+        }
     }
 
     private static func hash(_ hex: Hex) -> Int {
@@ -220,6 +235,7 @@ private struct CloudPainter {
                 layer.draw(tops[p.puff.variant], in: p.top)
             }
             layer.opacity = 1
+            drawGrid(in: &layer)
             drawRoads(in: &layer)
 
             // Soft holes over walked tiles. New ones open up rather than just appearing.
@@ -240,12 +256,36 @@ private struct CloudPainter {
         return rect.offsetBy(dx: dx, dy: dy).insetBy(dx: rect.width * (1 - swell) / 2, dy: rect.height * (1 - swell) / 2)
     }
 
-    /// The hidden streets as dotted lines, inside the suburb only.
+    /// Screen points per metre on the ground, to decide what's worth drawing at this zoom.
+    private var scale: Double? {
+        guard let first = field.puffs.first else { return nil }
+        return projection.ellipse(centre: first.centre, radius: 100).width / 200
+    }
+
+    /// A faint dashed honeycomb over the clouds, fading in as you zoom closer.
+    private func drawGrid(in context: inout GraphicsContext) {
+        guard let scale, scale > 0.15, !field.gridEdges.isEmpty else { return }
+        var path = Path()
+        var i = 0
+        while i < field.gridEdges.count {
+            let a = projection.point(field.gridEdges[i]), b = projection.point(field.gridEdges[i + 1])
+            if bounds.insetBy(dx: -40, dy: -40).contains(a) || bounds.insetBy(dx: -40, dy: -40).contains(b) {
+                path.move(to: a)
+                path.addLine(to: b)
+            }
+            i += 2
+        }
+        let fade = min(1, (scale - 0.15) / 0.2)
+        context.stroke(
+            path,
+            with: .color(Color(red: 0.42, green: 0.5, blue: 0.62).opacity(0.5 * fade)),
+            style: StrokeStyle(lineWidth: 1.2, lineCap: .round, dash: [3, 4])
+        )
+    }
+
+    /// The hidden streets as light dashed lines, inside the place only.
     private func drawRoads(in context: inout GraphicsContext) {
-        // A ground distance in screen points, to decide when the dots are worth drawing.
-        guard let first = field.puffs.first else { return }
-        let scale = projection.ellipse(centre: first.centre, radius: 100).width / 200
-        guard scale > 0.05 else { return }
+        guard let scale, scale > 0.05 else { return }
 
         var clip = Path()
         for ring in field.outline {
@@ -261,8 +301,8 @@ private struct CloudPainter {
             }
             context.stroke(
                 path,
-                with: .color(Color(red: 0.32, green: 0.42, blue: 0.6).opacity(kind == .road ? 0.75 : 0.55)),
-                style: StrokeStyle(lineWidth: kind == .road ? 4.5 : 3.5, lineCap: .round, dash: [0.01, kind == .road ? 11 : 8])
+                with: .color(Color(red: 0.36, green: 0.45, blue: 0.6).opacity(kind == .road ? 0.6 : 0.45)),
+                style: StrokeStyle(lineWidth: kind == .road ? 1.8 : 1.4, lineCap: .round, dash: kind == .road ? [6, 5] : [3, 4])
             )
         }
     }

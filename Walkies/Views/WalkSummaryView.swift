@@ -36,15 +36,11 @@ struct WalkSummaryView: View {
                 .padding(.horizontal)
             }
 
-            Button {
-                dismiss()
-            } label: {
-                Text("Done").font(.headline).frame(maxWidth: .infinity)
-            }
-            .prominentButton()
-            .controlSize(.large)
+            Button("Done") { dismiss() }
+                .buttonStyle(StickerButtonStyle())
         }
         .padding(24)
+        .presentationBackground(Color.cream)
         .presentationDetents([.medium])
     }
 

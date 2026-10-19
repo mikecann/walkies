@@ -108,6 +108,7 @@ struct StickerBookView: View {
                     }
                 }
             }
+            .background(Color.cream)
             .navigationTitle("Secrets")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -225,17 +226,14 @@ struct LoreCardView: View {
                 }
 
                 if isNew {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Text("Nice one").font(.headline).frame(maxWidth: .infinity)
-                    }
-                    .prominentButton()
-                    .controlSize(.large)
+                    Button("Nice one") { dismiss() }
+                        .buttonStyle(StickerButtonStyle())
                 }
             }
             .padding(24)
         }
+        .background(Color.cream)
+        .presentationBackground(Color.cream)
         .presentationDetents(isNew ? [.medium, .large] : [.large])
     }
 }
