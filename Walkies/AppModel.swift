@@ -85,6 +85,7 @@ final class AppModel {
         fetchMissingRoads()
         foundStickers = store.loadStickers()
         placeStickers()
+        refreshNeighbours()
     }
 
     /// Cities saved before we kept road lines get them fetched again in the background.
@@ -106,22 +107,18 @@ final class AppModel {
 
     var selectedCity: City? { cities.first { $0.id == selectedCityID } }
 
-    /// What the cloud layer draws for the selected city. Working out which tiles are
-    /// clouded takes a moment on a big city, so it's only redone when the tiles change.
+    /// What the cloud layer draws: every place at once. Working out which tiles are
+    /// clouded takes a moment on a big place, so it's only redone when the tiles change.
     @ObservationIgnored private var cachedField: (key: String, field: CloudField)?
 
-    var cloudKey: String { "\(selectedCityID?.uuidString ?? "none")-\(tilesRevision)" }
+    var cloudKey: String { "\(tilesRevision)-\(cities.count)" }
 
     var cloudField: CloudField {
         let key = cloudKey
         if let cachedField, cachedField.key == key { return cachedField.field }
-        let field = selectedCity.map(CloudField.init) ?? CloudField()
+        let field = CloudField(cities: cities)
         cachedField = (key, field)
         return field
-    }
-
-    var selectedFreshTiles: Set<Hex> {
-        selectedCityID.flatMap { freshTiles[$0] } ?? []
     }
 
     // MARK: Walks
@@ -363,6 +360,7 @@ final class AppModel {
         tilesRevision += 1
         store.save(cities)
         requestSync?()
+        refreshNeighbours()
     }
 
     func deleteCities(at offsets: IndexSet) {
@@ -372,8 +370,66 @@ final class AppModel {
         if let selectedCityID, removed.contains(selectedCityID) {
             self.selectedCityID = cities.first?.id
         }
+        tilesRevision += 1
         store.save(cities)
         requestSync?()
+    }
+
+    // MARK: Neighbours
+
+    /// Suburbs around your places, fetched from OpenStreetMap.
+    private(set) var nearby: [PlaceResult] = []
+    @ObservationIgnored private var fetchingNearby = false
+
+    /// How far around your places to offer suburbs, in metres. Twice this is fetched
+    /// and kept, so adding the next suburb over doesn't mean fetching again.
+    static let neighbourhood = 5000.0
+
+    /// Suburbs within reach of your places that you haven't added yet, for the map to offer.
+    var neighbours: [PlaceResult] {
+        guard let box = box(around: Self.neighbourhood) else { return [] }
+        let have = Set(cities.map { $0.name.lowercased() })
+        return nearby.filter { place in
+            let b = place.boundary.bounds
+            return !have.contains(place.name.lowercased()) && place.area <= CityBuilder.maxArea
+                && b.north >= box.south && b.south <= box.north && b.east >= box.west && b.west <= box.east
+        }
+    }
+
+    /// The box around all your places, grown by this many metres each way.
+    private func box(around metres: Double) -> (south: Double, west: Double, north: Double, east: Double)? {
+        let all = cities.map(\.boundary.bounds)
+        guard let south = all.map(\.south).min(), let west = all.map(\.west).min(),
+              let north = all.map(\.north).max(), let east = all.map(\.east).max()
+        else { return nil }
+        let dLat = metres / 111_320
+        let dLon = dLat / max(0.1, cos((south + north) / 2 * .pi / 180))
+        return (south - dLat, west - dLon, north + dLat, east + dLon)
+    }
+
+    /// Uses the saved list if it still covers your places and is under a month old.
+    func refreshNeighbours() {
+        guard !fetchingNearby, let wanted = box(around: Self.neighbourhood), let fetch = box(around: Self.neighbourhood * 2) else { return }
+        if let saved = store.loadNearby(),
+           saved.covers(south: wanted.south, west: wanted.west, north: wanted.north, east: wanted.east),
+           saved.fetchedAt.timeIntervalSinceNow > -30 * 24 * 3600 {
+            nearby = saved.places
+            return
+        }
+        fetchingNearby = true
+        Task {
+            defer { fetchingNearby = false }
+            do {
+                let places = try await OSMClient.placesNear(south: fetch.south, west: fetch.west, north: fetch.north, east: fetch.east)
+                nearby = places
+                store.save(nearby: NearbyPlaces(
+                    south: fetch.south, west: fetch.west, north: fetch.north, east: fetch.east,
+                    fetchedAt: .now, places: places
+                ))
+            } catch {
+                // No signal or OpenStreetMap is busy: try again next launch.
+            }
+        }
     }
 
     // MARK: Sync
@@ -406,6 +462,7 @@ final class AppModel {
         } else {
             cities.append(remote)
             if selectedCityID == nil { selectedCityID = remote.id }
+            refreshNeighbours()
         }
         shapes[remote.id] = nil
         replay(walks, onlyCity: remote.id)
@@ -450,6 +507,7 @@ final class AppModel {
         shapes = [:]
         foundStickers = [:]
         stickerQueue = []
+        nearby = []
         selectedCityID = nil
         tilesRevision += 1
         store.wipe()

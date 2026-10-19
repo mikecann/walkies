@@ -7,15 +7,25 @@ nonisolated enum CityBuilder {
     /// Square metres. Anything bigger is years of walking, so we suggest a suburb instead.
     static let maxArea = 400_000_000.0
 
+    /// How far away another place's grid can be and still be shared, so neighbouring
+    /// places' tiles line up along their borders.
+    static let shareGridWithin = 40_000.0
+
     /// Lays a hex grid over the place, keeps the tiles with a street or path through
     /// them, then replays every past walk so the new city starts with what you've done.
+    /// Uses the same grid as any place you've already got nearby.
     @concurrent
     static func build(
         from place: PlaceResult,
         walks: [Walk],
+        near cities: [City] = [],
         status: @escaping @MainActor @Sendable (String) -> Void
     ) async throws -> City {
-        let grid = HexGrid(projection: LocalProjection(origin: place.boundary.centre), size: tileSize)
+        let centre = place.boundary.centre
+        let neighbour = cities
+            .filter { $0.grid.size == tileSize && $0.grid.projection.origin.distance(to: centre) < shareGridWithin }
+            .min { $0.grid.projection.origin.distance(to: centre) < $1.grid.projection.origin.distance(to: centre) }
+        let grid = neighbour?.grid ?? HexGrid(projection: LocalProjection(origin: centre), size: tileSize)
         let shape = BoundaryShape(place.boundary, projection: grid.projection)
         let inside = City.hexes(inside: shape, grid: grid)
 

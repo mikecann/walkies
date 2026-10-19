@@ -10,20 +10,28 @@ struct ContentView: View {
     @State private var openSticker: LoreEntry?
     @State private var focus = MapFocusRequest()
     @State private var mapHandle = MapHandle()
+    /// A suburb next door you've tapped, waiting for you to confirm adding it.
+    @State private var pickedNeighbour: PlaceResult?
+    /// What's happening while a suburb from the map is being added.
+    @State private var addingStatus: String?
+    @State private var addingError: String?
 
     var body: some View {
         @Bindable var model = model
 
         FogMapView(
-            city: model.selectedCity,
-            fresh: model.selectedFreshTiles,
+            cities: model.cities,
+            selectedID: model.selectedCityID,
+            fresh: model.freshTiles,
             revision: model.tilesRevision,
             path: model.activePath,
             focus: focus,
             tilted: model.tilted3D,
             handle: mapHandle,
             stickers: stickerPins,
-            onSelectSticker: { openSticker = LoreLibrary.entry(id: $0) }
+            onSelectSticker: { openSticker = LoreLibrary.entry(id: $0) },
+            neighbours: addingStatus == nil ? model.neighbours : [],
+            onPickNeighbour: { pickedNeighbour = $0 }
         )
         .overlay {
             CloudLayer(field: model.cloudField, key: model.cloudKey, handle: mapHandle)
@@ -64,6 +72,35 @@ struct ContentView: View {
             .padding(.horizontal)
             .padding(.bottom, 8)
         }
+        .overlay {
+            if let addingStatus {
+                VStack(spacing: 14) {
+                    ProgressView().controlSize(.large)
+                    Text(addingStatus).font(.headline)
+                    Text("This can take up to a minute.")
+                        .font(.caption)
+                        .foregroundStyle(Color.ink.opacity(0.6))
+                }
+                .padding(28)
+                .stickerCard(in: .rect(cornerRadius: 24))
+            }
+        }
+        .confirmationDialog(
+            pickedNeighbour.map { "Add \($0.name)?" } ?? "",
+            isPresented: Binding(get: { pickedNeighbour != nil }, set: { if !$0 { pickedNeighbour = nil } }),
+            titleVisibility: .visible,
+            presenting: pickedNeighbour
+        ) { place in
+            Button("Add \(place.name)") { add(place) }
+            Button("Not now", role: .cancel) {}
+        } message: { place in
+            Text("\(place.kind.capitalized) · \(Format.area(place.area)). It'll go under the clouds next to your other places, and any walks you've already done there count.")
+        }
+        .alert("Couldn't add it", isPresented: Binding(get: { addingError != nil }, set: { if !$0 { addingError = nil } })) {
+            Button("OK") {}
+        } message: {
+            Text(addingError ?? "")
+        }
         .sheet(isPresented: $showingCities) {
             CitiesView()
         }
@@ -100,6 +137,21 @@ struct ContentView: View {
 }
 
 extension ContentView {
+    /// Fetches a neighbouring suburb's streets and adds it, sharing the hex grid with
+    /// your places next door so the tiles line up along the border.
+    private func add(_ place: PlaceResult) {
+        addingStatus = "Getting \(place.name) ready…"
+        Task {
+            do {
+                let city = try await CityBuilder.build(from: place, walks: model.walks, near: model.cities) { addingStatus = $0 }
+                model.add(city)
+            } catch {
+                addingError = "Couldn't load the streets for \(place.name). OpenStreetMap might be busy, so try again in a minute."
+            }
+            addingStatus = nil
+        }
+    }
+
     private var secretsCount: (found: Int, total: Int)? {
         let here = model.stickersHere
         guard !here.isEmpty else { return nil }

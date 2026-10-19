@@ -1,6 +1,6 @@
 import Foundation
 
-nonisolated struct PlaceResult: Identifiable, Sendable {
+nonisolated struct PlaceResult: Identifiable, Codable, Sendable {
     var id: Int
     var name: String
     var detail: String
@@ -68,8 +68,52 @@ nonisolated enum OSMClient {
         (\(south),\(west),\(north),\(east));
         out geom;
         """
-        let body = "data=" + (query.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "")
+        let decoded = try JSONDecoder().decode(OverpassResponse.self, from: await overpass(query))
+        return decoded.elements.compactMap { element in
+            element.geometry.map { geometry in
+                OSMWay(tags: element.tags ?? [:], points: geometry.map { Coordinate(lat: $0.lat, lon: $0.lon) })
+            }
+        }
+    }
 
+    /// Suburbs and localities with a boundary in the box. In Australia they're
+    /// admin_level 9 (WA) or 10 (most other states). Overpass finds which ones, then
+    /// Nominatim hands over their outlines in the same shape a search does.
+    @concurrent
+    static func placesNear(south: Double, west: Double, north: Double, east: Double) async throws -> [PlaceResult] {
+        let query = """
+        [out:json][timeout:60];
+        relation["boundary"="administrative"]["admin_level"~"^(9|10)$"](\(south),\(west),\(north),\(east));
+        out ids;
+        """
+        let decoded = try JSONDecoder().decode(OverpassResponse.self, from: await overpass(query))
+        let ids = decoded.elements.compactMap(\.id)
+
+        var places: [PlaceResult] = []
+        // Nominatim looks up at most 50 at a time, and asks for one request a second.
+        for (n, start) in stride(from: 0, to: ids.count, by: 50).enumerated() {
+            if n > 0 { try await Task.sleep(for: .seconds(1)) }
+            var components = URLComponents(string: "https://nominatim.openstreetmap.org/lookup")!
+            components.queryItems = [
+                URLQueryItem(name: "osm_ids", value: ids[start..<min(start + 50, ids.count)].map { "R\($0)" }.joined(separator: ",")),
+                URLQueryItem(name: "format", value: "jsonv2"),
+                URLQueryItem(name: "polygon_geojson", value: "1"),
+                URLQueryItem(name: "polygon_threshold", value: "0.0001"),
+            ]
+            var request = URLRequest(url: components.url!)
+            request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+            request.setValue("en", forHTTPHeaderField: "Accept-Language")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            try check(response)
+            let items = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] ?? []
+            places += items.compactMap(place)
+        }
+        return places
+    }
+
+    /// Runs an Overpass query, trying each server in turn.
+    private static func overpass(_ query: String) async throws -> Data {
+        let body = "data=" + (query.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "")
         var lastError: Error = OSMError.badResponse(0)
         for endpoint in overpassEndpoints {
             do {
@@ -80,12 +124,7 @@ nonisolated enum OSMClient {
                 request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
                 let (data, response) = try await URLSession.shared.data(for: request)
                 try check(response)
-                let decoded = try JSONDecoder().decode(OverpassResponse.self, from: data)
-                return decoded.elements.compactMap { element in
-                    element.geometry.map { geometry in
-                        OSMWay(tags: element.tags ?? [:], points: geometry.map { Coordinate(lat: $0.lat, lon: $0.lon) })
-                    }
-                }
+                return data
             } catch {
                 lastError = error
             }
@@ -140,6 +179,7 @@ private nonisolated struct OverpassResponse: Decodable {
             var lat: Double
             var lon: Double
         }
+        var id: Int?
         var tags: [String: String]?
         var geometry: [Point]?
     }

@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 nonisolated struct GeoPolygon: Codable, Hashable, Sendable {
     var outer: [Coordinate]
@@ -20,6 +21,34 @@ nonisolated struct Boundary: Codable, Hashable, Sendable {
     var centre: Coordinate {
         let b = bounds
         return Coordinate(lat: (b.south + b.north) / 2, lon: (b.west + b.east) / 2)
+    }
+
+    /// Somewhere inside the place to put its name: the middle of its biggest piece,
+    /// or for a crescent or L shape whose middle is outside it, the nearest spot
+    /// that's inside.
+    var labelPoint: Coordinate {
+        let projection = LocalProjection(origin: centre)
+        let shape = BoundaryShape(self, projection: projection)
+        guard let biggest = polygons.max(by: { $0.outer.count < $1.outer.count }) else { return centre }
+        let ring = biggest.outer.map(projection.project)
+        var area = 0.0, sum = SIMD2<Double>(0, 0)
+        for i in ring.indices {
+            let a = ring[i], b = ring[(i + 1) % ring.count]
+            let cross = a.x * b.y - b.x * a.y
+            area += cross
+            sum += (a + b) * cross
+        }
+        let middle = abs(area) > 1e-9 ? sum / (3 * area) : (shape.lo + shape.hi) / 2
+        if shape.contains(middle) { return projection.unproject(middle) }
+        var best: SIMD2<Double>?
+        for i in 0...20 {
+            for j in 0...20 {
+                let p = shape.lo + (shape.hi - shape.lo) * SIMD2(Double(i) / 20, Double(j) / 20)
+                guard shape.contains(p) else { continue }
+                if best == nil || simd_distance(p, middle) < simd_distance(best!, middle) { best = p }
+            }
+        }
+        return projection.unproject(best ?? middle)
     }
 }
 

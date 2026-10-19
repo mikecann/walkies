@@ -17,6 +17,48 @@ private final class StickerAnnotation: NSObject, MKAnnotation {
     }
 }
 
+/// A suburb next to yours, labelled on the zoomed-out map with a button to add it.
+private final class NeighbourAnnotation: NSObject, MKAnnotation {
+    let place: PlaceResult
+    let coordinate: CLLocationCoordinate2D
+
+    init(_ place: PlaceResult) {
+        self.place = place
+        coordinate = place.boundary.labelPoint.cl
+    }
+}
+
+/// The neighbour's label: a cream sticker pill with an orange plus.
+private enum NeighbourPill {
+    private static var cache: [String: UIImage] = [:]
+
+    static func image(for name: String) -> UIImage? {
+        if let cached = cache[name] { return cached }
+        let pill = HStack(spacing: 7) {
+            Image(systemName: "plus")
+                .font(.system(size: 12, weight: .black))
+                .foregroundStyle(.white)
+                .frame(width: 22, height: 22)
+                .background(Color.burnt, in: Circle())
+            Text(name)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.ink)
+        }
+        .padding(.leading, 5)
+        .padding(.trailing, 13)
+        .padding(.vertical, 5)
+        .background(Color.cream, in: Capsule())
+        .overlay(Capsule().strokeBorder(.white, lineWidth: 2.5))
+        .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+        .padding(8)
+        let renderer = ImageRenderer(content: pill)
+        renderer.scale = UITraitCollection.current.displayScale
+        let image = renderer.uiImage
+        cache[name] = image
+        return image
+    }
+}
+
 struct MapFocusRequest: Equatable {
     enum Target { case city, user }
     var id = 0
@@ -28,11 +70,15 @@ struct MapFocusRequest: Equatable {
     }
 }
 
-/// The satellite map, with the suburb's outline, your route and orange outlines on
-/// tiles uncovered this walk. The clouds are drawn over the top by `CloudLayer`.
+/// The satellite map, with your places' outlines, your route and orange outlines on
+/// tiles uncovered this walk. Zoomed out, the suburbs next door are outlined too, each
+/// with a button to add it. The clouds are drawn over the top by `CloudLayer`.
 struct FogMapView: UIViewRepresentable {
-    var city: City?
-    var fresh: Set<Hex>
+    var cities: [City]
+    /// The place the map flies to when it changes.
+    var selectedID: UUID?
+    /// Tiles uncovered this walk, per place.
+    var fresh: [UUID: Set<Hex>]
     var revision: Int
     var path: [Coordinate]
     var focus: MapFocusRequest
@@ -41,6 +87,8 @@ struct FogMapView: UIViewRepresentable {
     let handle: MapHandle
     var stickers: [StickerPin] = []
     var onSelectSticker: (String) -> Void = { _ in }
+    var neighbours: [PlaceResult] = []
+    var onPickNeighbour: (PlaceResult) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -60,8 +108,13 @@ struct FogMapView: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, MKMapViewDelegate {
-        private var city: City?
-        private var fresh: Set<Hex> = []
+        /// Camera distance in metres beyond which the neighbours show.
+        static let neighbourDistance = 2500.0
+
+        private var cities: [City] = []
+        private var cityIDs: [UUID]?
+        private var selectedID: UUID?
+        private var fresh: [UUID: Set<Hex>] = [:]
         private var revision = -1
         private var focusID = -1
         private var pathCount = -1
@@ -75,6 +128,12 @@ struct FogMapView: UIViewRepresentable {
         private var outline: MKMultiPolygon?
         private var uncovered: MKMultiPolygon?
         private var line: MKPolyline?
+
+        private var neighbourIDs: [Int] = []
+        private var neighbourOutline: MKMultiPolygon?
+        private var neighbourPins: [NeighbourAnnotation] = []
+        private var showingNeighbours = false
+        private var onPickNeighbour: (PlaceResult) -> Void = { _ in }
 
         func update(_ map: MKMapView, with view: FogMapView) {
             if view.tilted != tilted {
@@ -91,17 +150,27 @@ struct FogMapView: UIViewRepresentable {
                 map.addAnnotations(pins.map { StickerAnnotation($0) })
             }
 
-            let cityChanged = view.city?.id != city?.id
-            city = view.city
+            let ids = view.cities.map(\.id)
+            cities = view.cities
             fresh = view.fresh
-
-            if cityChanged {
+            if ids != cityIDs {
+                cityIDs = ids
                 revision = view.revision
                 redrawAll(on: map)
-                zoomToCity(on: map)
             } else if view.revision != revision {
                 revision = view.revision
                 drawUncovered(on: map)
+            }
+            if view.selectedID != selectedID {
+                selectedID = view.selectedID
+                zoomToCity(on: map)
+            }
+
+            onPickNeighbour = view.onPickNeighbour
+            if view.neighbours.map(\.id) != neighbourIDs {
+                neighbourIDs = view.neighbours.map(\.id)
+                neighbourPins = view.neighbours.map(NeighbourAnnotation.init)
+                showNeighbours(on: map, force: true)
             }
 
             if view.path.count != pathCount {
@@ -146,22 +215,26 @@ struct FogMapView: UIViewRepresentable {
             )
         }
 
-        private func redrawAll(on map: MKMapView) {
-            map.removeOverlays([outline, uncovered].compactMap { $0 })
-            outline = nil
-            uncovered = nil
-            guard let city else { return }
-
-            // Keep each overlay before adding it: MapKit can ask for its renderer straight
-            // away, and the renderer is picked by which overlay it is.
-            let outline = MKMultiPolygon(city.boundary.polygons.map { poly in
+        private static func polygons(_ boundary: Boundary) -> [MKPolygon] {
+            boundary.polygons.map { poly in
                 var outer = poly.outer.map(\.cl)
                 let holes = poly.holes.map { hole -> MKPolygon in
                     var coords = hole.map(\.cl)
                     return MKPolygon(coordinates: &coords, count: coords.count)
                 }
                 return MKPolygon(coordinates: &outer, count: outer.count, interiorPolygons: holes)
-            })
+            }
+        }
+
+        private func redrawAll(on map: MKMapView) {
+            map.removeOverlays([outline, uncovered].compactMap { $0 })
+            outline = nil
+            uncovered = nil
+            guard !cities.isEmpty else { return }
+
+            // Keep each overlay before adding it: MapKit can ask for its renderer straight
+            // away, and the renderer is picked by which overlay it is.
+            let outline = MKMultiPolygon(cities.flatMap { Self.polygons($0.boundary) })
             self.outline = outline
             add(outline, to: map)
 
@@ -171,15 +244,31 @@ struct FogMapView: UIViewRepresentable {
         private func drawUncovered(on map: MKMapView) {
             if let uncovered { map.removeOverlay(uncovered) }
             uncovered = nil
-            guard let city else { return }
-            let hexes = fresh.intersection(city.visited)
-            guard !hexes.isEmpty else { return }
-            let layer = MKMultiPolygon(hexes.map { hex in
-                var corners = city.grid.corners(of: hex).map(\.cl)
+            let tiles = cities.flatMap { city in
+                (fresh[city.id] ?? []).intersection(city.visited).map { city.grid.corners(of: $0) }
+            }
+            guard !tiles.isEmpty else { return }
+            let layer = MKMultiPolygon(tiles.map { tile in
+                var corners = tile.map(\.cl)
                 return MKPolygon(coordinates: &corners, count: corners.count)
             })
             uncovered = layer
             add(layer, to: map)
+        }
+
+        /// The suburbs next door, only once you've zoomed out far enough to see past your own.
+        private func showNeighbours(on map: MKMapView, force: Bool = false) {
+            let show = !neighbourPins.isEmpty && map.camera.centerCoordinateDistance > Self.neighbourDistance
+            guard force || show != showingNeighbours else { return }
+            showingNeighbours = show
+            if let neighbourOutline { map.removeOverlay(neighbourOutline) }
+            neighbourOutline = nil
+            map.removeAnnotations(map.annotations.filter { $0 is NeighbourAnnotation })
+            guard show else { return }
+            let outline = MKMultiPolygon(neighbourPins.flatMap { Self.polygons($0.place.boundary) })
+            neighbourOutline = outline
+            map.addOverlay(outline, level: .aboveRoads)
+            map.addAnnotations(neighbourPins)
         }
 
         private func drawPath(_ path: [Coordinate], on map: MKMapView) {
@@ -202,8 +291,8 @@ struct FogMapView: UIViewRepresentable {
         }
 
         private func zoomToCity(on map: MKMapView) {
-            guard let outline else { return }
-            let rect = outline.boundingMapRect
+            guard let city = cities.first(where: { $0.id == selectedID }) else { return }
+            let rect = MKMultiPolygon(Self.polygons(city.boundary)).boundingMapRect
             let padding = UIEdgeInsets(top: 150, left: 20, bottom: 150, right: 20)
             // Wait a tick so the map has its real size the first time round.
             DispatchQueue.main.async { [self] in
@@ -233,7 +322,7 @@ struct FogMapView: UIViewRepresentable {
             guard let location = userLocation.location else { return }
             if following {
                 mapView.setCenter(location.coordinate, animated: true)
-            } else if city == nil, !hasShownUser {
+            } else if cities.isEmpty, !hasShownUser {
                 // With no city to frame yet, start on wherever you are instead of the whole planet.
                 hasShownUser = true
                 mapView.setCamera(MKMapCamera(lookingAtCenter: location.coordinate, fromDistance: 2000, pitch: pitch, heading: 0), animated: true)
@@ -250,6 +339,7 @@ struct FogMapView: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             handle?.moving = false
+            showNeighbours(on: mapView)
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
@@ -259,6 +349,17 @@ struct FogMapView: UIViewRepresentable {
                     ?? MKAnnotationView(annotation: annotation, reuseIdentifier: "me")
                 view.annotation = annotation
                 view.isHidden = true
+                return view
+            }
+            if let neighbour = annotation as? NeighbourAnnotation {
+                let view = mapView.dequeueReusableAnnotationView(withIdentifier: "neighbour")
+                    ?? MKAnnotationView(annotation: annotation, reuseIdentifier: "neighbour")
+                view.annotation = annotation
+                view.image = NeighbourPill.image(for: neighbour.place.name)
+                view.canShowCallout = false
+                // Let MapKit hide labels that would overlap, rather than pile them up.
+                view.collisionMode = .rectangle
+                view.displayPriority = .defaultHigh
                 return view
             }
             guard let sticker = annotation as? StickerAnnotation, let entry = LoreLibrary.entry(id: sticker.id) else { return nil }
@@ -271,6 +372,11 @@ struct FogMapView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, didSelect annotation: MKAnnotation) {
+            if let neighbour = annotation as? NeighbourAnnotation {
+                mapView.deselectAnnotation(annotation, animated: false)
+                onPickNeighbour(neighbour.place)
+                return
+            }
             guard let sticker = annotation as? StickerAnnotation else { return }
             mapView.deselectAnnotation(annotation, animated: false)
             onSelectSticker(sticker.id)
@@ -283,6 +389,11 @@ struct FogMapView: UIViewRepresentable {
                     r.fillColor = UIColor.walkiesOrange.withAlphaComponent(0.18)
                     r.strokeColor = .walkiesOrange
                     r.lineWidth = 2
+                } else if multi === neighbourOutline {
+                    r.fillColor = UIColor.white.withAlphaComponent(0.07)
+                    r.strokeColor = UIColor.white.withAlphaComponent(0.6)
+                    r.lineWidth = 1.5
+                    r.lineDashPattern = [3, 5]
                 } else {
                     r.fillColor = nil
                     r.strokeColor = UIColor.white.withAlphaComponent(0.85)

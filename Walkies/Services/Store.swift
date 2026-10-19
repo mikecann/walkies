@@ -42,6 +42,17 @@ nonisolated struct Store {
 
     private var syncURL: URL { root.appending(path: "sync.json") }
 
+    /// Suburbs around your places, so the map can offer them without asking OpenStreetMap every launch.
+    func loadNearby() -> NearbyPlaces? {
+        read(NearbyPlaces.self, from: nearbyURL)
+    }
+
+    func save(nearby: NearbyPlaces) {
+        write(nearby, to: nearbyURL)
+    }
+
+    private var nearbyURL: URL { root.appending(path: "nearby.json") }
+
     /// Deletes everything the app has saved, for signing out.
     func wipe() {
         try? FileManager.default.removeItem(at: root)
@@ -84,5 +95,19 @@ nonisolated struct Store {
         } catch {
             Self.log.error("Couldn't save \(url.lastPathComponent): \(error)")
         }
+    }
+}
+
+/// Suburbs found around your places, and the box they were looked for in.
+nonisolated struct NearbyPlaces: Codable, Sendable {
+    var south: Double
+    var west: Double
+    var north: Double
+    var east: Double
+    var fetchedAt: Date
+    var places: [PlaceResult]
+
+    func covers(south: Double, west: Double, north: Double, east: Double) -> Bool {
+        self.south <= south && self.west <= west && self.north >= north && self.east >= east
     }
 }

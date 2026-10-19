@@ -3,9 +3,17 @@ import MapKit
 import SwiftUI
 
 /// Everything the cloud layer draws, worked out in map points whenever the tiles change.
+/// It covers every place you've added at once. Neighbouring places usually share one
+/// hex grid, so a tile on the border between two is the same tile in both.
 nonisolated struct CloudField: Sendable {
-    struct Puff: Sendable {
+    /// A tile on a particular grid. Older places each have their own grid.
+    struct Tile: Hashable, Sendable {
+        var grid: HexGrid
         var hex: Hex
+    }
+
+    struct Puff: Sendable {
+        var tile: Tile
         var centre: MKMapPoint
         /// Bigger than the hex, so neighbours merge into one blanket.
         var radius: Double
@@ -15,7 +23,7 @@ nonisolated struct CloudField: Sendable {
     }
 
     struct Clearing: Sendable {
-        var hex: Hex
+        var tile: Tile
         var centre: MKMapPoint
         var radius: Double
     }
@@ -32,12 +40,15 @@ nonisolated struct CloudField: Sendable {
     /// street gets swallowed by the clouds either side of it.
     static let clearing = 1.25
 
+    /// Which places this covers, so the layer can tell tiles clearing from a place
+    /// being added or removed.
+    var places: [UUID] = []
     /// North first, so clouds further south sit in front of them.
     var puffs: [Puff] = []
     /// Where to cut the clouds away over walked hexes.
     var clearings: [Clearing] = []
     var lines: [Line] = []
-    /// The suburb's outline, so the dotted roads stop at its edge.
+    /// The places' outlines, so the dotted roads stop at their edges.
     var outline: [[MKMapPoint]] = []
     /// The edges of the tiles under cloud, drawn as a faint dashed grid. Each edge
     /// once, as a pair of points, so shared edges don't double up their dashes.
@@ -46,40 +57,58 @@ nonisolated struct CloudField: Sendable {
     init() {}
 
     init(city: City) {
-        let grid = city.grid
-        let cover = city.cloudCover()
-        let metres = MKMapPointsPerMeterAtLatitude(grid.projection.origin.lat)
-        let hexSize = grid.size * metres
-        func centre(of hex: Hex) -> MKMapPoint {
-            MKMapPoint(grid.projection.unproject(grid.centre(of: hex)).cl)
+        self.init(cities: [city])
+    }
+
+    init(cities: [City]) {
+        places = cities.map(\.id)
+        var clouded = Set<Tile>()
+        var clear = Set<Tile>()
+        for city in cities {
+            let cover = city.cloudCover()
+            clouded.formUnion(cover.clouded.map { Tile(grid: city.grid, hex: $0) })
+            clear.formUnion(cover.clear.map { Tile(grid: city.grid, hex: $0) })
+        }
+        // A border tile walked in one place is walked in the other too.
+        clouded.subtract(clear)
+
+        func centre(of tile: Tile) -> MKMapPoint {
+            MKMapPoint(tile.grid.projection.unproject(tile.grid.centre(of: tile.hex)).cl)
+        }
+        func hexSize(_ grid: HexGrid) -> Double {
+            grid.size * MKMapPointsPerMeterAtLatitude(grid.projection.origin.lat)
         }
 
-        clearings = cover.clear.map { Clearing(hex: $0, centre: centre(of: $0), radius: hexSize * Self.clearing) }
-        puffs = cover.clouded
-            .map { hex in
+        clearings = clear.map { Clearing(tile: $0, centre: centre(of: $0), radius: hexSize($0.grid) * Self.clearing) }
+        puffs = clouded
+            .map { tile in
                 // Nudge and resize each cloud a little, always the same way for the same
                 // hex, so the blanket doesn't sit on an obvious honeycomb.
-                var rng = SplitMix64(seed: UInt64(bitPattern: Int64(Self.hash(hex))))
-                let c = centre(of: hex)
+                var rng = SplitMix64(seed: UInt64(bitPattern: Int64(Self.hash(tile.hex))))
+                let c = centre(of: tile)
+                let size = hexSize(tile.grid)
                 return Puff(
-                    hex: hex,
-                    centre: MKMapPoint(x: c.x + (rng.unit() - 0.5) * 0.5 * hexSize, y: c.y + (rng.unit() - 0.5) * 0.5 * hexSize),
-                    radius: hexSize * Self.spread * (0.88 + rng.unit() * 0.35),
+                    tile: tile,
+                    centre: MKMapPoint(x: c.x + (rng.unit() - 0.5) * 0.5 * size, y: c.y + (rng.unit() - 0.5) * 0.5 * size),
+                    radius: size * Self.spread * (0.88 + rng.unit() * 0.35),
                     variant: Int(rng.next() % UInt64(CloudSprites.count)),
                     phase: rng.unit() * 2 * .pi
                 )
             }
             .sorted { $0.centre.y < $1.centre.y }
-        lines = (city.roads ?? []).map { Line(points: $0.points.map { MKMapPoint($0.cl) }, kind: $0.kind) }
-        outline = city.boundary.polygons.map { $0.outer.map { MKMapPoint($0.cl) } }
+        // Neighbouring places fetch the same streets along their shared edges.
+        let roads = Set(cities.flatMap { $0.roads ?? [] })
+        lines = roads.map { Line(points: $0.points.map { MKMapPoint($0.cl) }, kind: $0.kind) }
+        outline = cities.flatMap { $0.boundary.polygons.map { $0.outer.map { MKMapPoint($0.cl) } } }
 
         // Edge i runs between corners i and i + 1 and faces this neighbour.
         let facing: [(Int32, Int32)] = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)]
-        for hex in cover.clouded {
-            let corners = grid.corners(of: hex).map { MKMapPoint($0.cl) }
+        for tile in clouded {
+            let hex = tile.hex
+            let corners = tile.grid.corners(of: hex).map { MKMapPoint($0.cl) }
             for i in 0..<6 {
                 let n = Hex(q: hex.q + facing[i].0, r: hex.r + facing[i].1)
-                guard !cover.clouded.contains(n) || (hex.q, hex.r) < (n.q, n.r) else { continue }
+                guard !clouded.contains(Tile(grid: tile.grid, hex: n)) || (hex.q, hex.r) < (n.q, n.r) else { continue }
                 gridEdges.append(corners[i])
                 gridEdges.append(corners[(i + 1) % 6])
             }
@@ -128,7 +157,7 @@ struct CloudLayer: View {
                 let projection = Projection(map: map)
                 CloudPainter(
                     field: field, leaving: reveal < 1 ? leaving : [], reveal: reveal,
-                    fresh: Set(leaving.map(\.hex)), projection: projection,
+                    fresh: Set(leaving.map(\.tile)), projection: projection,
                     bounds: CGRect(origin: .zero, size: size), clock: clock
                 )
                 .draw(in: &context)
@@ -140,10 +169,10 @@ struct CloudLayer: View {
         .allowsHitTesting(false)
         .onAppear { shown = (key, field) }
         .onChange(of: key) {
-            // Only animate tiles clearing in the same city, not a whole new one appearing.
-            if let old = shown, old.key.prefix(36) == key.prefix(36) {
-                let still = Set(field.puffs.map(\.hex))
-                leaving = old.field.puffs.filter { !still.contains($0.hex) }
+            // Only animate tiles clearing, not a whole place being added or removed.
+            if let old = shown, old.field.places == field.places {
+                let still = Set(field.puffs.map(\.tile))
+                leaving = old.field.puffs.filter { !still.contains($0.tile) }
                 changedAt = .now
             } else {
                 leaving = []
@@ -334,7 +363,7 @@ private struct CloudPainter {
     let leaving: [CloudField.Puff]
     /// 0 to 1 through the latest tiles clearing.
     let reveal: Double
-    let fresh: Set<Hex>
+    let fresh: Set<CloudField.Tile>
     let projection: Projection
     let bounds: CGRect
     let clock: Double
@@ -392,7 +421,7 @@ private struct CloudPainter {
             // Soft holes over walked tiles. New ones open up rather than just appearing.
             layer.blendMode = .destinationOut
             for clearing in field.clearings {
-                let grow = fresh.contains(clearing.hex) ? 0.3 + 0.7 * ease : 1
+                let grow = fresh.contains(clearing.tile) ? 0.3 + 0.7 * ease : 1
                 let rect = capped(projection.ellipse(centre: clearing.centre, radius: clearing.radius * grow), radius: clearing.radius * grow)
                 guard rect.intersects(visible) else { continue }
                 layer.draw(eraser, in: rect)
@@ -410,7 +439,7 @@ private struct CloudPainter {
     /// Screen points per map point mid-screen, worked out once a frame.
     private let centreScale: Double
 
-    init(field: CloudField, leaving: [CloudField.Puff], reveal: Double, fresh: Set<Hex>, projection: Projection, bounds: CGRect, clock: Double) {
+    init(field: CloudField, leaving: [CloudField.Puff], reveal: Double, fresh: Set<CloudField.Tile>, projection: Projection, bounds: CGRect, clock: Double) {
         self.field = field
         self.leaving = leaving
         self.reveal = reveal
