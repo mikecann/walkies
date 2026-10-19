@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { currentUserId } from "./users";
+import { mergeLedgers, parseLedger } from "./progression";
 
 async function requireUser(ctx: QueryCtx | MutationCtx) {
   const userId = await currentUserId(ctx);
@@ -110,6 +111,22 @@ export const saveSecrets = mutation({
   },
 });
 
+/** The stored copy wins duplicate ids and claims; equipment uses its own clock. */
+export const saveProgress = mutation({
+  args: { ledger: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { ledger }) => {
+    const userId = await requireUser(ctx);
+    const incoming = parseLedger(ledger);
+    const existing = await ctx.db.query("progress").withIndex("by_user", (q) => q.eq("userId", userId)).unique();
+    const merged = existing === null ? mergeLedgers(incoming, incoming) : mergeLedgers(parseLedger(existing.ledger), incoming);
+    const data = { ledger: JSON.stringify(merged), updatedAt: Date.now() };
+    if (existing === null) await ctx.db.insert("progress", { userId, ...data });
+    else await ctx.db.patch("progress", existing._id, data);
+    return null;
+  },
+});
+
 /**
  * Everything the server has for the signed-in user, without the walk and city
  * contents. The phone downloads only the files it's missing.
@@ -122,13 +139,15 @@ export const snapshot = query({
       v.object({ clientId: v.string(), updatedAt: v.number(), url: v.union(v.string(), v.null()) }),
     ),
     secrets: v.array(v.object({ secretId: v.string(), foundAt: v.number() })),
+    progress: v.union(v.string(), v.null()),
   }),
   handler: async (ctx) => {
     const userId = await requireUser(ctx);
-    const [walks, places, secrets] = await Promise.all([
+    const [walks, places, secrets, progress] = await Promise.all([
       ctx.db.query("walks").withIndex("by_user_client", (q) => q.eq("userId", userId)).collect(),
       ctx.db.query("places").withIndex("by_user_client", (q) => q.eq("userId", userId)).collect(),
       ctx.db.query("secrets").withIndex("by_user_secret", (q) => q.eq("userId", userId)).collect(),
+      ctx.db.query("progress").withIndex("by_user", (q) => q.eq("userId", userId)).unique(),
     ]);
     return {
       walks: await Promise.all(walks.map(async (w) => ({ clientId: w.clientId, url: await ctx.storage.getUrl(w.file) }))),
@@ -136,6 +155,7 @@ export const snapshot = query({
         places.map(async (p) => ({ clientId: p.clientId, updatedAt: p.updatedAt, url: await ctx.storage.getUrl(p.file) })),
       ),
       secrets: secrets.map((s) => ({ secretId: s.secretId, foundAt: s.foundAt })),
+      progress: progress?.ledger ?? null,
     };
   },
 });

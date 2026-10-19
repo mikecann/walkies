@@ -40,6 +40,16 @@ nonisolated struct Store {
         write(syncState, to: syncURL)
     }
 
+    func loadProgress() -> Ledger {
+        read(Ledger.self, from: progressURL) ?? Ledger()
+    }
+
+    func save(progress: Ledger) {
+        write(progress, to: progressURL)
+    }
+
+    private var progressURL: URL { root.appending(path: "progress.json") }
+
     private var syncURL: URL { root.appending(path: "sync.json") }
 
     /// Suburbs around your places, so the map can offer them without asking OpenStreetMap every launch.

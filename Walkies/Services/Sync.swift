@@ -7,6 +7,8 @@ nonisolated struct SyncState: Codable, Sendable {
     /// The change time of the copy of each city last sent.
     var uploadedPlaces: [UUID: Date] = [:]
     var uploadedSecrets: Set<String> = []
+    /// Canonical JSON of the last ledger accepted by the server. Optional for old saves.
+    var uploadedProgress: String?
 }
 
 /// Keeps this phone and the account in step. The phone is the source of truth and
@@ -121,6 +123,13 @@ final class SyncEngine {
             save()
         }
 
+        let progress = try progressJSON(model.ledger)
+        if state.uploadedProgress != progress {
+            let _: Nothing = try await client.mutation("sync:saveProgress", ["ledger": progress])
+            state.uploadedProgress = progress
+            save()
+        }
+
         let secrets = model.foundStickers.filter { !state.uploadedSecrets.contains($0.key) }
         if !secrets.isEmpty {
             let _: Nothing = try await client.mutation("sync:saveSecrets", [
@@ -167,12 +176,24 @@ final class SyncEngine {
             save()
         }
 
+        if let json = snapshot.progress {
+            let remote = try JSONDecoder().decode(Ledger.self, from: Data(json.utf8))
+            model.addRemoteProgress(remote)
+            state.uploadedProgress = try progressJSON(remote)
+        }
+
         model.addRemoteSecrets(Dictionary(
             snapshot.secrets.map { ($0.secretId, Date(ms: $0.foundAt)) },
             uniquingKeysWith: min
         ))
         state.uploadedSecrets.formUnion(snapshot.secrets.map(\.secretId))
         save()
+    }
+
+    private func progressJSON(_ ledger: Ledger) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return String(decoding: try encoder.encode(ledger), as: UTF8.self)
     }
 
     private func save() {
@@ -183,6 +204,7 @@ final class SyncEngine {
         waiting = model.walks.filter { $0.endedAt != nil && !state.uploadedWalks.contains($0.id) }.count
             + model.cities.filter { (state.uploadedPlaces[$0.id] ?? .distantPast) < $0.lastChanged }.count
             + model.foundStickers.keys.filter { !state.uploadedSecrets.contains($0) }.count
+            + ((try? progressJSON(model.ledger)) == state.uploadedProgress ? 0 : 1)
     }
 }
 
@@ -218,6 +240,7 @@ private nonisolated struct Snapshot: Decodable {
     var walks: [RemoteWalk]
     var places: [RemotePlace]
     var secrets: [RemoteSecret]
+    var progress: String?
 }
 
 nonisolated extension Date {

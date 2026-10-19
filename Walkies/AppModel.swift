@@ -76,6 +76,7 @@ final class AppModel {
     @ObservationIgnored private var startWhenAllowed = false
 
     init() {
+        ledger = store.loadProgress()
         cities = store.loadCities()
         alwaysOn = UserDefaults.standard.bool(forKey: "alwaysOn")
 
@@ -105,6 +106,7 @@ final class AppModel {
         foundStickers = store.loadStickers()
         placeStickers()
         refreshNeighbours()
+        refreshProgressPicks()
     }
 
     /// Cities saved before we kept road lines get them fetched again in the background.
@@ -166,6 +168,10 @@ final class AppModel {
         guard var walk = activeWalk else { return }
         tracker.stop()
         walk.endedAt = .now
+        let counts = freshTiles.countsByPlaceID
+        // A walk resumed after a restart may have fresh tiles from before launch.
+        // Leave counts nil then, so quest history replays its whole saved route.
+        walk.newTilesByPlace = counts.values.reduce(0, +) == walk.newTiles ? counts : nil
         let history = walks
         let fresh = freshTiles
         walks.append(walk)
@@ -176,6 +182,7 @@ final class AppModel {
         store.save(walk)
         store.save(cities)
         recap = WalkRecap.make(walk: walk, cities: cities, fresh: fresh, found: foundStickers, history: history)
+        refreshProgressPicks()
         requestSync?()
     }
 
@@ -337,6 +344,8 @@ final class AppModel {
         // Measure again by today's rules, so walks logged by older versions (or GPS
         // wobble at home) don't get kept as real ones. Tiles already uncovered stay.
         walk.distance = CoverageTracer.distance(for: walk.points)
+        let counts = fresh.countsByPlaceID
+        walk.newTilesByPlace = counts.values.reduce(0, +) == walk.newTiles ? counts : nil
         if !wasPending, byYou || walk.distance >= Self.minimumAutoWalk {
             let history = walks
             walks.append(walk)
@@ -348,6 +357,7 @@ final class AppModel {
             store.delete(walk)
         }
         store.save(cities)
+        refreshProgressPicks()
         requestSync?()
     }
 
@@ -401,7 +411,10 @@ final class AppModel {
     // MARK: Stickers
 
     /// When each sticker was found, by lore id.
-    private(set) var foundStickers: [String: Date] = [:]
+    private(set) var foundStickers: [String: Date] = [:] {
+        didSet { secretsRevision += 1 }
+    }
+    private var secretsRevision = 0
     /// Stickers just found, waiting to pop up.
     var stickerQueue: [LoreEntry] = []
 
@@ -457,6 +470,7 @@ final class AppModel {
         store.save(stickers: foundStickers)
         if popUp { stickerQueue.append(contentsOf: entries) }
         if notify { Notifier.stickersFound(entries) }
+        refreshProgressPicks()
         requestSync?()
     }
 
@@ -477,6 +491,7 @@ final class AppModel {
         placeStickers()
         tilesRevision += 1
         store.save(cities)
+        refreshProgressPicks()
         requestSync?()
         refreshNeighbours()
     }
@@ -491,6 +506,7 @@ final class AppModel {
         tilesRevision += 1
         placeStickers()
         store.save(cities)
+        refreshProgressPicks()
         requestSync?()
     }
 
@@ -588,6 +604,117 @@ final class AppModel {
         return points
     }
 
+    // MARK: Progression
+
+    private(set) var ledger = Ledger()
+    @ObservationIgnored private var cachedProgression: (key: String, state: Progression.State)?
+    @ObservationIgnored private var cachedQuestTiles: (key: String, counts: [UUID: [UUID: Int]])?
+
+    /// Coverage and history only change at the revisions below. The day/time-zone
+    /// key also lets the quest sheet roll over without a GPS fix or a new walk.
+    var progression: Progression.State {
+        let calendar = Calendar.current
+        let now = Date.now
+        let key = "\(tilesRevision)-\(cities.count)-\(walks.count)-\(secretsRevision)-\(calendar.identifier)-\(calendar.startOfDay(for: now))-\(calendar.timeZone.identifier)"
+        if let cachedProgression, cachedProgression.key == key { return cachedProgression.state }
+        var inputs = Progression.Inputs(cities: cities, walks: walks, foundSecrets: foundStickers, now: now, calendar: calendar)
+        // Legacy route replay doesn't depend on newly visited tiles. Keep it across
+        // GPS fixes, and redo it only for a new walk or a changed counting grid.
+        let historyKey = "\(walks.count)-\(cities.map { "\($0.id):\($0.tiles.count)" })"
+        if cachedQuestTiles?.key != historyKey {
+            cachedQuestTiles = (historyKey, Progression.placeTileCounts(inputs))
+        }
+        inputs.newTilesByWalk = cachedQuestTiles?.counts
+        let state = Progression.state(inputs)
+        cachedProgression = (key, state)
+        return state
+    }
+
+    var earnedBreakdown: Progression.Earned { progression.earned }
+    var balance: Int { ledger.balance(earned: progression.earned.total) }
+    var xp: Int { progression.xp }
+    var level: Int { progression.level }
+    var nextLevelXP: Int { progression.nextLevelXP }
+    var xpToNextLevel: Int { nextLevelXP - xp }
+    var pendingPicks: [Int] { Progression.pendingLevels(xp: xp, ledger: ledger) }
+    var weeklyQuests: [Progression.Quest] { progression.quests }
+    var owned: Set<String> { ledger.owned }
+    var equipped: Ledger.Equipped { ledger.resolvedEquipment }
+    var spyglasses: Int { ledger.spyglassesLeft }
+    /// Re-read on a timer while showing the map so the ring disappears at expiry.
+    var activeSpyglassRing: Progression.Ring? {
+        guard let city = selectedCity else { return nil }
+        return Progression.activeRing(in: city, ledger: ledger, found: foundStickers, now: .now)
+    }
+
+    func picks(for level: Int) -> [String] { ledger.picks(for: level) }
+
+    /// False means unknown item, already owned, or too few shells. Concurrent
+    /// offline spending is retained on merge; the resulting debt blocks purchases.
+    @discardableResult func buy(_ itemID: String) -> Bool {
+        guard let item = Progression.item(itemID), !item.isFree,
+              item.group == nil || !owned.contains(itemID), balance >= item.price else { return false }
+        ledger.purchases.append(Ledger.Purchase(item: itemID, cost: item.price, at: Date.now.timeIntervalSince1970))
+        if let group = item.group { setEquipped(itemID, group: group) }
+        saveProgress()
+        return true
+    }
+
+    @discardableResult func equip(_ itemID: String) -> Bool {
+        guard let group = Progression.item(itemID)?.group, owned.contains(itemID) else { return false }
+        setEquipped(itemID, group: group)
+        saveProgress()
+        return true
+    }
+
+    @discardableResult func claim(level: Int, choice: String) -> Bool {
+        guard pendingPicks.contains(level), picks(for: level).contains(choice) else { return false }
+        // A frozen offer may have been bought in the meantime. Give the bag
+        // instead of taking a level pick for something the player already owns.
+        let reward = owned.contains(choice) ? Progression.shellBag : choice
+        ledger.claims.append(Ledger.Claim(level: level, choice: reward))
+        if let group = Progression.item(reward)?.group { setEquipped(reward, group: group) }
+        saveProgress()
+        return true
+    }
+
+    @discardableResult func useSpyglass() -> Bool {
+        guard spyglasses > 0, let city = selectedCity, activeSpyglassRing == nil,
+              let use = Progression.spyglass(in: city, from: lastLocation.map { Coordinate($0.coordinate) }, found: foundStickers, now: .now)
+        else { return false }
+        ledger.spyglasses.append(use)
+        saveProgress()
+        return true
+    }
+
+    private func setEquipped(_ itemID: String, group: Progression.Group) {
+        ledger.equipped[group] = itemID
+        ledger.equipped.updatedAt = max(Date.now.timeIntervalSince1970, ledger.equipped.updatedAt.nextUp)
+    }
+
+    private func refreshProgressPicks() {
+        let old = ledger
+        ledger.preparePicks(xp: xp)
+        if ledger != old { saveProgress() }
+    }
+
+    private func saveProgress() {
+        ledger.preparePicks(xp: xp)
+        store.save(progress: ledger)
+        requestSync?()
+    }
+
+    /// The server accepted its first claim for a level. Give that copy precedence
+    /// so two offline choices converge when both phones next pull a snapshot.
+    func addRemoteProgress(_ remote: Ledger) {
+        let merged = remote.merged(with: ledger)
+        guard merged != ledger else { return }
+        ledger = merged
+        ledger.preparePicks(xp: xp)
+        store.save(progress: ledger)
+        requestSync?()
+    }
+
     // MARK: Sync
 
     /// Asks the sync engine to push and pull shortly. Set by the app delegate.
@@ -632,7 +759,10 @@ final class AppModel {
             foundStickers[id] = date
             changed = true
         }
-        if changed { store.save(stickers: foundStickers) }
+        if changed {
+            store.save(stickers: foundStickers)
+            refreshProgressPicks()
+        }
     }
 
     /// Runs walks over the cities again, quietly unlocking any secrets they pass.
@@ -648,6 +778,7 @@ final class AppModel {
         }
         tilesRevision += 1
         store.save(cities)
+        refreshProgressPicks()
     }
 
     /// Forgets everything on this phone, for signing out. It's all in the account.
@@ -663,6 +794,9 @@ final class AppModel {
         walks = []
         shapes = [:]
         foundStickers = [:]
+        ledger = Ledger()
+        cachedProgression = nil
+        cachedQuestTiles = nil
         stickerQueue = []
         nearby = []
         selectedCityID = nil
@@ -675,5 +809,11 @@ final class AppModel {
         let shape = city.shape()
         shapes[city.id] = shape
         return shape
+    }
+}
+
+private extension Dictionary where Key == UUID, Value == Set<Hex> {
+    var countsByPlaceID: [String: Int] {
+        Dictionary<String, Int>(uniqueKeysWithValues: map { ($0.key.uuidString, $0.value.count) })
     }
 }

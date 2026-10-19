@@ -3,6 +3,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { vAppleProfile } from "@convex-dev/auth/methods/apple/server";
 import { vGoogleProfile } from "@convex-dev/auth/methods/google/server";
 import { internalMutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { mergeLedgers, parseLedger } from "./progression";
 import type { Id } from "./_generated/dataModel";
 
 const vApple = v.object({ name: v.literal("apple"), accountId: v.string(), profile: vAppleProfile });
@@ -140,6 +141,16 @@ export const mergeDuplicateUsers = internalMutation({
 
 /** Hands one user's walks, places and secrets to another, skipping any they already have. */
 async function moveData(ctx: MutationCtx, from: Id<"users">, to: Id<"users">) {
+  const progress = await ctx.db.query("progress").withIndex("by_user", (q) => q.eq("userId", from)).unique();
+  if (progress !== null) {
+    const keep = await ctx.db.query("progress").withIndex("by_user", (q) => q.eq("userId", to)).unique();
+    if (keep === null) await ctx.db.patch("progress", progress._id, { userId: to });
+    else {
+      const ledger = mergeLedgers(parseLedger(keep.ledger), parseLedger(progress.ledger));
+      await ctx.db.patch("progress", keep._id, { ledger: JSON.stringify(ledger), updatedAt: Math.max(keep.updatedAt, progress.updatedAt) });
+      await ctx.db.delete("progress", progress._id);
+    }
+  }
   for (const walk of await ctx.db.query("walks").withIndex("by_user_client", (q) => q.eq("userId", from)).collect()) {
     const has = await ctx.db.query("walks").withIndex("by_user_client", (q) => q.eq("userId", to).eq("clientId", walk.clientId)).unique();
     if (has === null) await ctx.db.patch("walks", walk._id, { userId: to });

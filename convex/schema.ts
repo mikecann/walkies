@@ -42,6 +42,13 @@ export default defineSchema({
     file: v.id("_storage"),
   }).index("by_user_client", ["userId", "clientId"]),
 
+  progress: defineTable({
+    userId: v.id("users"),
+    /** The append-only spending and reward ledger, encoded by the phone. */
+    ledger: v.string(),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"]),
+
   secrets: defineTable({
     userId: v.id("users"),
     secretId: v.string(),

@@ -51,6 +51,12 @@ nonisolated struct WalkRecap: Identifiable, Sendable {
     var before: [City]
     var after: [City]
 
+    /// Computed with the recap, so the animation never recalculates rewards.
+    var earnings = Progression.WalkEarnings()
+    var shells: Int { earnings.shells }
+    var xp: Int { earnings.xp }
+    var questProgress: [Progression.QuestGain] { earnings.quests }
+
     var newTiles: Int { reveals.count }
 
     /// - Parameters:
@@ -104,11 +110,20 @@ nonisolated struct WalkRecap: Identifiable, Sendable {
         }.sorted { $0.newTiles > $1.newTiles }
 
         let finished = history.filter { $0.endedAt != nil && $0.id != walk.id }
+        var beforeCities = cities
+        for i in beforeCities.indices { beforeCities[i].visited.subtract(fresh[beforeCities[i].id] ?? []) }
+        let beforeFound = found.filter { $0.value < walk.startedAt }
+        let afterFound = found.filter { $0.value <= end }
+        let rewardDate = walk.endedAt ?? now
+        let earnings = Progression.walkEarnings(
+            before: Progression.Inputs(cities: beforeCities, walks: finished, foundSecrets: beforeFound, now: rewardDate),
+            after: Progression.Inputs(cities: cities, walks: finished + [walk], foundSecrets: afterFound, now: rewardDate)
+        )
         return WalkRecap(
             walk: walk, route: route, reveals: reveals, secrets: secrets, places: places,
             prediction: prediction(for: places.first, walk: walk, history: finished, now: now),
             isBest: !finished.isEmpty && reveals.count > (finished.map(\.newTiles).max() ?? 0),
-            before: before, after: touched
+            before: before, after: touched, earnings: earnings
         )
     }
 

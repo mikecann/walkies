@@ -40,6 +40,8 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
     var points: [TrackPoint] = []
     var distance: Double = 0
     var newTiles = 0
+    /// Counting tiles first uncovered on this walk, by place UUID. Nil on older saves.
+    var newTilesByPlace: [String: Int]?
     /// Recorded by always-on mode rather than started with the button. Optional so
     /// walks saved before always-on existed still load.
     var automatic: Bool?
