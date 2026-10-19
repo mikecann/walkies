@@ -76,6 +76,7 @@ struct MapFocusRequest: Equatable {
 /// tiles uncovered this walk. Zoomed out, the suburbs next door are outlined too, each
 /// with a button to add it. The clouds are drawn over the top by `CloudLayer`.
 struct FogMapView: UIViewRepresentable {
+    @Environment(AppModel.self) private var model
     var cities: [City]
     /// The place the map flies to when `flyID` changes.
     var selectedID: UUID?
@@ -121,7 +122,8 @@ struct FogMapView: UIViewRepresentable {
         private var fresh: [UUID: Set<Hex>] = [:]
         private var revision = -1
         private var focusID = -1
-        private var pathCount = -1
+        private var route: [Coordinate] = []
+        private var trail = "trail.teal"
         private var hasShownUser = false
         /// Waiting for a GPS fix to open the map on.
         private var arriving = false
@@ -183,9 +185,12 @@ struct FogMapView: UIViewRepresentable {
                 showNeighbours(on: map, force: true)
             }
 
-            if view.path.count != pathCount {
-                pathCount = view.path.count
-                drawPath(view.path, on: map)
+            let equippedTrail = view.model.equipped[.trail]
+            if view.path != route || equippedTrail != trail {
+                route = view.path
+                trail = equippedTrail
+                handle?.route = route.map { MKMapPoint($0.cl) }
+                drawPath(route, on: map)
             }
 
             if view.focus.id != focusID {
@@ -295,7 +300,8 @@ struct FogMapView: UIViewRepresentable {
         private func drawPath(_ path: [Coordinate], on map: MKMapView) {
             if let line { map.removeOverlay(line) }
             line = nil
-            guard path.count > 1 else { return }
+            // These styles are drawn by the cloud Canvas, at a fixed size in screen points.
+            guard path.count > 1, trail != "trail.footprints", trail != "trail.rainbow" else { return }
             var coords = path.map(\.cl)
             let newLine = MKPolyline(coordinates: &coords, count: coords.count)
             line = newLine

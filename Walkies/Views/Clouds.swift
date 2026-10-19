@@ -158,6 +158,8 @@ final class MapHandle {
     /// True while the map is being dragged, pinched or flown somewhere, so the
     /// clouds redraw every frame and keep up with it.
     var moving = false
+    /// Projected by the Canvas for the equipped decorative trail.
+    @ObservationIgnored var route: [MKMapPoint] = []
     /// True while your finger's moving the map, for the colour-coded honeycomb.
     var dragging = false {
         didSet { if dragging != oldValue { draggingChangedAt = .now } }
@@ -185,6 +187,7 @@ struct CloudLayer: View {
     /// Tiles uncovered on this walk, for the honeycomb.
     var walkTiles: Set<CloudField.Tile> = []
 
+    @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var shown: (key: String, field: CloudField)?
     /// Clouds over tiles that have just cleared, fading out as they drift apart.
@@ -201,10 +204,13 @@ struct CloudLayer: View {
                 let clock = reduceMotion ? 0 : now.timeIntervalSinceReferenceDate
                 let reveal = min(1, now.timeIntervalSince(changedAt) / Self.revealTime)
                 let projection = Projection(map: map)
+                let bounds = CGRect(origin: .zero, size: size)
+                CosmeticTrail(points: handle.route, style: model.equipped[.trail], projection: projection, bounds: bounds, clock: clock)
+                    .draw(in: &context)
                 CloudPainter(
                     field: field, leaving: reveal < 1 ? leaving : [], reveal: reveal,
                     fresh: Set(leaving.map(\.tile)), projection: projection,
-                    bounds: CGRect(origin: .zero, size: size), clock: clock
+                    bounds: bounds, clock: clock, theme: model.equipped[.clouds]
                 )
                 .draw(in: &context)
                 let honeycomb = handle.honeycomb(at: now)
@@ -212,8 +218,12 @@ struct CloudLayer: View {
                     Honeycomb(field: field, walkTiles: walkTiles, projection: projection, bounds: CGRect(origin: .zero, size: size))
                         .draw(in: &context, opacity: honeycomb)
                 }
+                // Read inside the timeline so a ring expires even while the map is idle.
+                if let ring = model.activeSpyglassRing {
+                    SpyglassRing(ring: ring, projection: projection).draw(in: &context)
+                }
                 if let location = map.userLocation.location {
-                    YouAreHere(location: location, projection: projection, clock: clock).draw(in: &context)
+                    YouAreHere(marker: model.equipped[.marker], location: location, projection: projection, clock: clock).draw(in: &context)
                 }
             }
         }
@@ -421,11 +431,13 @@ private struct Honeycomb {
 /// Where you are: an orange dot in a white ring with a slow pulse, like the walk's
 /// route line, drawn over the clouds.
 private struct YouAreHere {
+    var marker = "marker.dot"
     let location: CLLocation
     let projection: Projection
     let clock: Double
 
     func draw(in context: inout GraphicsContext) {
+        guard projection.isInFront(MKMapPoint(location.coordinate)) else { return }
         let centre = projection.point(MKMapPoint(location.coordinate))
         let orange = Color.walkiesOrange
 
@@ -448,7 +460,137 @@ private struct YouAreHere {
         var dot = context
         dot.addFilter(.shadow(color: .black.opacity(0.3), radius: 4, y: 2))
         dot.fill(Path(ellipseIn: CGRect(x: centre.x - 11, y: centre.y - 11, width: 22, height: 22)), with: .color(.white))
+        if let asset = CosmeticArt.marker(marker) {
+            var art = context
+            art.addFilter(.shadow(color: .black.opacity(0.25), radius: 3, y: 2))
+            let image = art.resolve(Image(asset))
+            let scale = 34 / max(image.size.width, image.size.height)
+            let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            art.draw(image, in: CGRect(x: centre.x - size.width / 2, y: centre.y - size.height / 2 - 3, width: size.width, height: size.height))
+            return
+        }
         context.fill(Path(ellipseIn: CGRect(x: centre.x - 7.5, y: centre.y - 7.5, width: 15, height: 15)), with: .color(orange))
+    }
+}
+
+/// Decorative routes share the cloud projection, keeping stamps a fixed size on
+/// screen and allowing the existing 30 Hz timeline to twinkle the sparkles.
+private struct CosmeticTrail {
+    let points: [MKMapPoint]
+    let style: String
+    let projection: Projection
+    let bounds: CGRect
+    let clock: Double
+
+    func draw(in context: inout GraphicsContext) {
+        guard style == "trail.footprints" || style == "trail.sparkles" || style == "trail.rainbow", points.count > 1 else { return }
+        let visible = bounds.insetBy(dx: -16, dy: -16)
+        var runs: [[CGPoint]] = []
+        var run: [CGPoint] = []
+        for i in points.indices.dropFirst() {
+            guard let (a, b) = projection.segment(points[i - 1], points[i]) else {
+                if !run.isEmpty { runs.append(run); run = [] }
+                continue
+            }
+            if run.last != a {
+                if !run.isEmpty { runs.append(run) }
+                run = [a]
+            }
+            run.append(b)
+        }
+        if !run.isEmpty { runs.append(run) }
+
+        if style == "trail.rainbow" {
+            var path = Path()
+            for run in runs {
+                for i in run.indices.dropFirst() {
+                    let a = run[i - 1], b = run[i]
+                    guard let range = TrailLayout.visibleRange(from: a, to: b, in: visible) else { continue }
+                    func at(_ t: Double) -> CGPoint { CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t) }
+                    let start = at(range.lowerBound)
+                    if path.currentPoint != start { path.move(to: start) }
+                    path.addLine(to: at(range.upperBound))
+                }
+            }
+            // One gradient stroke keeps even a long route cheap to paint. Use its
+            // longest screen axis so a north/south or diagonal walk gets every colour.
+            let extent = path.boundingRect
+            guard !extent.isNull, max(extent.width, extent.height) > 0 else { return }
+            let horizontal = extent.width >= extent.height
+            context.stroke(path, with: .linearGradient(
+                Gradient(colors: [.red, .orange, .yellow, .green, .cyan, .blue, .purple]),
+                startPoint: CGPoint(x: extent.minX, y: extent.minY),
+                endPoint: horizontal ? CGPoint(x: extent.maxX, y: extent.minY) : CGPoint(x: extent.minX, y: extent.maxY)
+            ), style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+            return
+        }
+
+        let footprint = context.resolve(Image("progress-footprint"))
+        for run in runs {
+            let stamps = TrailLayout.stamps(along: run, spacing: style == "trail.footprints" ? 12 : 26, in: visible)
+            for stamp in stamps {
+                var mark = context
+                mark.translateBy(x: stamp.point.x, y: stamp.point.y)
+                mark.rotate(by: .radians(stamp.angle))
+                if style == "trail.footprints" {
+                    mark.translateBy(x: 0, y: stamp.isLeft ? -2.5 : 2.5)
+                    // The toes in the asset point up. Turn them forwards, then mirror
+                    // alternate prints to make a left and right foot.
+                    mark.rotate(by: .degrees(90))
+                    if !stamp.isLeft { mark.scaleBy(x: -1, y: 1) }
+                    mark.draw(footprint, in: CGRect(x: -3.5, y: -5, width: 7, height: 10))
+                } else {
+                    let twinkle = 0.5 + 0.5 * sin(clock * 2.4 + Double(stamp.index) * 2.399)
+                    let radius = 2 + twinkle * 1.8
+                    var star = Path()
+                    star.addLines([
+                        CGPoint(x: 0, y: -radius), CGPoint(x: radius * 0.3, y: -radius * 0.3),
+                        CGPoint(x: radius, y: 0), CGPoint(x: radius * 0.3, y: radius * 0.3),
+                        CGPoint(x: 0, y: radius), CGPoint(x: -radius * 0.3, y: radius * 0.3),
+                        CGPoint(x: -radius, y: 0), CGPoint(x: -radius * 0.3, y: -radius * 0.3)
+                    ])
+                    star.closeSubpath()
+                    mark.fill(star, with: .color(Color(red: 1, green: 0.81, blue: 0.25).opacity(0.5 + twinkle * 0.5)))
+                }
+            }
+        }
+    }
+}
+
+private struct SpyglassRing {
+    let ring: Progression.Ring
+    let projection: Projection
+
+    func draw(in context: inout GraphicsContext) {
+        let centre = MKMapPoint(ring.centre.cl)
+        let radius = ring.radius * MKMapPointsPerMeterAtLatitude(ring.centre.lat)
+        // Project the circumference itself so camera heading and perspective both
+        // affect the ground ring, rather than drawing an axis-aligned screen oval.
+        let circle = (0..<96).map { i in
+            let angle = Double(i) / 96 * 2 * .pi
+            return MKMapPoint(x: centre.x + cos(angle) * radius, y: centre.y + sin(angle) * radius)
+        }
+        let gold = Color(red: 1, green: 0.79, blue: 0.3)
+        let polygon = projection.polygon(circle)
+        guard polygon.count > 2 else { return }
+        var fill = Path()
+        fill.addLines(polygon)
+        fill.closeSubpath()
+        context.fill(fill, with: .color(gold.opacity(0.09)))
+        var edge = Path()
+        for i in circle.indices {
+            guard let (a, b) = projection.segment(circle[i], circle[(i + 1) % circle.count]) else { continue }
+            if edge.currentPoint != a { edge.move(to: a) }
+            edge.addLine(to: b)
+        }
+        var glow = context
+        glow.addFilter(.shadow(color: gold.opacity(0.5), radius: 4))
+        glow.stroke(edge, with: .color(gold.opacity(0.85)), style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [6, 6]))
+        let anchor = circle[12]
+        if projection.isInFront(anchor) {
+            let point = projection.point(anchor)
+            glow.draw(Image("progress-spyglass"), in: CGRect(x: point.x - 12, y: point.y - 12, width: 24, height: 24))
+        }
     }
 }
 
@@ -461,9 +603,10 @@ private struct CloudPainter {
     let projection: Projection
     let bounds: CGRect
     let clock: Double
+    let theme: String
 
     func draw(in context: inout GraphicsContext) {
-        let sprites = CloudSprites.shared
+        let sprites = CloudSprites.sprites(for: theme)
         let visible = bounds.insetBy(dx: -bounds.width * 0.2, dy: -bounds.height * 0.2)
         let ease = 1 - pow(1 - reveal, 3)
 
@@ -533,7 +676,7 @@ private struct CloudPainter {
     /// Screen points per map point mid-screen, worked out once a frame.
     private let centreScale: Double
 
-    init(field: CloudField, leaving: [CloudField.Puff], reveal: Double, fresh: Set<CloudField.Tile>, projection: Projection, bounds: CGRect, clock: Double) {
+    init(field: CloudField, leaving: [CloudField.Puff], reveal: Double, fresh: Set<CloudField.Tile>, projection: Projection, bounds: CGRect, clock: Double, theme: String) {
         self.field = field
         self.leaving = leaving
         self.reveal = reveal
@@ -541,6 +684,7 @@ private struct CloudPainter {
         self.projection = projection
         self.bounds = bounds
         self.clock = clock
+        self.theme = theme
         centreScale = projection.centreScale
     }
 
@@ -626,27 +770,56 @@ private struct CloudPainter {
 /// north-west. Also a blurred silhouette of each for its shadow, and a soft eraser.
 nonisolated final class CloudSprites: @unchecked Sendable {
     static let count = 8
-    static let shared = CloudSprites()
+    private final class Cache: @unchecked Sendable {
+        let lock = NSLock()
+        var themes: [String: CloudSprites] = [:]
+    }
+    private static let cache = Cache()
+
+    static func sprites(for theme: String) -> CloudSprites {
+        let key = ["clouds.sunset", "clouds.storm", "clouds.cottoncandy"].contains(theme) ? theme : "clouds.classic"
+        cache.lock.lock()
+        defer { cache.lock.unlock() }
+        if let sprites = cache.themes[key] { return sprites }
+        let sprites = CloudSprites(theme: key)
+        cache.themes[key] = sprites
+        return sprites
+    }
 
     let bases: [CGImage]
     let tops: [CGImage]
     let shadows: [CGImage]
     let eraser: CGImage
 
-    private init() {
+    private init(theme: String) {
+        let palette = Self.palette(theme)
         var bases: [CGImage] = []
         var tops: [CGImage] = []
         var shadows: [CGImage] = []
         for i in 0..<Self.count {
             let circles = Self.circles(seed: UInt64(i + 1))
-            bases.append(Self.base(circles, size: 384))
-            tops.append(Self.top(circles, size: 384))
+            bases.append(Self.base(circles, size: 384, shade: palette.underside))
+            tops.append(Self.top(circles, size: 384, centre: i.isMultiple(of: 2) ? palette.top : palette.alternate, edge: palette.edge))
             shadows.append(Self.shadow(circles, size: 160))
         }
         self.bases = bases
         self.tops = tops
         self.shadows = shadows
         eraser = Self.eraser(size: 128)
+    }
+
+    private static func palette(_ theme: String) -> (top: CGColor, alternate: CGColor, edge: CGColor, underside: CGColor) {
+        func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> CGColor { CGColor(red: r, green: g, blue: b, alpha: 1) }
+        switch theme {
+        case "clouds.sunset":
+            return (rgb(1, 0.86, 0.74), rgb(1, 0.78, 0.84), rgb(0.96, 0.73, 0.8), rgb(0.66, 0.57, 0.79))
+        case "clouds.storm":
+            return (rgb(0.69, 0.75, 0.83), rgb(0.69, 0.75, 0.83), rgb(0.54, 0.62, 0.73), rgb(0.32, 0.39, 0.51))
+        case "clouds.cottoncandy":
+            return (rgb(1, 0.82, 0.92), rgb(0.78, 0.9, 1), rgb(0.84, 0.79, 0.94), rgb(0.65, 0.68, 0.85))
+        default:
+            return (rgb(1, 1, 1), rgb(1, 1, 1), rgb(0.93, 0.945, 0.97), rgb(0.76, 0.8, 0.87))
+        }
     }
 
     /// Circles as (x, y, radius) in a -1...1 square with y up.
@@ -662,22 +835,20 @@ nonisolated final class CloudSprites: @unchecked Sendable {
         return out
     }
 
-    private static func base(_ circles: [SIMD3<Double>], size: Int) -> CGImage {
+    private static func base(_ circles: [SIMD3<Double>], size: Int, shade: CGColor) -> CGImage {
         let context = bitmap(size)
         let s = Double(size)
-        let shade = CGColor(red: 0.76, green: 0.8, blue: 0.87, alpha: 1)
         fill(circles, in: context, size: s, scale: 1, shift: SIMD2(0, 0), colours: [shade, shade, shade.copy(alpha: 0)!], hardness: 0.65)
         return blur(context.makeImage()!, sigma: s * 0.01)
     }
 
     /// A touch greyer towards the edge, so overlapping tops leave faint billows.
-    private static func top(_ circles: [SIMD3<Double>], size: Int) -> CGImage {
+    private static func top(_ circles: [SIMD3<Double>], size: Int, centre: CGColor, edge: CGColor) -> CGImage {
         let context = bitmap(size)
         let s = Double(size)
-        let edge = CGColor(red: 0.93, green: 0.945, blue: 0.97, alpha: 1)
         fill(
             circles, in: context, size: s, scale: 0.84, shift: SIMD2(-0.05, 0.06),
-            colours: [CGColor(gray: 1, alpha: 1), edge, edge.copy(alpha: 0)!], hardness: 0.5
+            colours: [centre, edge, edge.copy(alpha: 0)!], hardness: 0.5
         )
         return blur(context.makeImage()!, sigma: s * 0.01)
     }

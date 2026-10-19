@@ -85,7 +85,7 @@ struct StickerBookView: View {
                             .foregroundStyle(.secondary)
                     }
                     .padding(20)
-                    .stickerCard(in: RoundedRectangle(cornerRadius: 24))
+                    .modifier(SecretsCover(equipped: model.equipped[.cover]))
 
                     ForEach(areas.prefix(visibleCount)) { area in
                         areaSection(area)
