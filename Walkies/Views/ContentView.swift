@@ -116,8 +116,12 @@ struct ContentView: View {
                 }
         }
         .sensoryFeedback(.success, trigger: model.stickerQueue.count) { old, new in new > old }
-        .sheet(item: $model.finishedWalk) { walk in
-            WalkSummaryView(walk: walk, city: model.selectedCity)
+        .fullScreenCover(item: $model.recap) { recap in
+            CelebrationView(
+                recap: recap,
+                others: model.cities.filter { city in !recap.after.contains { $0.id == city.id } },
+                tilted: model.tilted3D
+            )
         }
         .sensoryFeedback(.success, trigger: model.revealCount)
         .onChange(of: scenePhase) { _, phase in
@@ -266,14 +270,10 @@ struct WalkControls: View {
                     Stat(value: Format.distance(walk.distance), label: "Distance")
                     Stat(value: "\(walk.newTiles)", label: "New tiles", tint: .walkiesOrange)
                 }
-                if walk.isAutomatic {
-                    Label("Recording this walk automatically", systemImage: "location.fill")
-                        .font(.footnote)
-                        .foregroundStyle(Color.ink.opacity(0.6))
-                } else {
-                    Button("End walk") { model.endWalk() }
-                        .buttonStyle(StickerButtonStyle())
+                Button("End walk") {
+                    walk.isAutomatic ? model.endAutoWalk() : model.endWalk()
                 }
+                .buttonStyle(StickerButtonStyle())
             }
             .padding(14)
             .stickerCard(in: .rect(cornerRadius: 26))

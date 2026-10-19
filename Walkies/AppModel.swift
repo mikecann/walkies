@@ -24,8 +24,8 @@ final class AppModel {
     private(set) var tilesRevision = 0
     /// Bumps for every newly uncovered tile, to drive haptics.
     private(set) var revealCount = 0
-    /// Set when a walk ends, to show the summary.
-    var finishedWalk: Walk?
+    /// Set when a walk ends, to play the celebration.
+    var recap: WalkRecap?
     /// Tilted, isometric-style map with Apple's 3D buildings and trees. On unless
     /// you turn it off. (A new key, so phones that had the old flat default get it too.)
     var tilted3D = UserDefaults.standard.object(forKey: "map3D") as? Bool ?? true {
@@ -163,6 +163,8 @@ final class AppModel {
         guard var walk = activeWalk else { return }
         tracker.stop()
         walk.endedAt = .now
+        let history = walks
+        let fresh = freshTiles
         walks.append(walk)
         activeWalk = nil
         activePath = []
@@ -170,8 +172,31 @@ final class AppModel {
         tilesRevision += 1
         store.save(walk)
         store.save(cities)
-        finishedWalk = walk
+        recap = WalkRecap.make(walk: walk, cities: cities, fresh: fresh, found: foundStickers, history: history)
         requestSync?()
+    }
+
+    /// Plays an old walk's celebration again, from walk history. Which tiles were new
+    /// on it is worked out again: the tiles under its route that no earlier walk crossed.
+    func replay(_ walk: Walk) {
+        let earlier = walks.filter { $0.id != walk.id && $0.startedAt < walk.startedAt }
+        var fresh: [UUID: Set<Hex>] = [:]
+        var before = cities
+        for i in before.indices {
+            var city = before[i]
+            city.visited = []
+            let shape = shape(for: city)
+            for old in earlier { _ = city.visit(CoverageTracer.samples(for: old.points), within: shape) }
+            let new = city.visit(CoverageTracer.samples(for: walk.points), within: shape)
+            if !new.isEmpty { fresh[city.id] = new }
+            before[i] = city
+        }
+        recap = WalkRecap.make(walk: walk, cities: before, fresh: fresh, found: foundStickers, history: earlier)
+    }
+
+    /// The End walk button on an always-on walk: ends it now and plays the celebration.
+    func endAutoWalk() {
+        finishAutoWalk(byYou: true)
     }
 
     func saveNow() {
@@ -290,22 +315,29 @@ final class AppModel {
         finishAutoWalk()
     }
 
-    private func finishAutoWalk() {
+    /// - Parameter byYou: you pressed End walk, so it ends now and is kept however short.
+    ///   Otherwise it ended by itself, at its last fix, and only counts if it's long enough.
+    private func finishAutoWalk(byYou: Bool = false) {
         guard var walk = activeWalk, walk.isAutomatic else { return }
         let wasPending = autoWalkPending
+        let fresh = freshTiles
         autoWalkPending = false
         activeWalk = nil
         activePath = []
         freshTiles = [:]
         tracer = CoverageTracer()
         tilesRevision += 1
-        walk.endedAt = walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt
+        walk.endedAt = byYou ? .now : walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt
         // Measure again by today's rules, so walks logged by older versions (or GPS
         // wobble at home) don't get kept as real ones. Tiles already uncovered stay.
         walk.distance = CoverageTracer.distance(for: walk.points)
-        if !wasPending, walk.distance >= Self.minimumAutoWalk {
+        if !wasPending, byYou || walk.distance >= Self.minimumAutoWalk {
+            let history = walks
             walks.append(walk)
             store.save(walk)
+            // If it ended by itself while the phone was in your pocket, this plays the
+            // next time you open the app.
+            recap = WalkRecap.make(walk: walk, cities: cities, fresh: fresh, found: foundStickers, history: history)
         } else {
             store.delete(walk)
         }
@@ -329,7 +361,7 @@ final class AppModel {
         // Hand over from a walk you started yourself, without the summary popping up.
         if activeWalk != nil {
             endWalk()
-            finishedWalk = nil
+            recap = nil
         }
         tracer = CoverageTracer()
         if !tracker.hasAlwaysPermission {
@@ -620,7 +652,7 @@ final class AppModel {
         activeWalk = nil
         activePath = []
         freshTiles = [:]
-        finishedWalk = nil
+        recap = nil
         cities = []
         walks = []
         shapes = [:]

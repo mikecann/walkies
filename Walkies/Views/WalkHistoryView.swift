@@ -224,7 +224,13 @@ struct WalkDetailView: View {
                 .padding(20)
                 .stickerCard(in: RoundedRectangle(cornerRadius: 24))
 
-                // Replay this walk: add the replay button here when playback is ready.
+                Button {
+                    model.replay(walk)
+                } label: {
+                    Label("Watch this walk again", systemImage: "play.fill")
+                        .font(.headline)
+                }
+                .buttonStyle(StickerButtonStyle())
 
                 if !secrets.isEmpty {
                     VStack(alignment: .leading, spacing: 16) {
@@ -256,6 +262,13 @@ struct WalkDetailView: View {
         .foregroundStyle(Color.ink)
         .navigationTitle("Your walk")
         .navigationBarTitleDisplayMode(.inline)
+        .fullScreenCover(item: Binding(get: { model.recap }, set: { model.recap = $0 })) { recap in
+            CelebrationView(
+                recap: recap,
+                others: model.cities.filter { city in !recap.after.contains { $0.id == city.id } },
+                tilted: model.tilted3D
+            )
+        }
         .sheet(item: $open) { entry in
             LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id])
         }
