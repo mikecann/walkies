@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@convex-dev/auth": "2.0.0-beta.0",
+    "@convex-dev/feedback": "file:vendor/convex-dev-feedback-0.0.1.tgz",
     "convex": "1.47.0"
   },
   "devDependencies": {
