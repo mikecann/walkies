@@ -33,6 +33,24 @@ nonisolated struct CloudField: Sendable {
         var kind: RoadLine.Kind
     }
 
+    /// A tile for the colour-coded honeycomb that shows while you drag the map.
+    struct Outline: Sendable {
+        enum Kind: Sendable {
+            /// Walked.
+            case visited
+            /// No street or path, cleared because you walked beside it.
+            case cleared
+            /// Has a street or path, not walked yet.
+            case open
+            /// No street or path, still under cloud.
+            case blocked
+        }
+        var tile: Tile
+        var kind: Kind
+        var centre: MKMapPoint
+        var corners: [MKMapPoint]
+    }
+
     /// Cloud sprite radius as a multiple of the hex size.
     static let spread = 1.6
     /// Radius of the soft hole cut over each walked hex, as a multiple of the hex size.
@@ -53,6 +71,7 @@ nonisolated struct CloudField: Sendable {
     /// The edges of the tiles under cloud, drawn as a faint dashed grid. Each edge
     /// once, as a pair of points, so shared edges don't double up their dashes.
     var gridEdges: [MKMapPoint] = []
+    var outlines: [Outline] = []
 
     init() {}
 
@@ -64,10 +83,15 @@ nonisolated struct CloudField: Sendable {
         places = cities.map(\.id)
         var clouded = Set<Tile>()
         var clear = Set<Tile>()
+        var kinds: [Tile: Outline.Kind] = [:]
         for city in cities {
             let cover = city.cloudCover()
             clouded.formUnion(cover.clouded.map { Tile(grid: city.grid, hex: $0) })
             clear.formUnion(cover.clear.map { Tile(grid: city.grid, hex: $0) })
+            for hex in cover.blocked { kinds[Tile(grid: city.grid, hex: hex)] = kinds[Tile(grid: city.grid, hex: hex)] ?? .blocked }
+            for hex in city.tiles.subtracting(city.visited) { kinds[Tile(grid: city.grid, hex: hex)] = .open }
+            for hex in cover.clear.subtracting(city.visited) { kinds[Tile(grid: city.grid, hex: hex)] = .cleared }
+            for hex in city.visited { kinds[Tile(grid: city.grid, hex: hex)] = .visited }
         }
         // A border tile walked in one place is walked in the other too.
         clouded.subtract(clear)
@@ -101,6 +125,13 @@ nonisolated struct CloudField: Sendable {
         lines = roads.map { Line(points: $0.points.map { MKMapPoint($0.cl) }, kind: $0.kind) }
         outline = cities.flatMap { $0.boundary.polygons.map { $0.outer.map { MKMapPoint($0.cl) } } }
 
+        outlines = kinds.map { tile, kind in
+            Outline(
+                tile: tile, kind: kind, centre: centre(of: tile),
+                corners: tile.grid.corners(of: tile.hex).map { MKMapPoint($0.cl) }
+            )
+        }
+
         // Edge i runs between corners i and i + 1 and faces this neighbour.
         let facing: [(Int32, Int32)] = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)]
         for tile in clouded {
@@ -127,6 +158,19 @@ final class MapHandle {
     /// True while the map is being dragged, pinched or flown somewhere, so the
     /// clouds redraw every frame and keep up with it.
     var moving = false
+    /// True while your finger's moving the map, for the colour-coded honeycomb.
+    var dragging = false {
+        didSet { if dragging != oldValue { draggingChangedAt = .now } }
+    }
+    @ObservationIgnored var draggingChangedAt = Date.distantPast
+
+    /// How much of the honeycomb to show: fades in as you drag and out after.
+    func honeycomb(at date: Date) -> Double {
+        // `-alwaysHoneycomb YES` keeps it showing, for checking it in the simulator.
+        if UserDefaults.standard.bool(forKey: "alwaysHoneycomb") { return 1 }
+        let since = date.timeIntervalSince(draggingChangedAt)
+        return dragging ? min(1, since / 0.15) : max(0, 1 - since / 0.6)
+    }
 }
 
 /// The clouds, drawn on top of the map about 30 times a second so they can drift
@@ -138,6 +182,8 @@ struct CloudLayer: View {
     /// Changes whenever the field does, to spot tiles that have just cleared.
     let key: String
     let handle: MapHandle
+    /// Tiles uncovered on this walk, for the honeycomb.
+    var walkTiles: Set<CloudField.Tile> = []
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var shown: (key: String, field: CloudField)?
@@ -161,6 +207,11 @@ struct CloudLayer: View {
                     bounds: CGRect(origin: .zero, size: size), clock: clock
                 )
                 .draw(in: &context)
+                let honeycomb = handle.honeycomb(at: now)
+                if honeycomb > 0 {
+                    Honeycomb(field: field, walkTiles: walkTiles, projection: projection, bounds: CGRect(origin: .zero, size: size))
+                        .draw(in: &context, opacity: honeycomb)
+                }
                 if let location = map.userLocation.location {
                     YouAreHere(location: location, projection: projection, clock: clock).draw(in: &context)
                 }
@@ -316,6 +367,54 @@ private struct Projection {
             }
         }
         return (0..<8).map { m[$0][8] / m[$0][$0] }
+    }
+}
+
+/// The colour-coded tiles that show while you drag the map: green where you've
+/// walked, orange where you walked this time, white outlines still to walk, and grey
+/// where there's no street or path (those clear when you walk beside them).
+private struct Honeycomb {
+    let field: CloudField
+    let walkTiles: Set<CloudField.Tile>
+    let projection: Projection
+    let bounds: CGRect
+
+    static let green = Color(red: 0.36, green: 0.72, blue: 0.4)
+    static let grey = Color(red: 0.35, green: 0.37, blue: 0.42)
+
+    func draw(in context: inout GraphicsContext, opacity: Double) {
+        let near = bounds.insetBy(dx: -60, dy: -60)
+        var paths: [Int: Path] = [:]
+        for outline in field.outlines {
+            let c = projection.point(outline.centre)
+            guard near.contains(c), projection.isInFront(outline.centre) else { continue }
+            let kind = walkTiles.contains(outline.tile) ? 4 : Self.index(outline.kind)
+            var path = paths[kind] ?? Path()
+            path.addLines(outline.corners.map(projection.point))
+            path.closeSubpath()
+            paths[kind] = path
+        }
+        let styles: [(fill: Color, fillAlpha: Double, stroke: Color, strokeAlpha: Double)] = [
+            (Self.green, 0.3, Self.green, 0.9),  // visited
+            (Self.green, 0.12, Self.green, 0.45),  // cleared
+            (.white, 0.06, .white, 0.85),  // open
+            (Self.grey, 0.35, Self.grey, 0.5),  // blocked
+            (.walkiesOrange, 0.35, .walkiesOrange, 1),  // this walk
+        ]
+        for (kind, path) in paths.sorted(by: { $0.key < $1.key }) {
+            let style = styles[kind]
+            context.fill(path, with: .color(style.fill.opacity(style.fillAlpha * opacity)))
+            context.stroke(path, with: .color(style.stroke.opacity(style.strokeAlpha * opacity)), lineWidth: 1.2)
+        }
+    }
+
+    private static func index(_ kind: CloudField.Outline.Kind) -> Int {
+        switch kind {
+        case .visited: 0
+        case .cleared: 1
+        case .open: 2
+        case .blocked: 3
+        }
     }
 }
 

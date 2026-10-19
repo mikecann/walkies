@@ -24,7 +24,7 @@ struct CloudTests {
         #expect(CloudField(city: test).puffs.count == cover.clouded.count)
     }
 
-    @Test func noPathTilesClearWhenYouWalkTheNearestStreet() {
+    @Test func walkingBesideBushClearsTheWholePatch() {
         // Two lone street tiles at opposite sides of the suburb; everything else is bush.
         let west = Hex(q: -3, r: 0), east = Hex(q: 4, r: 0)
         let test = city(tiles: [west, east], visited: [west])
@@ -32,11 +32,23 @@ struct CloudTests {
 
         #expect(cover.clear.contains(west))
         #expect(cover.clear.contains(Hex(q: -4, r: 1)))  // bush next to the walked street
-        #expect(cover.clouded.contains(east))
-        #expect(cover.clouded.contains(Hex(q: 4, r: 1)))  // bush next to the unwalked one
-        #expect(cover.clear.isDisjoint(with: cover.clouded))
+        #expect(cover.clear.contains(Hex(q: 4, r: 1)))   // and all the bush it joins up with
+        #expect(cover.clouded == [east])
+        #expect(cover.blocked.isEmpty)
         // Clearing bush doesn't change the score: only street tiles count.
         #expect(test.progress == 0.5)
+    }
+
+    @Test func bushWalledInByUnwalkedStreetsStaysClouded() {
+        // A pocket of bush with a ring of streets round it, and a walked street outside.
+        let pocket = Hex(q: 0, r: 0)
+        let ring = Set(pocket.neighbours)
+        let walked = Hex(q: -3, r: 0)
+        let cover = city(tiles: ring.union([walked]), visited: [walked]).cloudCover()
+
+        #expect(cover.blocked == [pocket])
+        #expect(cover.clouded.contains(pocket))
+        #expect(cover.clear.contains(Hex(q: 3, r: 0)))  // the bush outside the ring
     }
 
     @Test func tiesAlwaysGoTheSameWay() {

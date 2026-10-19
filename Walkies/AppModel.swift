@@ -10,6 +10,11 @@ final class AppModel {
     var selectedCityID: UUID? {
         didSet { UserDefaults.standard.set(selectedCityID?.uuidString, forKey: "selectedCity") }
     }
+    /// Bumps when the map should fly to the selected place: when you pick or add one,
+    /// not when it changes because you've walked into it.
+    private(set) var flyToSelected = 0
+    /// Where you were at the last GPS fix, for things like sorting secrets by distance.
+    private(set) var lastLocation: CLLocation?
     private(set) var activeWalk: Walk?
     /// Accepted fixes from the current walk, for drawing the line on the map.
     private(set) var activePath: [Coordinate] = []
@@ -178,6 +183,7 @@ final class AppModel {
     private func record(_ location: CLLocation) {
         // iOS can hand over a cached fix from wherever you last were when tracking starts.
         guard location.timestamp.timeIntervalSinceNow > -10 else { return }
+        lastLocation = location
         var point = TrackPoint(location)
         if motion.onWheels { point.wheels = true }
         if motion.still { point.still = true }
@@ -186,6 +192,22 @@ final class AppModel {
         } else if activeWalk != nil {
             recordWalk(point)
         }
+        if activeWalk != nil { followIntoPlace(at: point.coordinate) }
+    }
+
+    /// On a walk, whichever of your places you're in becomes the selected one, so the
+    /// percentage and secrets are for where you are. The map doesn't jump to it.
+    private func followIntoPlace(at point: Coordinate) {
+        if let current = selectedCity, shape(for: current).contains(current.grid.projection.project(point)) { return }
+        if let here = cities.first(where: { shape(for: $0).contains($0.grid.projection.project(point)) }) {
+            selectedCityID = here.id
+        }
+    }
+
+    /// Picks a place to look at, and flies the map there.
+    func select(_ id: UUID) {
+        selectedCityID = id
+        flyToSelected += 1
     }
 
     /// A walk you started yourself: keep every fix.
@@ -413,7 +435,7 @@ final class AppModel {
         city.updatedAt = .now
         cities.append(city)
         shapes[city.id] = city.shape()
-        selectedCityID = city.id
+        select(city.id)
         placeStickers()
         tilesRevision += 1
         store.save(cities)
@@ -557,7 +579,7 @@ final class AppModel {
             cities[i] = city
         } else {
             cities.append(remote)
-            if selectedCityID == nil { selectedCityID = remote.id }
+            if selectedCityID == nil { select(remote.id) }
             refreshNeighbours()
             placeStickers()
         }

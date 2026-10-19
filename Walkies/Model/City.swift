@@ -35,35 +35,23 @@ nonisolated struct City: Codable, Identifiable, Sendable {
     }
 
     /// Which tiles in the boundary are under cloud and which are clear. Tiles with no
-    /// street or path (bush, wetland, canals) don't count towards 100%, so instead of
-    /// staying clouded forever, each one clears when you walk the counting tile nearest it.
-    func cloudCover() -> (clouded: Set<Hex>, clear: Set<Hex>) {
+    /// street or path (bush, wetland, canals) don't count towards 100%, and can't be
+    /// walked to. Instead, a whole patch of them clears at once the moment you walk a
+    /// tile beside it, spreading through every no-path tile it touches.
+    /// `blocked` is the no-path tiles still under cloud.
+    func cloudCover() -> (clouded: Set<Hex>, clear: Set<Hex>, blocked: Set<Hex>) {
         let shape = shape()
-        let area = grid.hexes(from: shape.lo, to: shape.hi)
-        let inside = Set(area.filter { shape.contains(grid.centre(of: $0)) })
+        let inside = Set(grid.hexes(from: shape.lo, to: shape.hi).filter { shape.contains(grid.centre(of: $0)) })
+        let noPath = inside.subtracting(tiles)
         var clear = visited
-        for (hex, owner) in nearestTile(for: inside.subtracting(tiles), within: Set(area)) where visited.contains(owner) {
-            clear.insert(hex)
-        }
-        return (inside.union(tiles).subtracting(clear), clear)
-    }
-
-    /// The nearest counting tile to each of these hexes, found by spreading out from
-    /// every counting tile at once. Seeded in a fixed order, so ties always go the same
-    /// way and a hex never flips between clear and clouded from one launch to the next.
-    private func nearestTile(for hexes: Set<Hex>, within area: Set<Hex>) -> [Hex: Hex] {
-        var queue = tiles.sorted { ($0.q, $0.r) < ($1.q, $1.r) }
-        var owner = Dictionary(uniqueKeysWithValues: queue.map { ($0, $0) })
-        var next = 0
-        while next < queue.count {
-            let hex = queue[next]
-            next += 1
-            for n in hex.neighbours where owner[n] == nil && area.contains(n) {
-                owner[n] = owner[hex]
+        var queue = Array(visited)
+        while let hex = queue.popLast() {
+            for n in hex.neighbours where noPath.contains(n) && !clear.contains(n) {
+                clear.insert(n)
                 queue.append(n)
             }
         }
-        return owner.filter { hexes.contains($0.key) }
+        return (inside.union(tiles).subtracting(clear), clear, noPath.subtracting(clear))
     }
 
     /// Marks the tiles under these points as visited and returns the ones that are new.

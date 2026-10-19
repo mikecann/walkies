@@ -75,8 +75,9 @@ struct MapFocusRequest: Equatable {
 /// with a button to add it. The clouds are drawn over the top by `CloudLayer`.
 struct FogMapView: UIViewRepresentable {
     var cities: [City]
-    /// The place the map flies to when it changes.
+    /// The place the map flies to when `flyID` changes.
     var selectedID: UUID?
+    var flyID: Int
     /// Tiles uncovered this walk, per place.
     var fresh: [UUID: Set<Hex>]
     var revision: Int
@@ -114,6 +115,7 @@ struct FogMapView: UIViewRepresentable {
         private var cities: [City] = []
         private var cityIDs: [UUID]?
         private var selectedID: UUID?
+        private var flyID = -1
         private var fresh: [UUID: Set<Hex>] = [:]
         private var revision = -1
         private var focusID = -1
@@ -161,8 +163,9 @@ struct FogMapView: UIViewRepresentable {
                 revision = view.revision
                 drawUncovered(on: map)
             }
-            if view.selectedID != selectedID {
-                selectedID = view.selectedID
+            selectedID = view.selectedID
+            if view.flyID != flyID, !cities.isEmpty {
+                flyID = view.flyID
                 zoomToCity(on: map)
             }
 
@@ -335,10 +338,12 @@ struct FogMapView: UIViewRepresentable {
             let touched = mapView.subviews.first?.gestureRecognizers?.contains { $0.state == .began || $0.state == .changed } ?? false
             if touched { following = false }
             handle?.moving = true
+            if touched { handle?.dragging = true }
         }
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             handle?.moving = false
+            handle?.dragging = false
             showNeighbours(on: mapView)
         }
 
@@ -404,7 +409,8 @@ struct FogMapView: UIViewRepresentable {
             }
             if let polyline = overlay as? MKPolyline {
                 let r = MKPolylineRenderer(polyline: polyline)
-                r.strokeColor = .walkiesOrange
+                // Teal, so the route stands apart from this walk's orange tiles.
+                r.strokeColor = UIColor(red: 0.16, green: 0.72, blue: 0.78, alpha: 1)
                 r.lineWidth = 4
                 r.lineCap = .round
                 r.lineJoin = .round

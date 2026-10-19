@@ -23,7 +23,7 @@ struct CitiesView: View {
                     List {
                         ForEach(model.cities) { city in
                             Button {
-                                model.selectedCityID = city.id
+                                model.select(city.id)
                                 dismiss()
                             } label: {
                                 CityRow(city: city, selected: city.id == model.selectedCityID)

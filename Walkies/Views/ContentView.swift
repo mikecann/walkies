@@ -22,6 +22,7 @@ struct ContentView: View {
         FogMapView(
             cities: model.cities,
             selectedID: model.selectedCityID,
+            flyID: model.flyToSelected,
             fresh: model.freshTiles,
             revision: model.tilesRevision,
             path: model.activePath,
@@ -34,7 +35,7 @@ struct ContentView: View {
             onPickNeighbour: { pickedNeighbour = $0 }
         )
         .overlay {
-            CloudLayer(field: model.cloudField, key: model.cloudKey, handle: mapHandle)
+            CloudLayer(field: model.cloudField, key: model.cloudKey, handle: mapHandle, walkTiles: walkTiles)
         }
         .overlay(alignment: .top) {
             // Keeps the status bar readable over dark water.
@@ -154,12 +155,19 @@ extension ContentView {
         return (here.filter { model.foundStickers[$0.entry.id] != nil }.count, here.count)
     }
 
-    /// Found stickers in the selected city, pinned on the tile they were under.
+    /// Found secrets in every place, pinned on the tile they were under. Tap one to read it again.
     private var stickerPins: [StickerPin] {
-        guard let city = model.selectedCity else { return [] }
-        return model.stickersHere
-            .filter { model.foundStickers[$0.entry.id] != nil }
-            .map { StickerPin(id: $0.entry.id, coordinate: city.grid.projection.unproject(city.grid.centre(of: $0.hex))) }
+        model.cities.flatMap { city in
+            (city.stickers ?? [:])
+                .filter { model.foundStickers[$0.key] != nil }
+                .sorted { $0.key < $1.key }
+                .map { StickerPin(id: $0.key, coordinate: city.grid.projection.unproject(city.grid.centre(of: $0.value))) }
+        }
+    }
+
+    /// Tiles uncovered on this walk, for the honeycomb that shows while you drag the map.
+    private var walkTiles: Set<CloudField.Tile> {
+        Set(model.cities.flatMap { city in (model.freshTiles[city.id] ?? []).map { CloudField.Tile(grid: city.grid, hex: $0) } })
     }
 
     /// The first sticker waiting to pop up. Closing it moves on to the next.
