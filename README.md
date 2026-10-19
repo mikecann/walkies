@@ -81,6 +81,8 @@ node scripts/set-oauth-keys.mjs dev ~/Downloads/walkies-oauth.json
 node scripts/set-oauth-keys.mjs prod ~/Downloads/walkies-oauth.json
 ```
 
+What's set up now (2026-10-19): Services ID `com.mikecann.walkies.signin` (shown to people as "Walkies"), Sign in with Apple key `CYUWDZYQ3R`, and Google project `walkies-512104` on mike.cann@gmail.com with the "Walkies (Convex)" web client. Google's consent screen is in Testing, so only listed test users can sign in. To swap the Apple key, make a new one, then run the script with a JSON holding just `appleKeyId` and `appleKeyFile`; it skips anything missing.
+
 ## Code map
 
 - `Walkies/Model/` is the maths: a flat local projection (`Geo`), the hex grid, boundaries and point-in-polygon, cities, walks, and the GPS filter (`CoverageTracer`).

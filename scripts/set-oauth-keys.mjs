@@ -33,10 +33,12 @@ for (const [name, value] of Object.entries(values)) {
     console.log(`skipped ${name} (not in ${file})`);
     continue;
   }
-  const args = ["convex", "env", "set", name, value, ...(target === "prod" ? ["--prod"] : [])];
-  const result = spawnSync("npx", args, { encoding: "utf8" });
+  // The value goes in on stdin: as an argument the .p8 key's leading "-----"
+  // reads as a flag, and the CLI's error message would echo it back.
+  const args = ["convex", "env", "set", name, ...(target === "prod" ? ["--prod"] : [])];
+  const result = spawnSync("npx", args, { encoding: "utf8", input: value });
   if (result.status !== 0) {
-    console.error(`Couldn't set ${name}:\n${result.stderr}`);
+    console.error(`Couldn't set ${name}:\n${result.stderr.split(value).join("[redacted]")}`);
     process.exit(1);
   }
   console.log(`set ${name} on ${target}`);
