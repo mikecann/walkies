@@ -38,6 +38,7 @@ struct ContentView: View {
                     MapButton(systemImage: "gearshape") { showingSettings = true }
                     if !model.stickersHere.isEmpty {
                         MapButton(systemImage: "book.closed.fill") { showingStickers = true }
+                            .accessibilityLabel("Secrets")
                     }
                     Spacer()
                     if model.selectedCity != nil {

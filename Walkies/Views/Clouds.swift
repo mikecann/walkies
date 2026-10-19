@@ -39,14 +39,10 @@ nonisolated struct CloudField: Sendable {
     var lines: [Line] = []
     /// The suburb's outline, so the dotted roads stop at its edge.
     var outline: [[MKMapPoint]] = []
-    /// Stickers still hidden under the clouds, which twinkle to give you something to aim for.
-    var hints: [MKMapPoint] = []
-    /// A tile's centre-to-corner size in map points, for sizing things to the zoom.
-    var tileRadius = 0.0
 
     init() {}
 
-    init(city: City, hints hidden: [Hex] = []) {
+    init(city: City) {
         let grid = city.grid
         let cover = city.cloudCover()
         let metres = MKMapPointsPerMeterAtLatitude(grid.projection.origin.lat)
@@ -73,8 +69,6 @@ nonisolated struct CloudField: Sendable {
             .sorted { $0.centre.y < $1.centre.y }
         lines = (city.roads ?? []).map { Line(points: $0.points.map { MKMapPoint($0.cl) }, kind: $0.kind) }
         outline = city.boundary.polygons.map { $0.outer.map { MKMapPoint($0.cl) } }
-        hints = hidden.map(centre)
-        tileRadius = hexSize
     }
 
     private static func hash(_ hex: Hex) -> Int {
@@ -235,35 +229,6 @@ private struct CloudPainter {
                 let rect = projection.ellipse(centre: clearing.centre, radius: clearing.radius * grow)
                 guard rect.intersects(visible) else { continue }
                 layer.draw(eraser, in: rect)
-            }
-        }
-
-        drawHints(in: &context)
-    }
-
-    /// A small gold sparkle over each hidden sticker, glinting on its own beat.
-    private func drawHints(in context: inout GraphicsContext) {
-        guard let first = field.hints.first else { return }
-        // Small glints when the whole suburb's on screen, proper sparkles up close.
-        let tile = projection.ellipse(centre: first, radius: field.tileRadius).width / 2
-        let scale = min(1, max(0.35, tile / 40))
-        for (i, hint) in field.hints.enumerated() {
-            let at = projection.point(hint)
-            guard bounds.insetBy(dx: -20, dy: -20).contains(at) else { continue }
-            let beat = 0.5 + 0.5 * sin(clock * 1.6 + Double(i) * 2.399)
-            let size = (9 + 5 * beat) * scale
-            var star = Path()
-            for k in 0..<8 {
-                let angle = Double(k) * .pi / 4 - .pi / 2
-                let r = k.isMultiple(of: 2) ? size : size * 0.28
-                let p = CGPoint(x: at.x + cos(angle) * r, y: at.y + sin(angle) * r)
-                k == 0 ? star.move(to: p) : star.addLine(to: p)
-            }
-            star.closeSubpath()
-            context.drawLayer { glow in
-                glow.addFilter(.shadow(color: Color(red: 1, green: 0.75, blue: 0.2).opacity(0.9), radius: 6))
-                glow.opacity = 0.55 + 0.45 * beat
-                glow.fill(star, with: .color(Color(red: 1, green: 0.86, blue: 0.4)))
             }
         }
     }

@@ -75,17 +75,17 @@ struct StickerBookView: View {
             Group {
                 if stickers.isEmpty {
                     ContentUnavailableView(
-                        "No stickers here yet",
+                        "No secrets here yet",
                         systemImage: "book.closed",
-                        description: Text("There's no lore for this place yet. Geographe and the rest of Busselton have some.")
+                        description: Text("Nobody's written any secrets for this place yet. Geographe and the rest of Busselton have some.")
                     )
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("\(found) of \(stickers.count) found")
+                            Text("\(found) of \(stickers.count) secrets found")
                                 .font(.headline)
                             ProgressBar(value: Double(found) / Double(stickers.count))
-                            Text("Each one is a story about the area, hidden under the clouds. The gold sparkles on the map show where.")
+                            Text("Each one is a story about the area, hidden somewhere under the clouds. Walk new streets to find them.")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
@@ -108,7 +108,7 @@ struct StickerBookView: View {
                     }
                 }
             }
-            .navigationTitle("Sticker book")
+            .navigationTitle("Secrets")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -168,7 +168,7 @@ struct LoreCardView: View {
         ScrollView {
             VStack(spacing: 16) {
                 if isNew {
-                    Text("New sticker")
+                    Text("Secret found")
                         .font(.subheadline.weight(.bold))
                         .textCase(.uppercase)
                         .foregroundStyle(Color.walkiesOrange)
@@ -228,7 +228,7 @@ struct LoreCardView: View {
                     Button {
                         dismiss()
                     } label: {
-                        Text("Into the book").font(.headline).frame(maxWidth: .infinity)
+                        Text("Nice one").font(.headline).frame(maxWidth: .infinity)
                     }
                     .prominentButton()
                     .controlSize(.large)

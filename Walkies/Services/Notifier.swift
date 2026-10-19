@@ -1,18 +1,18 @@
 import UIKit
 import UserNotifications
 
-/// Local notifications for stickers found while the phone's in your pocket.
+/// Local notifications for secrets found while the phone's in your pocket.
 enum Notifier {
     static func requestPermission() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    /// Only when the app isn't on screen; when it is, the sticker pops up in the app instead.
+    /// Only when the app isn't on screen; when it is, the secret pops up in the app instead.
     static func stickersFound(_ entries: [LoreEntry]) {
         guard UIApplication.shared.applicationState != .active else { return }
         for entry in entries {
             let content = UNMutableNotificationContent()
-            content.title = "New sticker: \(entry.title)"
+            content.title = "Secret found: \(entry.title)"
             content.body = entry.body
             content.sound = .default
             content.userInfo = ["sticker": entry.id]

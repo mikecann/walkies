@@ -104,13 +104,12 @@ final class AppModel {
     /// clouded takes a moment on a big city, so it's only redone when the tiles change.
     @ObservationIgnored private var cachedField: (key: String, field: CloudField)?
 
-    var cloudKey: String { "\(selectedCityID?.uuidString ?? "none")-\(tilesRevision)-\(foundStickers.count)" }
+    var cloudKey: String { "\(selectedCityID?.uuidString ?? "none")-\(tilesRevision)" }
 
     var cloudField: CloudField {
         let key = cloudKey
         if let cachedField, cachedField.key == key { return cachedField.field }
-        let hidden = stickersHere.filter { foundStickers[$0.entry.id] == nil }.map(\.hex)
-        let field = selectedCity.map { CloudField(city: $0, hints: hidden) } ?? CloudField()
+        let field = selectedCity.map(CloudField.init) ?? CloudField()
         cachedField = (key, field)
         return field
     }
