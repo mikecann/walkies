@@ -1,3 +1,4 @@
+import ChefKit
 import SwiftUI
 
 struct ContentView: View {
@@ -51,6 +52,10 @@ struct ContentView: View {
                 VStack(spacing: 10) {
                     HexBadge(icon: .art("icon-gear"), label: "Settings") { showingSettings = true }
                     HexBadge(icon: .art("icon-book"), label: "Secrets") { showingStickers = true }
+                    // Long-press: a screenshot of the map and a voice note, straight away.
+                    HexBadge(icon: .art("icon-idea"), label: "Suggest a feature", onLongPress: { ChefKit.report() }) {
+                        ChefKit.present()
+                    }
                 }
             }
             .padding(.horizontal)

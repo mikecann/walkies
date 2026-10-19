@@ -67,28 +67,46 @@ struct HexBadge: View {
     let icon: Icon
     var fill: Color = .sand
     var label: String
+    /// Something else to do on a long press. A Button would fire its tap as well when the
+    /// finger lifts, so with this the badge uses tap and long-press gestures instead.
+    var onLongPress: (() -> Void)?
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            ZStack {
-                Hexagon().fill(fill)
-                Hexagon().strokeBorder(.white, style: StrokeStyle(lineWidth: 3, lineJoin: .round))
-                switch icon {
-                case .art(let name):
-                    Image(name).resizable().scaledToFit().frame(width: 34, height: 34)
-                case .symbol(let name):
-                    Image(systemName: name)
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(.white)
+        if let onLongPress {
+            badge
+                .onTapGesture(perform: action)
+                .onLongPressGesture(minimumDuration: 0.45) {
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    onLongPress()
                 }
-            }
-            .frame(width: 54, height: 60)
-            .shadow(color: .black.opacity(0.2), radius: 6, y: 3)
-            .contentShape(Hexagon())
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(label)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction(named: "Long press", onLongPress)
+        } else {
+            Button(action: action) { badge }
+                .buttonStyle(PressScale())
+                .accessibilityLabel(label)
         }
-        .buttonStyle(PressScale())
-        .accessibilityLabel(label)
+    }
+
+    private var badge: some View {
+        ZStack {
+            Hexagon().fill(fill)
+            Hexagon().strokeBorder(.white, style: StrokeStyle(lineWidth: 3, lineJoin: .round))
+            switch icon {
+            case .art(let name):
+                Image(name).resizable().scaledToFit().frame(width: 34, height: 34)
+            case .symbol(let name):
+                Image(systemName: name)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+        }
+        .frame(width: 54, height: 60)
+        .shadow(color: .black.opacity(0.2), radius: 6, y: 3)
+        .contentShape(Hexagon())
     }
 }
 
