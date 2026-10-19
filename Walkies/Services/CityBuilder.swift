@@ -35,7 +35,8 @@ nonisolated enum CityBuilder {
 
         await status("Laying out the tiles…")
         var tiles = Set<Hex>()
-        for way in ways {
+        // A driveway leads onto someone's property, so it doesn't make a tile count.
+        for way in ways where way.tags["service"] != "driveway" {
             for point in samples(along: way.points) {
                 let h = grid.hex(containing: point)
                 if inside.contains(h) { tiles.insert(h) }

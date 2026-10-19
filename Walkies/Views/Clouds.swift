@@ -166,6 +166,9 @@ struct CloudLayer: View {
                 }
             }
         }
+        // Paint it on the GPU. On the CPU, zoomed in, the big overlapping cloud
+        // sprites were too much for older phones.
+        .drawingGroup()
         .allowsHitTesting(false)
         .onAppear { shown = (key, field) }
         .onChange(of: key) {
@@ -247,26 +250,6 @@ private struct Projection {
         homogeneous(p).z >= Self.near
     }
 
-    /// A line on screen, split where it passes behind the camera.
-    func runs(_ points: [MKMapPoint]) -> [[CGPoint]] {
-        let v = points.map(homogeneous)
-        var runs: [[CGPoint]] = []
-        var run: [CGPoint] = []
-        for i in v.indices {
-            let inFront = v[i].z >= Self.near
-            if i > 0, (v[i - 1].z >= Self.near) != inFront {
-                run.append(screen(crossing(v[i - 1], v[i])))
-                if !inFront {
-                    runs.append(run)
-                    run = []
-                }
-            }
-            if inFront { run.append(screen(v[i])) }
-        }
-        if run.count > 1 { runs.append(run) }
-        return runs.filter { $0.count > 1 }
-    }
-
     /// A closed outline on screen, with any part behind the camera cut off.
     func polygon(_ points: [MKMapPoint]) -> [CGPoint] {
         let v = points.map(homogeneous)
@@ -278,6 +261,18 @@ private struct Projection {
             if inFront { out.append(screen(current)) }
         }
         return out
+    }
+
+    /// One straight line on screen, cut where it passes behind the camera, or nil if
+    /// it's wholly behind. Allocates nothing, since the grid and streets call it tens of
+    /// thousands of times a frame.
+    func segment(_ a: MKMapPoint, _ b: MKMapPoint) -> (CGPoint, CGPoint)? {
+        var ha = homogeneous(a), hb = homogeneous(b)
+        let aIn = ha.z >= Self.near, bIn = hb.z >= Self.near
+        guard aIn || bIn else { return nil }
+        if !aIn { ha = crossing(ha, hb) }
+        if !bIn { hb = crossing(ha, hb) }
+        return (screen(ha), screen(hb))
     }
 
     private func crossing(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> SIMD3<Double> {
@@ -393,15 +388,15 @@ private struct CloudPainter {
         let shadows = sprites.shadows.map { context.resolve(Image(decorative: $0, scale: 1)) }
         let eraser = context.resolve(Image(decorative: sprites.eraser, scale: 1))
 
-        // Shadows on the ground, with the sun to the north-west.
-        context.drawLayer { layer in
-            layer.opacity = 0.35
-            for p in placed {
-                layer.opacity = 0.35 * p.fade
-                let r = p.rect
-                layer.draw(shadows[p.puff.variant], in: r.offsetBy(dx: r.width * 0.15, dy: r.height * 0.18))
-            }
+        // Shadows on the ground, with the sun to the north-west. Straight onto the
+        // map rather than through a layer of their own: a layer costs a whole extra
+        // screen of drawing every frame, which the phone feels when zoomed in.
+        for p in placed {
+            context.opacity = 0.35 * p.fade
+            let r = p.rect
+            context.draw(shadows[p.puff.variant], in: r.offsetBy(dx: r.width * 0.15, dy: r.height * 0.18))
         }
+        context.opacity = 1
 
         context.drawLayer { layer in
             // Every shaded underside first, then every sunlit top, so the middle of the
@@ -473,8 +468,9 @@ private struct CloudPainter {
         var i = 0
         let near = bounds.insetBy(dx: -40, dy: -40)
         while i < field.gridEdges.count {
-            for run in projection.runs([field.gridEdges[i], field.gridEdges[i + 1]]) where near.contains(run[0]) || near.contains(run[1]) {
-                path.addLines(run)
+            if let (a, b) = projection.segment(field.gridEdges[i], field.gridEdges[i + 1]), near.contains(a) || near.contains(b) {
+                path.move(to: a)
+                path.addLine(to: b)
             }
             i += 2
         }
@@ -497,10 +493,25 @@ private struct CloudPainter {
         }
         context.clip(to: clip)
 
+        // Only the bits on screen. Zoomed in, every street in every place adds up to
+        // hundreds of thousands of points of dashed line, which is slow to dash.
+        let onScreen = bounds.insetBy(dx: -20, dy: -20)
         for kind in [RoadLine.Kind.road, .path] where kind == .road || scale > 0.12 {
             var path = Path()
             for line in field.lines where line.kind == kind {
-                for run in projection.runs(line.points) { path.addLines(run) }
+                var drawing = false
+                for j in line.points.indices.dropFirst() {
+                    guard let (a, b) = projection.segment(line.points[j - 1], line.points[j]) else {
+                        drawing = false
+                        continue
+                    }
+                    let visible = onScreen.intersects(CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y)))
+                    if visible {
+                        if !drawing { path.move(to: a) }
+                        path.addLine(to: b)
+                    }
+                    drawing = visible
+                }
             }
             context.stroke(
                 path,
@@ -646,3 +657,4 @@ nonisolated struct SplitMix64 {
         Double(next() >> 11) / Double(UInt64(1) << 53)
     }
 }
+
