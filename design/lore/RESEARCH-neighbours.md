@@ -77,3 +77,40 @@ Automatic approval review rejected the browser’s Nominatim request because net
 - No First Nations translations or cultural stories were added. No files were modified.
 
 Automatic approval review rejected browser access to Nominatim because network access was declined. Consequently, the mandatory boundary verification remains unfinished.
+
+## Reinscourt, Yalyalup, Bovell, Ambergate, Kealy, Siesta Park and Marybrook (Claude Opus, after Grok timed out)
+
+- **Counts:** 24 entries in total. Reinscourt has 3 (the target was 5), Yalyalup 5, Bovell 4, Ambergate 3, Kealy 3, Siesta Park 3 and Marybrook 3. Categories: history 12, modern-life 4, nature 4, odd-records 3, the-sea 2. The set leans towards history because heritage records were the strongest material.
+- **How I researched:** The sandbox blocked `curl`, so all web access went through WebFetch.
+  - I found heritage places with the SLIP heritage layers (`People_and_Society` layers 9 and 16, envelope queries per suburb), then read the inHerit records.
+  - Name origins came from Landgate GEONOMA (`Places_and_Addresses` layer 6 for localities, layer 10 for homesteads and parks).
+  - I extracted text from three PDFs myself: EPA Bulletin 390, the 1987 Broadcaster, and the Uniting Church brochure.
+  - I opened every source URL listed. Every body is 69 to 88 words, with no em dashes or exclamation marks, and every id is new.
+- **Pins:** Boundaries came from Nominatim (polygon_threshold 0.0003), one request at a time. All 24 pins pass a ray-casting point-in-polygon test against their own suburb and fall in no other suburb.
+  - I checked the closest pins against more detailed OSM vertices: the two Caves Road pins in Kealy (about 30 m inside) and the Holy Mile pin (about 45 m inside). Caves Road and its shared path sit on the Siesta Park side of the Kealy/Siesta Park line.
+  - Chain Avenue (Marybrook farmhouse) is only about 40 m inside the simplified boundary, and I couldn't confirm it with full-detail vertices. Please spot-check it.
+- **Pin sources:**
+  - Taken from OSM: the airport road, the hockey pitch and main oval, the Ambergate Reserve footways, the Hawker Approach, Reilly Road, Uligugalup Road, Cable Sands Road and Siesta Park Road vertices, and the Smith Street end.
+  - Estimated by me: Old Timber Court, Estuary Waters Drive, Tall Tree Crescent, Farmhouse Court, Chapman Hill Road, the Ambergate Hall verge, the Kealy reserve and Caves Road verge points, and the Marybrook Road siding point.
+  - Every heritage subject (Rushleigh, Inlet Park, Little Holland House, Marybrook farmhouse, the transmitter) is private or fenced, so each pin is on the nearest public road or reserve, not on the lot.
+  - The Kealy name pin sits inside Locke Nature Reserve, because Kealy has almost no public streets.
+- **Best sources:** inHerit City of Busselton records, Landgate GEONOMA, the Busselton Naturalists' Ambergate page, EPA Bulletin 390, the 1987 Broadcaster, and the Pensoft paper by Yokochi and Bencini (2015).
+- **Least sure:**
+  - **kealy-the-tall-mast:** inHerit says the second, taller tower appeared between 1996 and 2005, but the 1987 newsletter already describes a 183 m main mast. The body only states what the newsletter says.
+  - **siesta-park-named-for-a-lost-launch:** The resort's family history (fire over Cockburn Sound) and Landgate (sailed on the Swan River) disagree. The body attributes each version to its source.
+  - **marybrook-named-by-the-railway:** Landgate says the line closed in May 1965. Wikipedia and the Augusta-Margaret River Shire (seen only in search snippets) say 1957. The body leaves the year out.
+  - **marybrook-the-grave-that-moved:** The record contradicts itself on Edward's death (1917 or 1937), so the body gives no date.
+  - **bovell-it-used-to-be-fairlawn:** Sources disagree on when he was knighted and how long he was Agent General, so the body leaves both out.
+  - **yalyalup-old-beaches-under-the-cows:** The EPA places the deposit "near the junction of the Vasse and Bussell highways". Assigning it to Yalyalup is my inference from Cable Sands Road and the nearby cemetery. I don't know whether mining actually happened.
+  - **ambergate-tents-before-farms:** Rests on the Busselton Naturalists Club page.
+  - **kealy-a-rope-bridge-for-possums:** I don't know whether the bridge still stands, so the body is in the past tense.
+  - **yalyalup-spuds-for-mauritius:** I don't claim Reilly Road is named after W. R. Reilly.
+- **First Nations:** No entries.
+  - Yalyalup's "place of many holes" meaning comes only from NITV and Wikipedia, which aren't on the approved list. Ask Undalup.
+  - Julijoogalup and Uligugalup look like Noongar names, but no meaning is given or claimed.
+- **Left out:**
+  - The Mullgarnup Aboriginal Mission site in Yalyalup (sensitive).
+  - Harry Prinsep's role as Chief Protector of Aborigines (wrong format for a sticker).
+  - The Busselton drive-in (it's in Broadwater).
+  - Provence estate's French street names (no source I could open).
+  - Reinscourt has little else that is verifiable and not already used.
