@@ -267,6 +267,10 @@ struct LoreCardView: View {
                     .font(.body)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
+                ForEach(entry.photos ?? [], id: \.asset) { photo in
+                    LorePhotoView(photo: photo)
+                }
+
                 if let foundAt {
                     Text("Found \(foundAt.formatted(date: .abbreviated, time: .shortened))")
                         .font(.caption)
@@ -303,3 +307,82 @@ struct LoreCardView: View {
         .presentationDetents(isNew ? [.medium, .large] : [.large])
     }
 }
+
+/// A photo under a secret's story: the picture, what it shows, and who took it, which
+/// links to its page on Wikimedia Commons. Tap the picture to see it full screen.
+private struct LorePhotoView: View {
+    let photo: LoreEntry.Photo
+    @State private var enlarged = false
+
+    var body: some View {
+        if let image = UIImage(named: photo.asset) {
+            VStack(alignment: .leading, spacing: 6) {
+                Button { enlarged = true } label: {
+                    // A neat band, whatever shape the photo is; tap for all of it.
+                    Color.clear
+                        .frame(height: 230)
+                        .frame(maxWidth: .infinity)
+                        .overlay { Image(uiImage: image).resizable().scaledToFill() }
+                        .clipShape(.rect(cornerRadius: 14))
+                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white, lineWidth: 3))
+                        .shadow(color: .black.opacity(0.15), radius: 6, y: 3)
+                }
+                .buttonStyle(PressScale())
+                .accessibilityLabel(photo.caption.isEmpty ? "Photo" : photo.caption)
+
+                if !photo.caption.isEmpty {
+                    Text(photo.caption)
+                        .font(.subheadline)
+                        .foregroundStyle(Color.ink.opacity(0.8))
+                }
+                if let url = URL(string: photo.source) {
+                    Link(destination: url) {
+                        Text("Photo: \(photo.credit.isEmpty ? "Wikimedia Commons" : photo.credit)")
+                            .font(.caption)
+                            .foregroundStyle(Color.ink.opacity(0.5))
+                            .multilineTextAlignment(.leading)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fullScreenCover(isPresented: $enlarged) {
+                ZoomablePhoto(image: image) { enlarged = false }
+            }
+        }
+    }
+}
+
+/// A photo filling the screen on black, pinch to zoom, tap to close.
+private struct ZoomablePhoto: View {
+    let image: UIImage
+    let onClose: () -> Void
+    @State private var scale = 1.0
+    @GestureState private var pinch = 1.0
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .scaleEffect(scale * pinch)
+                .gesture(
+                    MagnifyGesture()
+                        .updating($pinch) { value, state, _ in state = value.magnification }
+                        .onEnded { value in scale = min(4, max(1, scale * value.magnification)) }
+                )
+        }
+        .onTapGesture(perform: onClose)
+        .overlay(alignment: .topTrailing) {
+            Button(action: onClose) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title)
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, .white.opacity(0.25))
+            }
+            .padding()
+            .accessibilityLabel("Close")
+        }
+    }
+}
+

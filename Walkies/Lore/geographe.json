@@ -183,7 +183,21 @@
       "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/11/query?where=full_name%3D%27Heirisson+Reserve%27&outFields=full_name,origins,date_approved&f=json",
       "https://www.openstreetmap.org/#map=17/-33.6346/115.3897"
     ],
-    "suburb": "Geographe"
+    "suburb": "Geographe",
+    "photos": [
+      {
+        "asset": "photo-baudins-crew-lives-here-1",
+        "caption": "The Nicolas Baudin bust on the Busselton foreshore",
+        "credit": "Kgbo · CC BY-SA 4.0",
+        "source": "https://commons.wikimedia.org/wiki/File:Nicolas_Baudin_Bust,_Busselton,_WA,_2022,_01.jpg"
+      },
+      {
+        "asset": "photo-baudins-crew-lives-here-2",
+        "caption": "Louis de Freycinet, engraved around 1804 to 1810",
+        "credit": "Sebastian Leroy · Public domain",
+        "source": "https://commons.wikimedia.org/wiki/File:Engraved_portrait_of_Louis_Claude_de_Saulces_de_Freycinet_ca_1804-1810.jpg"
+      }
+    ]
   },
   {
     "id": "the-inn-that-never-opened",
@@ -254,7 +268,21 @@
       "https://rgw.dwer.wa.gov.au/vasse-wonnerup-wetlands-report-cards/waterbirds/",
       "https://www.openstreetmap.org/#map=17/-33.6419/115.3752"
     ],
-    "suburb": "Geographe"
+    "suburb": "Geographe",
+    "photos": [
+      {
+        "asset": "photo-streets-named-like-neighbours-1",
+        "caption": "A red-necked avocet",
+        "credit": "JJ Harrison (https://www.jjharrison.com.au/) · CC BY-SA 3.0",
+        "source": "https://commons.wikimedia.org/wiki/File:Recurvirostra_novaehollandiae_-_Lake_Joondalup.jpg"
+      },
+      {
+        "asset": "photo-streets-named-like-neighbours-2",
+        "caption": "A black-winged stilt",
+        "credit": "JJ Harrison (https://www.jjharrison.com.au/) · CC BY-SA 3.0",
+        "source": "https://commons.wikimedia.org/wiki/File:Himantopus_himantopus_leucocephalus_-_Lake_Joondalup.jpg"
+      }
+    ]
   },
   {
     "id": "thirty-five-million-kilos-of-salad",
@@ -308,7 +336,21 @@
       "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/837cd1a9-53e2-4b95-a2d7-ca3ff432976d",
       "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/e54a85eb-ade6-43be-9729-5ae6f127112c"
     ],
-    "suburb": "Wonnerup"
+    "suburb": "Wonnerup",
+    "photos": [
+      {
+        "asset": "photo-the-accidental-wetland-1",
+        "caption": "The Vasse floodgates in 2011",
+        "credit": "Gnangarra · CC BY 2.5 au",
+        "source": "https://commons.wikimedia.org/wiki/File:Vasse_floodgates_gnangarra_20.JPG"
+      },
+      {
+        "asset": "photo-the-accidental-wetland-2",
+        "caption": "The Vasse-Wonnerup wetlands",
+        "credit": "Gnangarra · CC BY 2.5 au",
+        "source": "https://commons.wikimedia.org/wiki/File:Vasse_wonnerup_wetlands_gnangarra.JPG"
+      }
+    ]
   },
   {
     "id": "wa-first-steam-engine",
@@ -327,7 +369,21 @@
       "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/837cd1a9-53e2-4b95-a2d7-ca3ff432976d",
       "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/f4214ecd-cced-4c6a-ba34-ea8b40527cc5"
     ],
-    "suburb": "Busselton"
+    "suburb": "Busselton",
+    "photos": [
+      {
+        "asset": "photo-wa-first-steam-engine-1",
+        "caption": "The Ballaarat locomotive on display in Railway House, Busselton",
+        "credit": "NeenPitt · CC BY-SA 4.0",
+        "source": "https://commons.wikimedia.org/wiki/File:Ballaarat_steam_engine_on_display_in_Busselton.jpg"
+      },
+      {
+        "asset": "photo-wa-first-steam-engine-2",
+        "caption": "The fire-damaged Ballaarat at Lockeville around 1908",
+        "credit": "Unknown authorUnknown author · Public domain",
+        "source": "https://commons.wikimedia.org/wiki/File:Fire-damaged_locomotive_%27Ballaarat%27_in_paddock_at_Lockville_near_Busselton_(WA)_ca_1908.jpg"
+      }
+    ]
   },
   {
     "id": "wrecked-against-the-jetty",
@@ -396,7 +452,15 @@
     "sources": [
       "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/11/query?where=full_name%3D%27Wunda-Buri+Reserve%27&outFields=full_name,origins,date_approved&f=json"
     ],
-    "suburb": "Wonnerup"
+    "suburb": "Wonnerup",
+    "photos": [
+      {
+        "asset": "photo-sails-like-shields-1",
+        "caption": "The French ships Géographe and Naturaliste under sail, 1801",
+        "credit": "Charles Alexandre Lesueur · Public domain",
+        "source": "https://commons.wikimedia.org/wiki/File:Charles-Alexandre_Lesueur_Les_corvettes_Le_G%C3%A9ographe_et_Le_Naturaliste_en_mer.jpg"
+      }
+    ]
   },
   {
     "id": "the-sailor-who-gave-us-vasse",
@@ -415,7 +479,15 @@
       "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/a7298732-9829-40fd-a07f-06b273f977be",
       "https://en.wikisource.org/wiki/The_Perth_gazette_and_Western_Australian_journal/Volume_6/5_May_1838"
     ],
-    "suburb": "Wonnerup"
+    "suburb": "Wonnerup",
+    "photos": [
+      {
+        "asset": "photo-the-sailor-who-gave-us-vasse-1",
+        "caption": "Lesueur's drawing of the Géographe and Naturaliste at sea",
+        "credit": "Charles Alexandre Lesueur · Public domain",
+        "source": "https://commons.wikimedia.org/wiki/File:Charles-Alexandre_Lesueur_Les_corvettes_Le_G%C3%A9ographe_et_Le_Naturaliste_en_mer.jpg"
+      }
+    ]
   },
   {
     "id": "ford-road-has-a-ford",
@@ -450,7 +522,15 @@
       "https://collectionswa.net.au/node/57035",
       "https://www.busselton.wa.gov.au/discover/tourism/busselton-jetty.aspx"
     ],
-    "suburb": "Busselton"
+    "suburb": "Busselton",
+    "photos": [
+      {
+        "asset": "photo-chasing-deep-water-1",
+        "caption": "Busselton Jetty stretching out into Geographe Bay from above",
+        "credit": "Original uploader was Hossen27 at en.wikipedia · Public domain",
+        "source": "https://commons.wikimedia.org/wiki/File:Busselton_Jetty_aerial.jpg"
+      }
+    ]
   },
   {
     "id": "a-room-eight-metres-down",
@@ -467,7 +547,21 @@
     "sources": [
       "https://www.wa.gov.au/government/media-statements/Gallop%20Labor%20Government/Underwater-observatory-puts-Busselton-on-international-map-20031213"
     ],
-    "suburb": "Busselton"
+    "suburb": "Busselton",
+    "photos": [
+      {
+        "asset": "photo-a-room-eight-metres-down-1",
+        "caption": "Visitors inside the Underwater Observatory in 2024",
+        "credit": "Dr-ziego · CC0",
+        "source": "https://commons.wikimedia.org/wiki/File:Busselton_Jetty_Underwater_Observatory_February_2024.jpg"
+      },
+      {
+        "asset": "photo-a-room-eight-metres-down-2",
+        "caption": "Marine life under the jetty, seen from the observatory",
+        "credit": "User:Orderinchaos · CC BY-SA 3.0",
+        "source": "https://commons.wikimedia.org/wiki/File:OIC_busselton_marine_life_under_busselton_jetty_1.jpg"
+      }
+    ]
   },
   {
     "id": "the-postie-under-the-sea",
@@ -519,7 +613,15 @@
     "sources": [
       "https://adb.anu.edu.au/biography/bussell-john-garrett-1860"
     ],
-    "suburb": "Bovell"
+    "suburb": "Bovell",
+    "photos": [
+      {
+        "asset": "photo-the-cow-that-picked-the-farm-1",
+        "caption": "The Cattle Chosen homestead in the 1930s",
+        "credit": "Unknown authorUnknown author · Public domain",
+        "source": "https://commons.wikimedia.org/wiki/File:Cattle_Chosen,_slwa_b3003867_48_(cropped).png"
+      }
+    ]
   },
   {
     "id": "a-house-built-from-a-whaler",
@@ -596,6 +698,14 @@
       "https://busselton.wa.gov.au/community/aboriginal-culture",
       "https://www.undalup.com/aboutus",
       "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/6/query?where=full_name%3D%27Busselton%27&outFields=full_name,origins,date_approved&f=json"
+    ],
+    "photos": [
+      {
+        "asset": "photo-one-town-three-names-1",
+        "caption": "Members of the Bussell family around 1867",
+        "credit": "Unknown authorUnknown author · Public domain",
+        "source": "https://commons.wikimedia.org/wiki/File:Bussell_family.jpg"
+      }
     ]
   },
   {
@@ -615,7 +725,21 @@
       "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/6/query?where=full_name%3D%27Wonnerup%27&outFields=full_name,origins,date_approved&f=json",
       "https://boodjar.sis.uwa.edu.au/boodjar-placenames/wonnerup"
     ],
-    "suburb": "Wonnerup"
+    "suburb": "Wonnerup",
+    "photos": [
+      {
+        "asset": "photo-place-of-the-digging-stick-1",
+        "caption": "Wonnerup floodgates where the estuary meets the inlet",
+        "credit": "Gnangarra · CC BY 2.5 au",
+        "source": "https://commons.wikimedia.org/wiki/File:Wonnerup_floodgates_east_gnangarra.JPG"
+      },
+      {
+        "asset": "photo-place-of-the-digging-stick-2",
+        "caption": "The bridge at Wonnerup in March 1921",
+        "credit": "William Edward Fretwell · Public domain",
+        "source": "https://commons.wikimedia.org/wiki/File:Bridge_at_Wonnerup,_Western_Australia,1921.jpg"
+      }
+    ]
   },
   {
     "id": "six-seasons-not-four",
@@ -650,6 +774,20 @@
     "sources": [
       "https://www.busselton.wa.gov.au/resident/environment/plants-and-animals/native-flora-and-fauna.aspx",
       "https://geocatch.asn.au/ringtail-tally-reaches-10-year-milestone/"
+    ],
+    "photos": [
+      {
+        "asset": "photo-possums-in-the-peppermints-1",
+        "caption": "Western ringtail possum at Locke Nature Reserve near Busselton",
+        "credit": "Kaori Yokochi, Roberta Bencini · CC BY 4.0",
+        "source": "https://commons.wikimedia.org/wiki/File:Western_ringtail_possum_at_Locke_Nature_Reserve.jpg"
+      },
+      {
+        "asset": "photo-possums-in-the-peppermints-2",
+        "caption": "Ringtail possum mother and young crossing a rope bridge",
+        "credit": "Kaori Yokochi, Roberta Bencini · CC BY 4.0",
+        "source": "https://commons.wikimedia.org/wiki/File:Western_ringtail_possum_rope_bridge.jpg"
+      }
     ]
   },
   {
@@ -667,7 +805,15 @@
     "sources": [
       "https://exploreparks.dbca.wa.gov.au/park/tuart-forest-national-park"
     ],
-    "suburb": "Ludlow"
+    "suburb": "Ludlow",
+    "photos": [
+      {
+        "asset": "photo-the-last-big-tuart-forest-1",
+        "caption": "Tuart trees at James Block, Tuart Forest National Park",
+        "credit": "Aussie Oc · CC BY-SA 4.0",
+        "source": "https://commons.wikimedia.org/wiki/File:SWA_Tuart_Discovery_Trail_2_James_Block_Tuart_Forest_NP_VII-2012.JPG"
+      }
+    ]
   },
   {
     "id": "a-piano-on-a-truck",

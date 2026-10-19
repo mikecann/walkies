@@ -25,6 +25,18 @@ nonisolated struct LoreEntry: Codable, Identifiable, Hashable, Sendable {
     /// The suburb the story belongs to, as OpenStreetMap names it. The first batch
     /// (geographe.json) doesn't say; its pins decide.
     var suburb: String? = nil
+    /// One or two photos from Wikimedia Commons, shown under the story.
+    var photos: [Photo]? = nil
+
+    /// A freely licensed photo, bundled as an asset, with the credit its licence asks for.
+    struct Photo: Codable, Hashable, Sendable {
+        var asset: String
+        var caption: String
+        /// Who took it and the licence, e.g. "Jane Smith · CC BY-SA 4.0".
+        var credit: String
+        /// Its page on Commons.
+        var source: String
+    }
 }
 
 /// The lore that ships with the app: the Busselton area so far.

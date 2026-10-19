@@ -112,6 +112,10 @@ struct LoreTests {
         #expect(Set(all.map(\.id)).count == all.count)
         for entry in all {
             #expect(UIImage(named: "sticker-\(entry.id)") != nil, "no sticker for \(entry.id)")
+            for photo in entry.photos ?? [] {
+                #expect(UIImage(named: photo.asset) != nil, "no photo \(photo.asset)")
+                #expect(!photo.credit.isEmpty && photo.source.hasPrefix("https://commons.wikimedia.org/"), "photo \(photo.asset) needs a credit and its Commons page")
+            }
         }
     }
 
