@@ -14,6 +14,8 @@ nonisolated struct City: Codable, Identifiable, Sendable {
     /// Streets and paths drawn as dotted lines over the clouds. Nil for cities
     /// saved before we kept them; the app fetches them again on launch.
     var roads: [RoadLine]?
+    /// Which tile each lore sticker is hidden under, by lore id.
+    var stickers: [String: Hex]?
     var createdAt = Date()
 
     var progress: Double {

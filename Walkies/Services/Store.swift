@@ -21,6 +21,17 @@ nonisolated struct Store {
         write(cities, to: citiesURL)
     }
 
+    /// When each sticker was found, by lore id.
+    func loadStickers() -> [String: Date] {
+        read([String: Date].self, from: stickersURL) ?? [:]
+    }
+
+    func save(stickers: [String: Date]) {
+        write(stickers, to: stickersURL)
+    }
+
+    private var stickersURL: URL { root.appending(path: "stickers.json") }
+
     func loadWalks() -> [Walk] {
         let files = (try? FileManager.default.contentsOfDirectory(at: walksDir, includingPropertiesForKeys: nil)) ?? []
         return files

@@ -5,6 +5,8 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showingCities = false
     @State private var showingSettings = false
+    @State private var showingStickers = false
+    @State private var openSticker: LoreEntry?
     @State private var focus = MapFocusRequest()
     @State private var mapHandle = MapHandle()
 
@@ -18,7 +20,9 @@ struct ContentView: View {
             path: model.activePath,
             focus: focus,
             tilted: model.tilted3D,
-            handle: mapHandle
+            handle: mapHandle,
+            stickers: stickerPins,
+            onSelectSticker: { openSticker = LoreLibrary.entry(id: $0) }
         )
         .overlay {
             CloudLayer(field: model.cloudField, key: model.cloudKey, handle: mapHandle)
@@ -32,6 +36,9 @@ struct ContentView: View {
             VStack(alignment: .trailing, spacing: 12) {
                 HStack(spacing: 10) {
                     MapButton(systemImage: "gearshape") { showingSettings = true }
+                    if !model.stickersHere.isEmpty {
+                        MapButton(systemImage: "book.closed.fill") { showingStickers = true }
+                    }
                     Spacer()
                     if model.selectedCity != nil {
                         MapButton(systemImage: "map") { focus.send(.city) }
@@ -52,6 +59,21 @@ struct ContentView: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView()
         }
+        .sheet(isPresented: $showingStickers) {
+            StickerBookView()
+        }
+        .sheet(item: $openSticker) { entry in
+            LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id])
+        }
+        .overlay {
+            // A separate host for the new-sticker pop-up, so it doesn't fight the other sheets.
+            Color.clear
+                .allowsHitTesting(false)
+                .sheet(item: newSticker) { entry in
+                    LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id], isNew: true)
+                }
+        }
+        .sensoryFeedback(.success, trigger: model.stickerQueue.count) { old, new in new > old }
         .sheet(item: $model.finishedWalk) { walk in
             WalkSummaryView(walk: walk, city: model.selectedCity)
         }
@@ -62,6 +84,27 @@ struct ContentView: View {
         }
         .task {
             model.tracker.requestPermissionIfNeeded()
+        }
+    }
+}
+
+extension ContentView {
+    /// Found stickers in the selected city, pinned on the tile they were under.
+    private var stickerPins: [StickerPin] {
+        guard let city = model.selectedCity else { return [] }
+        return model.stickersHere
+            .filter { model.foundStickers[$0.entry.id] != nil }
+            .map { StickerPin(id: $0.entry.id, coordinate: city.grid.projection.unproject(city.grid.centre(of: $0.hex))) }
+    }
+
+    /// The first sticker waiting to pop up. Closing it moves on to the next.
+    private var newSticker: Binding<LoreEntry?> {
+        Binding {
+            model.stickerQueue.first
+        } set: { value in
+            if value == nil, !model.stickerQueue.isEmpty {
+                model.stickerQueue.removeFirst()
+            }
         }
     }
 }

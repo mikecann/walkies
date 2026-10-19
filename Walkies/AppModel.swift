@@ -78,6 +78,8 @@ final class AppModel {
         tracker.onLocation = { [weak self] in self?.record($0) }
         tracker.onAuthorizationChange = { [weak self] in self?.authorizationChanged() }
         fetchMissingRoads()
+        foundStickers = store.loadStickers()
+        placeStickers()
     }
 
     /// Cities saved before we kept road lines get them fetched again in the background.
@@ -102,12 +104,13 @@ final class AppModel {
     /// clouded takes a moment on a big city, so it's only redone when the tiles change.
     @ObservationIgnored private var cachedField: (key: String, field: CloudField)?
 
-    var cloudKey: String { "\(selectedCityID?.uuidString ?? "none")-\(tilesRevision)" }
+    var cloudKey: String { "\(selectedCityID?.uuidString ?? "none")-\(tilesRevision)-\(foundStickers.count)" }
 
     var cloudField: CloudField {
         let key = cloudKey
         if let cachedField, cachedField.key == key { return cachedField.field }
-        let field = selectedCity.map(CloudField.init) ?? CloudField()
+        let hidden = stickersHere.filter { foundStickers[$0.entry.id] == nil }.map(\.hex)
+        let field = selectedCity.map { CloudField(city: $0, hints: hidden) } ?? CloudField()
         cachedField = (key, field)
         return field
     }
@@ -135,6 +138,7 @@ final class AppModel {
         freshTiles = [:]
         tracer = CoverageTracer()
         tracker.start()
+        Notifier.requestPermission()
     }
 
     func endWalk() {
@@ -258,6 +262,7 @@ final class AppModel {
     }
 
     private func turnOnAlwaysOn() {
+        Notifier.requestPermission()
         // Hand over from a walk you started yourself, without the summary popping up.
         if activeWalk != nil {
             endWalk()
@@ -285,9 +290,50 @@ final class AppModel {
             cities[i] = city
             freshTiles[city.id, default: []].formUnion(fresh)
             uncovered += fresh.count
+            unlockStickers(in: city, on: fresh, notify: true)
         }
         if uncovered > 0 { tilesRevision += 1 }
         return uncovered
+    }
+
+    // MARK: Stickers
+
+    /// When each sticker was found, by lore id.
+    private(set) var foundStickers: [String: Date] = [:]
+    /// Stickers just found, waiting to pop up.
+    var stickerQueue: [LoreEntry] = []
+
+    /// Every sticker hidden in the selected city, found or not.
+    var stickersHere: [(entry: LoreEntry, hex: Hex)] {
+        guard let city = selectedCity, let placed = city.stickers else { return [] }
+        return LoreLibrary.entries(for: city)
+            .compactMap { entry in placed[entry.id].map { (entry, $0) } }
+            .sorted { $0.entry.title < $1.entry.title }
+    }
+
+    /// Hides any lore that hasn't got a spot yet. Stickers under tiles you've already
+    /// walked are yours straight away.
+    private func placeStickers() {
+        for i in cities.indices {
+            let entries = LoreLibrary.entries(for: cities[i])
+            let placed = cities[i].stickers ?? [:]
+            let missing = entries.filter { placed[$0.id] == nil }
+            guard !missing.isEmpty else { continue }
+            cities[i].stickers = placed.merging(cities[i].placeStickers(missing)) { old, _ in old }
+            unlockStickers(in: cities[i], on: cities[i].visited, notify: false)
+        }
+        store.save(cities)
+    }
+
+    private func unlockStickers(in city: City, on hexes: Set<Hex>, notify: Bool) {
+        guard let placed = city.stickers else { return }
+        let ids = placed.filter { hexes.contains($0.value) && foundStickers[$0.key] == nil }.map(\.key)
+        guard !ids.isEmpty else { return }
+        let entries = LoreLibrary.entries(for: city).filter { ids.contains($0.id) }
+        for entry in entries { foundStickers[entry.id] = .now }
+        store.save(stickers: foundStickers)
+        stickerQueue.append(contentsOf: entries)
+        if notify { Notifier.stickersFound(entries) }
     }
 
     private func authorizationChanged() {
@@ -302,6 +348,7 @@ final class AppModel {
         cities.append(city)
         shapes[city.id] = city.shape()
         selectedCityID = city.id
+        placeStickers()
         tilesRevision += 1
         store.save(cities)
     }

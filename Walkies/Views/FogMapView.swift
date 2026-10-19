@@ -1,6 +1,22 @@
 import MapKit
 import SwiftUI
 
+/// A found sticker, pinned where you found it.
+struct StickerPin: Equatable {
+    let id: String
+    let coordinate: Coordinate
+}
+
+private final class StickerAnnotation: NSObject, MKAnnotation {
+    let id: String
+    let coordinate: CLLocationCoordinate2D
+
+    init(_ pin: StickerPin) {
+        id = pin.id
+        coordinate = pin.coordinate.cl
+    }
+}
+
 struct MapFocusRequest: Equatable {
     enum Target { case city, user }
     var id = 0
@@ -23,6 +39,8 @@ struct FogMapView: UIViewRepresentable {
     /// Tilted, with Apple's 3D buildings and trees.
     var tilted: Bool
     let handle: MapHandle
+    var stickers: [StickerPin] = []
+    var onSelectSticker: (String) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -49,6 +67,8 @@ struct FogMapView: UIViewRepresentable {
         private var hasShownUser = false
         private var following = false
         private var tilted: Bool?
+        private var pins: [StickerPin] = []
+        private var onSelectSticker: (String) -> Void = { _ in }
 
         private var outline: MKMultiPolygon?
         private var uncovered: MKMultiPolygon?
@@ -60,6 +80,13 @@ struct FogMapView: UIViewRepresentable {
                 tilted = view.tilted
                 map.preferredConfiguration = MKHybridMapConfiguration(elevationStyle: view.tilted ? .realistic : .flat)
                 if !first { tilt(map, animated: true) }
+            }
+
+            onSelectSticker = view.onSelectSticker
+            if view.stickers != pins {
+                pins = view.stickers
+                map.removeAnnotations(map.annotations.filter { $0 is StickerAnnotation })
+                map.addAnnotations(pins.map { StickerAnnotation($0) })
             }
 
             let cityChanged = view.city?.id != city?.id
@@ -192,6 +219,22 @@ struct FogMapView: UIViewRepresentable {
         func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
             let touched = mapView.subviews.first?.gestureRecognizers?.contains { $0.state == .began || $0.state == .changed } ?? false
             if touched { following = false }
+        }
+
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            guard let sticker = annotation as? StickerAnnotation, let entry = LoreLibrary.entry(id: sticker.id) else { return nil }
+            let view = mapView.dequeueReusableAnnotationView(withIdentifier: "sticker")
+                ?? MKAnnotationView(annotation: annotation, reuseIdentifier: "sticker")
+            view.annotation = annotation
+            view.image = StickerArt.image(for: entry, size: 40)
+            view.canShowCallout = false
+            return view
+        }
+
+        func mapView(_ mapView: MKMapView, didSelect annotation: MKAnnotation) {
+            guard let sticker = annotation as? StickerAnnotation else { return }
+            mapView.deselectAnnotation(annotation, animated: false)
+            onSelectSticker(sticker.id)
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
