@@ -129,8 +129,9 @@ final class ReplayPlayer {
     @ObservationIgnored private var lastHaptic = Date.distantPast
     @ObservationIgnored private var generation = 0
 
-    /// Seconds for the route to draw, longer for walks that uncovered more.
-    var duration: Double { min(12, max(5, 4 + 0.1 * Double(recap.reveals.count))) }
+    /// Seconds for the route to draw: 5 for every 10 minutes walked. At least 2, so a
+    /// short walk is still watchable, and at most 30, so a long one doesn't drag.
+    var duration: Double { min(30, max(2, recap.walk.duration / 600 * 5)) }
 
     init(recap: WalkRecap, others: [City]) {
         self.recap = recap
