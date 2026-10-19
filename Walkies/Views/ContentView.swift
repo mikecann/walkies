@@ -62,12 +62,7 @@ struct ContentView: View {
                     model.startWalk()
                     focus.send(.user)
                 }
-                VStack(spacing: 10) {
-                    if model.selectedCity != nil {
-                        HexBadge(icon: .art("icon-map"), fill: .badgeGreen, label: "Whole place") { focus.send(.city) }
-                    }
-                    HexBadge(icon: .symbol("location.fill"), fill: .badgeTeal, label: "Where am I") { focus.send(.user) }
-                }
+                HexBadge(icon: .symbol("location.fill"), fill: .badgeTeal, label: "Where am I") { focus.send(.user) }
             }
             .padding(.horizontal)
             .padding(.bottom, 8)

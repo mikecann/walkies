@@ -22,21 +22,44 @@ nonisolated struct LoreEntry: Codable, Identifiable, Hashable, Sendable {
     /// What the sticker shows, for making the art.
     var sticker: String
     var sources: [String]
+    /// The suburb the story belongs to, as OpenStreetMap names it. The first batch
+    /// (geographe.json) doesn't say; its pins decide.
+    var suburb: String? = nil
 }
 
-/// The lore that ships with the app.
+/// The lore that ships with the app: the Busselton area so far.
 nonisolated enum LoreLibrary {
-    /// Only the Busselton area has lore so far.
-    static func entries(for city: City) -> [LoreEntry] {
-        let area = "\(city.name), \(city.detail)"
-        guard area.contains("Busselton") else { return [] }
-        return busselton
-    }
+    static let files = ["geographe", "busselton-area"]
 
-    static let busselton: [LoreEntry] = load("geographe")
+    static let all: [LoreEntry] = files.flatMap(load)
+
+    private static let byID = Dictionary(all.map { ($0.id, $0) }) { first, _ in first }
 
     static func entry(id: String) -> LoreEntry? {
-        busselton.first { $0.id == id }
+        byID[id]
+    }
+
+    /// Which secrets each place gets. A story about a spot belongs to the place that
+    /// spot is in, so it's found where it happened, and waits there until you add
+    /// that place. The few that aren't about one spot go to the first Busselton-area
+    /// place you added.
+    static func assign(
+        _ entries: [LoreEntry] = all,
+        to cities: [City],
+        contains: (City, Coordinate) -> Bool
+    ) -> [UUID: [LoreEntry]] {
+        let home = cities.first { "\($0.name), \($0.detail)".contains("Busselton") }
+        var out: [UUID: [LoreEntry]] = [:]
+        for entry in entries {
+            if let place = entry.place {
+                if let owner = cities.first(where: { contains($0, place.coordinate) }) {
+                    out[owner.id, default: []].append(entry)
+                }
+            } else if let home {
+                out[home.id, default: []].append(entry)
+            }
+        }
+        return out
     }
 
     private static func load(_ name: String) -> [LoreEntry] {
@@ -51,12 +74,13 @@ nonisolated extension City {
     /// Hides each sticker under a tile. Stories about a spot in the suburb go under the
     /// nearest street tile to it; the rest are spread out, as far apart as possible, on
     /// tiles you haven't walked yet. Worked out once and saved, so stickers never move.
-    func placeStickers(_ entries: [LoreEntry]) -> [String: Hex] {
+    /// Leaves alone any tiles in `avoiding`, which already have a sticker.
+    func placeStickers(_ entries: [LoreEntry], avoiding: Set<Hex> = []) -> [String: Hex] {
         let shape = shape()
         let streets = tiles.sorted { ($0.q, $0.r) < ($1.q, $1.r) }
         guard !streets.isEmpty else { return [:] }
         var placed: [String: Hex] = [:]
-        var taken = Set<Hex>()
+        var taken = avoiding
         let ordered = entries.sorted { $0.id < $1.id }
 
         for entry in ordered {

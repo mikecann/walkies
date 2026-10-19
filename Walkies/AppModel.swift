@@ -310,32 +310,52 @@ final class AppModel {
 
     /// Every sticker hidden in the selected city, found or not.
     var stickersHere: [(entry: LoreEntry, hex: Hex)] {
-        guard let city = selectedCity, let placed = city.stickers else { return [] }
-        return LoreLibrary.entries(for: city)
-            .compactMap { entry in placed[entry.id].map { (entry, $0) } }
+        guard let placed = selectedCity?.stickers else { return [] }
+        return placed
+            .compactMap { id, hex in LoreLibrary.entry(id: id).map { ($0, hex) } }
             .sorted { $0.entry.title < $1.entry.title }
     }
 
-    /// Hides any lore that hasn't got a spot yet. Stickers under tiles you've already
-    /// walked are yours straight away.
+    /// Hides each place's secrets under its tiles. A secret that now belongs to a
+    /// different place (say its suburb's just been added) moves there, unless you've
+    /// already found it, when it stays where you found it. Secrets under tiles you've
+    /// already walked are yours straight away.
     private func placeStickers() {
+        let assigned = LoreLibrary.assign(to: cities) { city, point in
+            shape(for: city).contains(city.grid.projection.project(point))
+        }
+        var changed = false
         for i in cities.indices {
-            let entries = LoreLibrary.entries(for: cities[i])
-            let placed = cities[i].stickers ?? [:]
-            let missing = entries.filter { placed[$0.id] == nil }
-            guard !missing.isEmpty else { continue }
-            cities[i].stickers = placed.merging(cities[i].placeStickers(missing)) { old, _ in old }
+            let wanted = Set((assigned[cities[i].id] ?? []).map(\.id))
+            guard var placed = cities[i].stickers else { continue }
+            let leaving = placed.keys.filter { !wanted.contains($0) && foundStickers[$0] == nil }
+            guard !leaving.isEmpty else { continue }
+            for id in leaving { placed[id] = nil }
+            cities[i].stickers = placed
             cities[i].updatedAt = .now
+            changed = true
+        }
+        let hidden = Set(cities.flatMap { $0.stickers?.keys.map { $0 } ?? [] })
+        for i in cities.indices {
+            let missing = (assigned[cities[i].id] ?? []).filter { !hidden.contains($0.id) }
+            guard !missing.isEmpty else { continue }
+            let placed = cities[i].stickers ?? [:]
+            cities[i].stickers = placed.merging(cities[i].placeStickers(missing, avoiding: Set(placed.values))) { old, _ in old }
+            cities[i].updatedAt = .now
+            changed = true
             unlockStickers(in: cities[i], on: cities[i].visited, notify: false, popUp: true)
         }
-        store.save(cities)
+        if changed {
+            tilesRevision += 1
+            store.save(cities)
+        }
     }
 
     private func unlockStickers(in city: City, on hexes: Set<Hex>, notify: Bool, popUp: Bool) {
         guard let placed = city.stickers else { return }
         let ids = placed.filter { hexes.contains($0.value) && foundStickers[$0.key] == nil }.map(\.key)
         guard !ids.isEmpty else { return }
-        let entries = LoreLibrary.entries(for: city).filter { ids.contains($0.id) }
+        let entries = ids.sorted().compactMap(LoreLibrary.entry(id:))
         for entry in entries { foundStickers[entry.id] = .now }
         store.save(stickers: foundStickers)
         if popUp { stickerQueue.append(contentsOf: entries) }
@@ -372,6 +392,7 @@ final class AppModel {
             self.selectedCityID = cities.first?.id
         }
         tilesRevision += 1
+        placeStickers()
         store.save(cities)
         requestSync?()
     }
@@ -501,6 +522,7 @@ final class AppModel {
             cities.append(remote)
             if selectedCityID == nil { selectedCityID = remote.id }
             refreshNeighbours()
+            placeStickers()
         }
         shapes[remote.id] = nil
         replay(walks, onlyCity: remote.id)
