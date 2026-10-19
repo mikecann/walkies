@@ -51,6 +51,14 @@ struct SettingsView: View {
                     Text("Walks are kept on this phone and copied to your account whenever there's signal, so nothing's lost if you're out of range.")
                 }
 
+                Section("History") {
+                    NavigationLink {
+                        WalkHistoryView()
+                    } label: {
+                        LabeledContent("Past walks", value: "\(model.walks.count)")
+                    }
+                }
+
                 Section {
                     Toggle("Always on", isOn: $model.alwaysOn)
                 } footer: {

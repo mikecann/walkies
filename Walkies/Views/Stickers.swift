@@ -57,67 +57,133 @@ struct StickerArt: View {
 struct StickerBookView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("secretsBookSort") private var sort = SecretsBook.Sort.nearest
+    @AppStorage("secretsBookFilter") private var filter = SecretsBook.Filter.all
     @State private var open: LoreEntry?
+    @State private var visibleCount = 6
 
     var body: some View {
-        // Found ones first, newest at the top, then the rest.
-        let stickers = model.stickersHere.sorted { a, b in
-            switch (model.foundStickers[a.entry.id], model.foundStickers[b.entry.id]) {
-            case let (x?, y?): x > y
-            case (.some, nil): true
-            case (nil, .some): false
-            case (nil, nil): a.entry.title < b.entry.title
-            }
-        }
-        let found = stickers.filter { model.foundStickers[$0.entry.id] != nil }.count
+        let entries = LoreLibrary.all
+        let found = entries.filter { model.foundStickers[$0.id] != nil }.count
+        let areas = SecretsBook.sections(
+            entries: entries, found: model.foundStickers,
+            location: model.lastLocation.map { Coordinate($0.coordinate) },
+            places: model.cities, selectedCity: model.selectedCity, sort: sort, filter: filter
+        )
 
         NavigationStack {
-            Group {
-                if stickers.isEmpty {
-                    ContentUnavailableView(
-                        "No secrets here yet",
-                        systemImage: "book.closed",
-                        description: Text("Nobody's written any secrets for this place yet. Geographe and the rest of Busselton have some.")
-                    )
-                } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("\(found) of \(stickers.count) secrets found")
-                                .font(.headline)
-                            ProgressBar(value: Double(found) / Double(stickers.count))
-                            Text("Each one is a story about the area, hidden somewhere under the clouds. Walk new streets to find them.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal)
-                        .padding(.top, 8)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 24) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("\(found) of \(entries.count) secrets found")
+                            .font(.system(.title2, design: .rounded, weight: .heavy))
+                        ProgressBar(value: entries.isEmpty ? 0 : Double(found) / Double(entries.count))
+                        Text("Each one is a story about the area, hidden somewhere under the clouds. Walk new streets to find them.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(20)
+                    .stickerCard(in: RoundedRectangle(cornerRadius: 24))
 
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 12)], spacing: 20) {
-                            ForEach(stickers, id: \.entry.id) { item in
-                                let isFound = model.foundStickers[item.entry.id] != nil
-                                Button {
-                                    if isFound { open = item.entry }
-                                } label: {
-                                    StickerTile(entry: item.entry, found: isFound)
+                    ForEach(areas.prefix(visibleCount)) { area in
+                        areaSection(area)
+                            .onAppear {
+                                // Append a batch when its last area scrolls into view.
+                                if visibleCount < areas.count, area.id == areas.prefix(visibleCount).last?.id {
+                                    visibleCount = min(visibleCount + 6, areas.count)
                                 }
-                                .buttonStyle(.plain)
-                                .disabled(!isFound)
                             }
+                    }
+
+                    if visibleCount < areas.count {
+                        HStack(spacing: 8) {
+                            ProgressView().tint(Color.burnt)
+                            Text("Loading more…").font(.subheadline)
                         }
-                        .padding()
+                        .frame(maxWidth: .infinity)
+                    }
+
+                    if areas.isEmpty {
+                        ContentUnavailableView(
+                            filter == .found ? "No secrets found yet" : "No secrets to show",
+                            systemImage: "book.closed",
+                            description: Text(filter == .found
+                                ? "Walk new streets to find your first secret."
+                                : "Try another filter to see more secrets.")
+                        )
                     }
                 }
+                .padding()
             }
+            .id("\(sort.rawValue)-\(filter.rawValue)")
             .background(Color.cream)
+            .foregroundStyle(Color.ink)
             .navigationTitle("Secrets")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Picker("Sort", selection: $sort) {
+                            ForEach(SecretsBook.Sort.allCases) { option in
+                                Text(option.title).tag(option)
+                            }
+                        }
+                        Picker("Show", selection: $filter) {
+                            ForEach(SecretsBook.Filter.allCases) { option in
+                                Text(option.title).tag(option)
+                            }
+                        }
+                    } label: {
+                        Label("Sort and filter", systemImage: "line.3.horizontal.decrease")
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
             }
+            .onChange(of: sort) { visibleCount = 6 }
+            .onChange(of: filter) { visibleCount = 6 }
             .sheet(item: $open) { entry in
                 LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id])
+            }
+        }
+    }
+
+    private func areaSection(_ area: SecretsBook.Area) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(area.name)
+                    .font(.system(.title2, design: .rounded, weight: .heavy))
+                HStack {
+                    Text("\(area.found) of \(area.total) found")
+                    Spacer()
+                    if let distance = area.distance {
+                        Text("\(Format.distance(distance)) away")
+                    }
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                ProgressBar(value: area.progress)
+                if !area.isAdded {
+                    Text("Not one of your places yet. Add it from the map to start finding these.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(16)
+            .stickerCard(in: RoundedRectangle(cornerRadius: 20))
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 12)], spacing: 20) {
+                ForEach(area.entries) { entry in
+                    let isFound = model.foundStickers[entry.id] != nil
+                    Button {
+                        open = entry
+                    } label: {
+                        StickerTile(entry: entry, found: isFound)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!isFound)
+                }
             }
         }
     }

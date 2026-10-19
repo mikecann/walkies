@@ -50,9 +50,7 @@ struct ContentView: View {
                 Spacer(minLength: 12)
                 VStack(spacing: 10) {
                     HexBadge(icon: .art("icon-gear"), label: "Settings") { showingSettings = true }
-                    if !model.stickersHere.isEmpty {
-                        HexBadge(icon: .art("icon-book"), label: "Secrets") { showingStickers = true }
-                    }
+                    HexBadge(icon: .art("icon-book"), label: "Secrets") { showingStickers = true }
                 }
             }
             .padding(.horizontal)
