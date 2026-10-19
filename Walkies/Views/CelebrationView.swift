@@ -11,10 +11,12 @@ struct CelebrationView: View {
     let others: [City]
     let tilted: Bool
 
+    @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var player: ReplayPlayer
     @State private var handle = MapHandle()
     @State private var openSecret: LoreEntry?
+    @State private var showingProgress = false
 
     init(recap: WalkRecap, others: [City], tilted: Bool) {
         self.recap = recap
@@ -27,7 +29,7 @@ struct CelebrationView: View {
         ZStack {
             ReplayMap(recap: recap, tilted: tilted, handle: handle)
                 .overlay { CloudLayer(field: player.field, key: player.fieldKey, handle: handle) }
-                .overlay { ReplayEffects(recap: recap, player: player, handle: handle) }
+                .overlay { ReplayEffects(recap: recap, player: player, handle: handle, style: model.equipped[.celebration]) }
                 .ignoresSafeArea()
 
             VStack {
@@ -55,7 +57,12 @@ struct CelebrationView: View {
             if player.phase == .summary {
                 VStack {
                     Spacer()
-                    SummaryCard(recap: recap, onSecret: { openSecret = $0 }, onReplay: { player.replay() }, onDone: { dismiss() })
+                    SummaryCard(
+                        recap: recap, endingXP: model.xp,
+                        hasReward: !model.pendingPicks.isEmpty,
+                        onReward: { showingProgress = true },
+                        onSecret: { openSecret = $0 }, onReplay: { player.replay() }, onDone: { dismiss() }
+                    )
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -64,6 +71,9 @@ struct CelebrationView: View {
         .animation(.spring(response: 0.45, dampingFraction: 0.75), value: player.showingSecret?.id)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: player.phase)
         .task { await player.run() }
+        .sheet(isPresented: $showingProgress) {
+            ProgressionSheet(initialSection: .level)
+        }
         .sheet(item: $openSecret) { entry in
             LoreCardView(entry: entry, foundAt: nil)
         }
@@ -194,6 +204,7 @@ final class ReplayPlayer {
 
     private func finish() {
         phase = .summary
+        bursts.append(Burst(kind: .secret, coordinate: nil, start: .now, seed: 42_791))
         SoundFX.shared.play(.fanfare)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
@@ -305,6 +316,8 @@ private struct ReplayEffects: View {
     let recap: WalkRecap
     let player: ReplayPlayer
     let handle: MapHandle
+    let style: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let teal = Color(red: 0.16, green: 0.72, blue: 0.78)
 
@@ -321,7 +334,12 @@ private struct ReplayEffects: View {
                         guard let coordinate = burst.coordinate else { continue }
                         sparkles(in: &context, at: map.convert(coordinate.cl, toPointTo: map), t: t, seed: burst.seed)
                     case .secret:
-                        confetti(in: &context, size: size, t: t, seed: burst.seed)
+                        guard !reduceMotion else { continue }
+                        switch style {
+                        case "celebration.bubbles": bubbles(in: &context, size: size, t: t, seed: burst.seed)
+                        case "celebration.fireworks": fireworks(in: &context, size: size, t: t, seed: burst.seed)
+                        default: confetti(in: &context, size: size, t: t, seed: burst.seed)
+                        }
                     }
                 }
             }
@@ -374,6 +392,59 @@ private struct ReplayEffects: View {
             let r = (i < 6 ? 5 + rng.unit() * 4 : 2.5 + rng.unit() * 2.5) * (0.6 + 0.4 * fade)
             let colour: Color = i < 6 ? .white : (i % 2 == 0 ? .walkiesOrange : Color(red: 1, green: 0.82, blue: 0.3))
             context.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)), with: .color(colour.opacity(fade)))
+        }
+    }
+
+    /// Soft bubbles drift up, then leave a brief expanding ring as they pop.
+    private func bubbles(in context: inout GraphicsContext, size: CGSize, t: Double, seed: UInt64) {
+        guard t >= 0, t < 2.5 else { return }
+        var rng = SplitMix64(seed: seed)
+        let colours: [Color] = [.white, .badgeTeal, .badgeGreen, .pink]
+        for i in 0..<30 {
+            let delay = rng.unit() * 0.55
+            let life = 1.1 + rng.unit() * 0.85
+            let age = t - delay
+            let x = size.width * rng.unit() + sin(age * 2 + Double(i)) * 18
+            let bottom = size.height * (0.75 + rng.unit() * 0.2)
+            let speed = 100 + rng.unit() * 150
+            let radius = 7 + rng.unit() * 18
+            guard age >= 0, age < life + 0.18 else { continue }
+            let popping = max(0, (age - life) / 0.18)
+            let r = radius * (1 + popping * 0.5)
+            let y = bottom - speed * min(age, life)
+            let rect = CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)
+            let colour = colours[i % colours.count]
+            let fade = min(1, age * 6) * (1 - popping)
+            if popping == 0 {
+                context.fill(Path(ellipseIn: rect), with: .color(colour.opacity(0.16 * fade)))
+                context.fill(Path(ellipseIn: CGRect(x: x - r * 0.45, y: y - r * 0.5, width: r * 0.4, height: r * 0.25)), with: .color(.white.opacity(0.65 * fade)))
+            }
+            context.stroke(Path(ellipseIn: rect), with: .color(colour.opacity(0.65 * fade)), lineWidth: 1.5)
+        }
+    }
+
+    /// Three staggered bursts, with short glowing trails falling under gravity.
+    private func fireworks(in context: inout GraphicsContext, size: CGSize, t: Double, seed: UInt64) {
+        guard t >= 0, t < 2.5 else { return }
+        var rng = SplitMix64(seed: seed)
+        let colours: [Color] = [.walkiesOrange, .badgeTeal, .pink, .yellow, .white]
+        for burst in 0..<3 {
+            let origin = CGPoint(x: size.width * (0.2 + Double(burst) * 0.3), y: size.height * (0.2 + rng.unit() * 0.2))
+            let age = t - Double(burst) * 0.35
+            for i in 0..<32 {
+                let angle = Double(i) / 32 * 2 * .pi + rng.unit() * 0.1
+                let speed = 70 + rng.unit() * 140
+                guard age >= 0, age < 1.5 else { continue }
+                let fade = min(1, age * 12) * max(0, 1 - age / 1.5)
+                func point(_ time: Double) -> CGPoint {
+                    CGPoint(x: origin.x + cos(angle) * speed * time,
+                            y: origin.y + sin(angle) * speed * time + 70 * time * time)
+                }
+                var trail = Path()
+                trail.move(to: point(max(0, age - 0.08)))
+                trail.addLine(to: point(age))
+                context.stroke(trail, with: .color(colours[(i + burst) % colours.count].opacity(fade)), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+            }
         }
     }
 
@@ -440,16 +511,23 @@ private struct SecretPop: View {
 
 private struct SummaryCard: View {
     let recap: WalkRecap
+    let endingXP: Int
+    let hasReward: Bool
+    let onReward: () -> Void
     let onSecret: (LoreEntry) -> Void
     let onReplay: () -> Void
     let onDone: () -> Void
 
     @State private var counted = 0
+    @State private var countedShells = 0
     @State private var filled = false
+    @State private var xpLevel = 1
+    @State private var xpFill = 0.0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ViewThatFits(in: .vertical) {
-            content
+            content.fixedSize(horizontal: false, vertical: true)
             ScrollView { content }
         }
         .frame(maxHeight: 600)
@@ -476,6 +554,8 @@ private struct SummaryCard: View {
                     stat(Format.duration(recap.walk.duration), "Time")
                     stat("\(recap.secrets.count)", recap.secrets.count == 1 ? "Secret" : "Secrets")
                 }
+
+                progressionSummary
 
                 if !recap.secrets.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -568,20 +648,85 @@ private struct SummaryCard: View {
         return months < 1.5 ? "about a month" : "about \(Int(months.rounded())) months"
     }
 
-    /// Ticks the tile count up, then fills the progress bars.
+    private var progressionSummary: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                ShellBalance(balance: countedShells, prefix: "+")
+                    .contentTransition(.numericText(value: Double(countedShells)))
+                Spacer()
+                Text("+\(recap.xp) XP").font(.subheadline.weight(.bold))
+            }
+            HStack {
+                Text("Level \(xpLevel)").font(.headline)
+                Spacer()
+                Text("\(endingXP) total XP").font(.caption)
+            }
+            ProgressBar(value: xpFill)
+                .transaction { transaction in
+                    // Match the staged fill's duration instead of the bar's default spring.
+                    if !transaction.disablesAnimations {
+                        transaction.animation = .easeOut(duration: xpAnimationDuration)
+                        transaction.disablesAnimations = true
+                    }
+                }
+                .accessibilityLabel("Level \(xpLevel) progress")
+                .accessibilityValue("\(Int(xpFill * 100)) percent")
+            ForEach(Array(recap.questProgress.enumerated()), id: \.offset) { _, quest in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: filled && quest.completed ? "checkmark.circle.fill" : "checkmark.circle")
+                        .foregroundStyle(filled ? Color.badgeTeal : Color.ink.opacity(0.4))
+                        .symbolEffect(.bounce, value: filled)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(quest.kind.name).font(.caption.weight(.semibold))
+                        Text(QuestProgressText.value(filled ? quest.after : quest.before, kind: quest.kind))
+                            .font(.caption2).foregroundStyle(Color.ink.opacity(0.65))
+                        ProgressBar(value: min(1, (filled ? quest.after : quest.before) / quest.target))
+                    }
+                    if filled && quest.completed { Text("+40 shells").font(.caption.weight(.semibold)) }
+                }
+            }
+            if hasReward {
+                Button("Level up, choose a reward", action: onReward)
+                    .buttonStyle(StickerButtonStyle())
+            }
+        }
+        .padding(12)
+        .background(Color.sand.opacity(0.35), in: .rect(cornerRadius: 16))
+    }
+
+    private var xpAnimationDuration: Double {
+        let count = LevelMeter.fills(from: max(0, endingXP - recap.xp), to: endingXP).count
+        return reduceMotion ? 0 : min(0.65, 1.8 / Double(count))
+    }
+
+    /// Count tiles and shells together, then fill each level crossed by this walk.
     private func countUp() async {
-        let total = recap.newTiles
-        guard total > 0 else {
-            filled = true
-            return
-        }
-        let steps = min(total, 30)
+        let before = max(0, endingXP - recap.xp)
+        let meter = LevelMeter(xp: before)
+        xpLevel = meter.level
+        xpFill = meter.fraction
+        let total = max(recap.newTiles, recap.shells)
+        let steps = reduceMotion ? 1 : min(max(total, 1), 30)
         for i in 1...steps {
-            try? await Task.sleep(for: .milliseconds(max(18, 700 / steps)))
-            withAnimation(.snappy(duration: 0.1)) { counted = Int(Double(total) * Double(i) / Double(steps)) }
-            if i % 2 == 0 { SoundFX.shared.play(.tick) }
+            do { try await Task.sleep(for: .milliseconds(max(18, 700 / steps))) } catch { return }
+            withAnimation(.snappy(duration: 0.1)) {
+                counted = Int(Double(recap.newTiles) * Double(i) / Double(steps))
+                countedShells = Int(Double(recap.shells) * Double(i) / Double(steps))
+            }
+            if total > 0, i % 2 == 0 || steps == 1 { SoundFX.shared.play(.tick) }
         }
-        try? await Task.sleep(for: .milliseconds(200))
         withAnimation(.easeOut(duration: 0.9)) { filled = true }
+        let fills = LevelMeter.fills(from: before, to: endingXP)
+        let duration = xpAnimationDuration
+        for fill in fills {
+            guard !Task.isCancelled else { return }
+            // Reset without animating backwards when the previous level filled up.
+            var reset = Transaction(animation: nil)
+            reset.disablesAnimations = true
+            withTransaction(reset) { xpLevel = fill.level; xpFill = fill.from }
+            do { try await Task.sleep(for: .milliseconds(30)) } catch { return }
+            withAnimation(.easeOut(duration: duration)) { xpFill = fill.to }
+            do { try await Task.sleep(for: .seconds(duration)) } catch { return }
+        }
     }
 }

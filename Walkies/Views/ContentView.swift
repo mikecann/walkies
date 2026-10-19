@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var showingCities = false
     @State private var showingSettings = false
     @State private var showingStickers = false
+    @State private var showingProgress = false
     @State private var openSticker: LoreEntry?
     @State private var focus = MapFocusRequest()
     @State private var mapHandle = MapHandle()
@@ -47,7 +48,10 @@ struct ContentView: View {
         .ignoresSafeArea()
         .safeAreaInset(edge: .top) {
             HStack(alignment: .top) {
-                PlaceChip(city: model.selectedCity, secrets: secretsCount) { showingCities = true }
+                VStack(alignment: .leading, spacing: 8) {
+                    PlaceChip(city: model.selectedCity, secrets: secretsCount) { showingCities = true }
+                    ShellsChip { showingProgress = true }
+                }
                 Spacer(minLength: 12)
                 VStack(spacing: 10) {
                     HexBadge(icon: .art("icon-gear"), label: "Settings") { showingSettings = true }
@@ -105,6 +109,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
+        }
+        .sheet(isPresented: $showingProgress) {
+            ProgressionSheet()
         }
         .sheet(isPresented: $showingStickers) {
             StickerBookView()
