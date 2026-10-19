@@ -1,0 +1,654 @@
+[
+  {
+    "id": "seaweed-mountains",
+    "title": "Seaweed Mountains",
+    "body": "For years the beach just west of the marina disappeared under seagrass piled about three metres high. The 1990s breakwater ran straight out to sea and stopped the weed drifting on down the coast, so it stacked up here and rotted in the summer heat, giving off rotten egg gas. After one storm in 2019 there was around 20,000 cubic metres of it sitting on the sand.",
+    "category": "the-sea",
+    "place": {
+      "name": "Western Beach, Port Geographe",
+      "lat": -33.632,
+      "lon": 115.3865,
+      "insideGeographe": true
+    },
+    "sticker": "A grumpy brown mountain of seagrass with little wavy stink lines rising off the top",
+    "sources": [
+      "https://www.abc.net.au/news/2022-07-30/port-geographe-busselton-seaweed-success/101277706",
+      "https://busselton.wa.gov.au/resident/port-geographe"
+    ]
+  },
+  {
+    "id": "the-one-per-cent-trick",
+    "title": "The One Per Cent Trick",
+    "body": "The thing that has done most to clear Western Beach is a bulldozer drawing lines. Called slotting, it means ploughing channels through the seaweed so the waves can drag it back out to sea. Jud O'Brien from the Western Beach Residents Association described it as doing 1 per cent of the work so nature can do the other 99. In 2021 the beach stayed clear for nine months.",
+    "category": "the-sea",
+    "place": {
+      "name": "Western Beach, west end",
+      "lat": -33.63355,
+      "lon": 115.3832,
+      "insideGeographe": true
+    },
+    "sticker": "A tiny bulldozer combing neat stripes through a heap of seaweed while a wave smiles behind it",
+    "sources": [
+      "https://www.abc.net.au/news/2022-07-30/port-geographe-busselton-seaweed-success/101277706"
+    ]
+  },
+  {
+    "id": "moonlight-bay",
+    "title": "Moonlight Bay, Removed",
+    "body": "Just east of the marina mouth there used to be two little pocket beaches called Moonlight Bay, boxed in by groynes. A 2010 study found the structures here were highly efficient at trapping seagrass wrack, and in 2014 the State committed $28.15 million to rework the coast. The Moonlight Bay groynes came out, and the western breakwater was reshaped and shortened so sand and weed could keep moving east.",
+    "category": "modern-life",
+    "place": {
+      "name": "Former Moonlight Bay, east of the marina entrance",
+      "lat": -33.62742,
+      "lon": 115.39696,
+      "insideGeographe": true
+    },
+    "sticker": "A sleepy crescent moon lying on a little beach while two tiny rock groynes wave goodbye",
+    "sources": [
+      "https://busselton.wa.gov.au/resident/port-geographe",
+      "https://transport.wa.gov.au/mediaFiles/projects/PROJ-R-PortGeo-SeagrassWrack-Synopsis.pdf",
+      "https://transport.wa.gov.au/portgeographe"
+    ]
+  },
+  {
+    "id": "more-sand-than-planned",
+    "title": "More Sand Than Planned",
+    "body": "The marina's planners expected the western breakwater to catch about 50,000 cubic metres of sand a year, and a 2010 study found the real amount was well in excess of that. Sand and seagrass naturally travel east along this coast, so blocking them piled sand up on this side while Wonnerup Beach, past the marina, eroded. The Department of Transport still dredges and bypasses sand when it builds up.",
+    "category": "the-sea",
+    "place": {
+      "name": "Base of the western breakwater",
+      "lat": -33.6308,
+      "lon": 115.3879,
+      "insideGeographe": true
+    },
+    "sticker": "A smug little breakwater hugging an enormous pile of sand like a teddy bear",
+    "sources": [
+      "https://transport.wa.gov.au/mediaFiles/projects/PROJ-R-PortGeo-SeagrassWrack-Synopsis.pdf",
+      "https://busselton.wa.gov.au/resident/port-geographe",
+      "https://transport.wa.gov.au/portgeographe",
+      "https://www.abc.net.au/news/2022-07-30/port-geographe-busselton-seaweed-success/101277706"
+    ]
+  },
+  {
+    "id": "opened-by-the-premier",
+    "title": "Opened by the Premier",
+    "body": "On 18 January 1997 Premier Richard Court came down to open the harbour entrance at Port Geographe. The developer, Axiom Properties, had already sold more than 230 lots in two years for over $32 million. Geographe wasn't even a suburb then. Landgate only approved the name in December 1998, taking it from the bay, and that year the government was still calling this area East Busselton.",
+    "category": "modern-life",
+    "place": {
+      "name": "Marina entrance, Port Geographe",
+      "lat": -33.6313,
+      "lon": 115.3905,
+      "insideGeographe": true
+    },
+    "sticker": "A giant pair of scissors snipping a ribbon across the marina mouth with a little boat waiting to go through",
+    "sources": [
+      "https://www.wa.gov.au/government/media-statements/Court-Coalition-Government/Busselton-established-as-one-of-Australia's-most-popular-residential-spots-19970118",
+      "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/6/query?where=full_name%3D%27Geographe%27&outFields=full_name,origins,date_approved&f=json",
+      "https://www.wa.gov.au/government/media-statements/Court%20Coalition%20Government/Ellenbrook-and-Busselton-primary-schools-start-term-in-new-premises-19980719"
+    ]
+  },
+  {
+    "id": "canals-with-sailing-names",
+    "title": "Canals With Sailing Names",
+    "body": "Every waterway in the marina has an official name. The main entrance is the Grand Canal, and off it run Windjammer, Pearler, Mizzen, Foremast, Yardarm, Helm, Leeward, Fathom and Trysail canals, plus Anchor Cove and Galley Cove. The canals were dug in the 1990s, but Landgate's records show the names were only formally approved in August 2023.",
+    "category": "odd-records",
+    "place": {
+      "name": "Canal footbridge, Port Geographe",
+      "lat": -33.63568,
+      "lon": 115.39208,
+      "insideGeographe": true
+    },
+    "sticker": "A little canal signpost with a dozen arrows, each one tipped with a tiny sail",
+    "sources": [
+      "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/9/query?where=full_name%3D%27Grand+Canal%27&outFields=full_name,origins,date_approved&f=json",
+      "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/9/query?where=full_name%3D%27Windjammer+Canal%27&outFields=full_name,origins,date_approved&f=json",
+      "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/9/query?where=full_name%3D%27Pearler+Canal%27&outFields=full_name,origins,date_approved&f=json",
+      "https://busselton.wa.gov.au/resident/port-geographe"
+    ]
+  },
+  {
+    "id": "geographes-woodhenge",
+    "title": "Geographe's Own Woodhenge",
+    "body": "This little park has an official name that started as a local nickname. Decorative wooden sleepers were stood upright in the ground here, and they reminded residents of Stonehenge. Landgate's naming record says exactly that, and Woodhenge was formally approved as the name in August 2023.",
+    "category": "odd-records",
+    "place": {
+      "name": "Woodhenge Park",
+      "lat": -33.63251,
+      "lon": 115.3986,
+      "insideGeographe": true
+    },
+    "sticker": "A ring of chunky wooden sleepers standing in a circle with a tiny dog in a druid hood in the middle",
+    "sources": [
+      "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/10/query?where=full_name%3D%27Woodhenge+Park%27&outFields=full_name,origins,date_approved&f=json"
+    ]
+  },
+  {
+    "id": "kwilena-means-dolphin",
+    "title": "Kwilena Means Dolphin",
+    "body": "Kwilena is the Wardandi Noongar word for dolphin, and Traditional Owners suggested it as the name for this park. A WA Government fact sheet on the Noongar seasons says Nyitting, or dreamtime, stories tell of Noongar people working together with kwilena and sharing their catch. It places that story in Kambarang, the October and November season when families traditionally came back to the coast.",
+    "category": "first-nations",
+    "place": {
+      "name": "Kwilena Park",
+      "lat": -33.63224,
+      "lon": 115.3961,
+      "insideGeographe": true
+    },
+    "sticker": "A smiling dolphin leaping beside a small fishing net full of fish, in soft ochre and sea-blue colours",
+    "sources": [
+      "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/10/query?where=full_name%3D%27Kwilena+Park%27&outFields=full_name,origins,date_approved&f=json",
+      "https://marinewaters.fish.wa.gov.au/resource/fact-sheet-the-noongar-six-seasons/"
+    ]
+  },
+  {
+    "id": "koolangka-park",
+    "title": "Koolangka Park",
+    "body": "The playground park near the marina mouth is called Koolangka, which means children in the Wardandi Noongar language, and the name was suggested by Traditional Owners. Two other parks close by got Wardandi names at the same time in 2023. Balayi Park means lookout, and Kwondong Park means wild peach.",
+    "category": "first-nations",
+    "place": {
+      "name": "Koolangka Park",
+      "lat": -33.6289,
+      "lon": 115.39277,
+      "insideGeographe": true
+    },
+    "sticker": "Two little kids on a swing set with a lookout platform and a small peach tree behind them",
+    "sources": [
+      "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/10/query?where=full_name%3D%27Koolangka+Park%27&outFields=full_name,origins,date_approved&f=json",
+      "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/10/query?where=full_name%3D%27Balayi+Park%27&outFields=full_name,origins,date_approved&f=json",
+      "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/10/query?where=full_name%3D%27Kwondong+Park%27&outFields=full_name,origins,date_approved&f=json"
+    ]
+  },
+  {
+    "id": "baudins-crew-lives-here",
+    "title": "Baudin's Crew Lives Here",
+    "body": "The streets behind the beach here read like the crew list of the 1801 French expedition. Freycinet, Hamelin, Heirisson, Bernier, Lesueur, Levillain, Riedle, Ransonnet and Moreau were all members of Nicolas Baudin's voyage, and every one of them has a street around here. Landgate credits Heirisson, a sub lieutenant, with discovering the Vasse and Wonnerup estuaries.",
+    "category": "history",
+    "place": {
+      "name": "Freycinet Drive",
+      "lat": -33.63464,
+      "lon": 115.38966,
+      "insideGeographe": true
+    },
+    "sticker": "A French sailor in a big bicorne hat squinting up at a blank street sign on a pole",
+    "sources": [
+      "https://baudin.sydney.edu.au/members-of-the-expedition/",
+      "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/11/query?where=full_name%3D%27Heirisson+Reserve%27&outFields=full_name,origins,date_approved&f=json",
+      "https://www.openstreetmap.org/#map=17/-33.6346/115.3897"
+    ]
+  },
+  {
+    "id": "the-inn-that-never-opened",
+    "title": "The Inn That Never Opened",
+    "body": "Charles Bussell started building Sandilands in the 1840s as a wayside inn on the road to Bunbury, but the inn plan never really came off. It began as a six-room wattle-and-daub house with a thatched roof, believed to be only the third house built in Busselton. A later owner, Frances Cookworthy, grew it to 17 rooms with her family crest in a bay window. Descendants of the family that built it have lived there for over a century.",
+    "category": "history",
+    "place": {
+      "name": "Sandilands, seen from Sadlier Link",
+      "lat": -33.64656,
+      "lon": 115.36151,
+      "insideGeographe": true
+    },
+    "sticker": "A little thatched cottage with a blank swinging inn sign and a big padlock on the door",
+    "sources": [
+      "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/45506f49-302f-4acf-bab8-fe6d1e597c33"
+    ]
+  },
+  {
+    "id": "a-villa-on-the-towns-edge",
+    "title": "A Villa on the Town's Edge",
+    "body": "In December 1908 the South-Western News reported Mrs Ed. Brockman building \"a pretty villa on the eastern boundary of the town\". That old edge of town is now the western edge of Geographe, and the villa is Beachgrove on Ford Road. Capel Brockman was born a Bussell at Cattle Chosen and came back to Busselton after her husband Edward died in 1902.",
+    "category": "history",
+    "place": {
+      "name": "Beachgrove, seen from Beachgrove Place",
+      "lat": -33.64722,
+      "lon": 115.35968,
+      "insideGeographe": true
+    },
+    "sticker": "A two-storey limestone and timber villa with a rolled-up newspaper on the front step",
+    "sources": [
+      "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/3b481c5f-6fdd-42fd-b6dc-2a09a63404f3"
+    ]
+  },
+  {
+    "id": "the-school-that-moved",
+    "title": "The School That Moved House",
+    "body": "Busselton Primary School only arrived in Geographe in mid-1998, when its 610 students left cramped buildings in the town centre for a new 15-classroom school here. The old town-centre site was sold and is now the Busselton Central shopping centre. Back at that old school, a teenage Nugget Coombs worked as a monitor in 1924, decades before he became the first governor of the Reserve Bank of Australia.",
+    "category": "history",
+    "place": {
+      "name": "Busselton Primary School",
+      "lat": -33.63918,
+      "lon": 115.37733,
+      "insideGeographe": true
+    },
+    "sticker": "A little red-roofed schoolhouse with legs, striding along carrying its own school bell",
+    "sources": [
+      "https://www.wa.gov.au/government/media-statements/Court%20Coalition%20Government/Ellenbrook-and-Busselton-primary-schools-start-term-in-new-premises-19980719",
+      "https://inherit.dplh.wa.gov.au/public/inventory/details/ab1ba1d2-a05c-444b-9127-46f30aeefbba",
+      "https://adb.anu.edu.au/biography/coombs-herbert-cole-nugget-246"
+    ]
+  },
+  {
+    "id": "streets-named-like-neighbours",
+    "title": "Streets Named Like Neighbours",
+    "body": "Avocet Boulevard and Stilt Court share their names with two of the birds the Vasse-Wonnerup wetlands are Ramsar-listed for, and those wetlands include the estuary just south of these houses. In the December 2024 count there were 1,129 black-winged stilts and 1,088 red-necked avocets on the system. The avocets fell just 12 birds short of their target.",
+    "category": "nature",
+    "place": {
+      "name": "Avocet Boulevard",
+      "lat": -33.64191,
+      "lon": 115.37515,
+      "insideGeographe": true
+    },
+    "sticker": "A long-legged avocet with an upturned beak proudly leaning on a blank street sign post",
+    "sources": [
+      "https://rgw.dwer.wa.gov.au/vasse-wonnerup-wetlands-report-cards/waterbirds/",
+      "https://www.openstreetmap.org/#map=17/-33.6419/115.3752"
+    ]
+  },
+  {
+    "id": "thirty-five-million-kilos-of-salad",
+    "title": "Thirty-Five Million Kilos of Salad",
+    "body": "The seagrass meadow off this beach is the second largest in WA, and in 2008 and 2009 it shed up to 35 million kilos of leaves. Because wrack is denser than seawater, most of it sits on the seabed until the autumn and winter storms lift it ashore. On most of the bay's beaches it only hangs around for days or weeks, recycling nutrients and feeding the critters in the sand.",
+    "category": "nature",
+    "place": {
+      "name": "Herring Street beach access",
+      "lat": -33.64001,
+      "lon": 115.36679,
+      "insideGeographe": true
+    },
+    "sticker": "A cheerful tangle of ribbon weed on the sand with a tiny sandhopper tucking into lunch",
+    "sources": [
+      "https://transport.wa.gov.au/mediaFiles/projects/PROJ-R-PortGeo-SeagrassWrack-Synopsis.pdf",
+      "https://geocatch.asn.au/keepwatch-seagrass-monitoring"
+    ]
+  },
+  {
+    "id": "commuters-from-the-arctic",
+    "title": "Commuters From the Arctic",
+    "body": "Some of the little wading birds on this estuary breed in Alaska and Siberia, then fly down to spend our summer here. DBCA says they start arriving in late spring and peak in late summer as the water drops, with more than 25,000 birds counted on the wetland system at once. All up, the Vasse-Wonnerup wetlands support over 30,000 waterbirds a year from more than 90 species.",
+    "category": "nature",
+    "place": {
+      "name": "Vasse Estuary shore, Layman Road",
+      "lat": -33.64314,
+      "lon": 115.38968,
+      "insideGeographe": true
+    },
+    "sticker": "A tiny sandpiper in a woolly scarf dragging a suitcase covered in travel stickers",
+    "sources": [
+      "https://rgw.dwer.wa.gov.au/vasse-wonnerup-wetlands-science-update/",
+      "https://rgw.dwer.wa.gov.au/celebrating-the-waterbirds-of-the-vasse-wonnerup-wetlands/"
+    ]
+  },
+  {
+    "id": "the-accidental-wetland",
+    "title": "The Accidental Wetland",
+    "body": "In 1905 so many fish died in the lower Vasse-Wonnerup estuaries that the stench was described as unbearable. In 1907 the government finally built floodgates to keep seawater off the farms, and they ended up creating a freshwater wetland by accident. It became so good for birds that it was Ramsar-listed in 1990, and it regularly holds the largest black swan breeding colony in south-western Australia.",
+    "category": "history",
+    "place": {
+      "name": "Vasse Floodgates, Wonnerup",
+      "lat": -33.61953,
+      "lon": 115.41398,
+      "insideGeographe": false
+    },
+    "sticker": "A sturdy little floodgate with a black swan family nesting on top",
+    "sources": [
+      "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/837cd1a9-53e2-4b95-a2d7-ca3ff432976d",
+      "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/e54a85eb-ade6-43be-9729-5ae6f127112c"
+    ]
+  },
+  {
+    "id": "wa-first-steam-engine",
+    "title": "WA's First Steam Engine",
+    "body": "The first locomotive ever to run in Western Australia hauled timber for a mill at the mouth of the Vasse Estuary, just past the marina. The Ballaarat was built in Ballarat in Victoria, and its line officially opened on 23 December 1871. Its sparks kept setting fire to the forest and even to the logs it was pulling. After years left in a paddock, it now lives in Railway House on the foreshore.",
+    "category": "history",
+    "place": {
+      "name": "Railway House, Busselton foreshore",
+      "lat": -33.64498,
+      "lon": 115.34563,
+      "insideGeographe": false
+    },
+    "sticker": "A tiny puffing steam engine with sparks popping out of its funnel and a worried log on the wagon behind",
+    "sources": [
+      "https://www.busselton.wa.gov.au/discover/heritage-and-arts/ballaarat-engine.aspx",
+      "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/837cd1a9-53e2-4b95-a2d7-ca3ff432976d",
+      "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/f4214ecd-cced-4c6a-ba34-ea8b40527cc5"
+    ]
+  },
+  {
+    "id": "wrecked-against-the-jetty",
+    "title": "Wrecked Against the Jetty",
+    "body": "On 4 June 1879 the schooner Mary was tied up at the Lockeville jetty near Wonnerup when the weather turned. She was hauled out to a mooring, but in the heavy sea she dragged it and hit a jetty pile. Her crew scuttled her, and her four passengers got ashore. Busselton fishermen recovered her jarrah rudder in the 1960s, and it's now in the Busselton Museum.",
+    "category": "the-sea",
+    "place": {
+      "name": "Wreck of the Mary, Lockeville",
+      "lat": -33.61721,
+      "lon": 115.40954,
+      "insideGeographe": false
+    },
+    "sticker": "A little schooner leaning sheepishly against a jetty post with its rudder floating off on its own",
+    "sources": [
+      "https://museum.wa.gov.au/maritime-archaeology-db/wrecks/id-1419"
+    ]
+  },
+  {
+    "id": "the-windmill-that-waited",
+    "title": "The Windmill That Waited",
+    "body": "When Henry and James Chapman's windmill was finished in 1850, the breezes turned out to be so fickle that everyone was expected to help run it the moment one sprang up, even at night. Sometimes a horse helped turn the sails. It closed after only four years, having cost the brothers an estimated £2,000. Their miller, James Richardson, used to row across the estuary to work.",
+    "category": "history",
+    "place": {
+      "name": "Chapman's Mill, Inlet Park",
+      "lat": -33.6462,
+      "lon": 115.40852,
+      "insideGeographe": false
+    },
+    "sticker": "A stone windmill tower with droopy sails and a little rowboat tied up below it",
+    "sources": [
+      "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/78bf831c-1397-4b5f-85c2-0a72d933e81a",
+      "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/11/query?where=full_name%3D%27James+Richardson+Park%27&outFields=full_name,origins,date_approved&f=json"
+    ]
+  },
+  {
+    "id": "wa-first-cheese-factory",
+    "title": "WA's First Cheese Factory",
+    "body": "Out at Pigeon Grove, named for the bronze-wing pigeons that were once abundant here, the Spurge family started the first cheese factory in Western Australia. It failed because there wasn't enough milk within a reasonable distance, and the equipment was sold to someone in Nannup. The house itself began as three rooms of mud and rushes, built by the family of Sergeant Roger Guerin.",
+    "category": "odd-records",
+    "place": {
+      "name": "Pigeon Grove Homestead",
+      "lat": -33.64648,
+      "lon": 115.40594,
+      "insideGeographe": false
+    },
+    "sticker": "A bronze-wing pigeon proudly holding up a wedge of cheese beside an empty milk bucket",
+    "sources": [
+      "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/6ed88273-091f-4d9e-b54e-5ee317431368"
+    ]
+  },
+  {
+    "id": "sails-like-shields",
+    "title": "Sails Like Shields",
+    "body": "The reserve beside Wonnerup Inlet carries a name for the sailing ships that came into Geographe Bay. Landgate's naming record, citing historian Neville Green's book Broken Spears, says local Aboriginal people probably called them wunda-buri. Wunda meant the shield-like sail, and buri meant the roar of the cannon.",
+    "category": "first-nations",
+    "place": {
+      "name": "Wunda-Buri Reserve, Wonnerup",
+      "lat": -33.61944,
+      "lon": 115.41222,
+      "insideGeographe": false
+    },
+    "sticker": "An old sailing ship with big curved sails and a small puff of cannon smoke on the horizon",
+    "sources": [
+      "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/11/query?where=full_name%3D%27Wunda-Buri+Reserve%27&outFields=full_name,origins,date_approved&f=json"
+    ]
+  },
+  {
+    "id": "the-sailor-who-gave-us-vasse",
+    "title": "The Sailor Who Gave Us Vasse",
+    "body": "In June 1801 a longboat from the Géographe got stuck in Wonnerup Inlet, and during the salvage a seaman named Vasse disappeared in the surf. He was presumed drowned, though French papers later claimed he walked 300 miles and was picked up by an American whaler. In 1838 George Fletcher Moore wrote that Aboriginal people told him Vasse washed up at Wonnerup and lived with them. The Vasse River and estuary still carry his name.",
+    "category": "history",
+    "place": {
+      "name": "Site of the Géographe longboat loss, Wonnerup Inlet",
+      "lat": -33.61468,
+      "lon": 115.42753,
+      "insideGeographe": false
+    },
+    "sticker": "A little French sailor in a striped shirt waving from a wave, with a longboat stuck on a sandbar behind him",
+    "sources": [
+      "https://www.museum.wa.gov.au/maritime-archaeology-db/strangers-on-the-shore/boat-geographe",
+      "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/a7298732-9829-40fd-a07f-06b273f977be",
+      "https://en.wikisource.org/wiki/The_Perth_gazette_and_Western_Australian_journal/Volume_6/5_May_1838"
+    ]
+  },
+  {
+    "id": "ford-road-has-a-ford",
+    "title": "Ford Road Has a Ford",
+    "body": "Ford Road, which runs down Geographe's western edge, is named after an actual ford. Where it meets the Vasse River the water is shallower than the stretches either side, and early settlers crossed there before there was a bridge. The heritage listing says Wadandi people probably used the same crossing long before that.",
+    "category": "history",
+    "place": {
+      "name": "Ford Road crossing of the Vasse River",
+      "lat": -33.65357,
+      "lon": 115.35878,
+      "insideGeographe": false
+    },
+    "sticker": "A pair of muddy boots wading across a shallow river beside a little road sign post",
+    "sources": [
+      "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/ca552f54-c919-40cd-9d1d-9e6fdb8aca1d"
+    ]
+  },
+  {
+    "id": "chasing-deep-water",
+    "title": "Chasing Deep Water",
+    "body": "The jetty is so long because the sand kept winning. The first 176 metres opened in 1865, but after ten years of drifting sand the water was too shallow for ships to moor. So another 143 metres went on in 1875, and the extensions kept coming until the 1960s, by which time it stretched 1,841 metres, the longest wooden-piled jetty in the Southern Hemisphere.",
+    "category": "the-sea",
+    "place": {
+      "name": "Busselton Jetty, shore end",
+      "lat": -33.64442,
+      "lon": 115.34489,
+      "insideGeographe": false
+    },
+    "sticker": "A very long jetty running off the edge of the sticker with a little ship hurrying after it",
+    "sources": [
+      "https://collectionswa.net.au/node/57035",
+      "https://www.busselton.wa.gov.au/discover/tourism/busselton-jetty.aspx"
+    ]
+  },
+  {
+    "id": "a-room-eight-metres-down",
+    "title": "A Room Eight Metres Down",
+    "body": "The Underwater Observatory near the end of the jetty was built by Doric and floated down to Busselton from Cockburn Sound. It opened on 13 December 2003, with its viewing chamber eight metres below the surface. The State said the spot was picked to show off the most southerly soft coral formations in the world, with more than 300 species living under the jetty.",
+    "category": "the-sea",
+    "place": {
+      "name": "Busselton Jetty Underwater Observatory",
+      "lat": -33.62996,
+      "lon": 115.33857,
+      "insideGeographe": false
+    },
+    "sticker": "A round observatory tower poking out of the sea with a curious fish pressing its face to the window",
+    "sources": [
+      "https://www.wa.gov.au/government/media-statements/Gallop%20Labor%20Government/Underwater-observatory-puts-Busselton-on-international-map-20031213"
+    ]
+  },
+  {
+    "id": "the-postie-under-the-sea",
+    "title": "The Postie Under the Sea",
+    "body": "Off the end of the jetty sits a three-metre ceramic postman, one of 13 big sculptures sunk in 2023 to make a reef. Georgia Zoric's Post Master General honours a WWII-era man who rode his bike to the end of the jetty every day to collect the mail and check customs. Under him she set stoneware bottles with holes cut in them, so octopus and eels have somewhere to hide.",
+    "category": "modern-life",
+    "place": {
+      "name": "End of the Busselton Jetty",
+      "lat": -33.62908,
+      "lon": 115.33838,
+      "insideGeographe": false
+    },
+    "sticker": "A cheerful postman statue on the seabed with an octopus peeking out of his mailbag",
+    "sources": [
+      "https://www.abc.net.au/news/2023-07-12/busselton-jetty-sculptures-create-artificial-reef/102588000"
+    ]
+  },
+  {
+    "id": "swim-for-a-hammer",
+    "title": "Swim for a Hammer",
+    "body": "The first Busselton Jetty Swim in 1996 had just 82 swimmers, and the prizes included a door lock and a hammer donated by building suppliers. The finish line was two star pickets in the water, and swimmers were handed raffle tickets so they knew what place they came. By 2025 the field had grown to 5,496 swimmers.",
+    "category": "modern-life",
+    "place": {
+      "name": "Busselton Jetty, halfway out",
+      "lat": -33.63657,
+      "lon": 115.3405,
+      "insideGeographe": false
+    },
+    "sticker": "A swimmer in goggles holding a hammer over their head like a trophy",
+    "sources": [
+      "https://busseltonjettyswim.org.au/exhibit-doco-30-years-around-the-jetty/",
+      "https://busseltonjettyswim.org.au/about-us/"
+    ]
+  },
+  {
+    "id": "the-cow-that-picked-the-farm",
+    "title": "The Cow That Picked the Farm",
+    "body": "The Bussells' farm got its name from a cow. In 1834 the brothers moved up from Augusta to the Vasse, and that September a cow called Yulika, who had strayed from Augusta, turned up with a calf. They named the property Cattle Chosen. The track they cut from the beach to the river when they landed became Busselton's main street.",
+    "category": "history",
+    "place": {
+      "name": "Cattle Chosen",
+      "lat": -33.67354,
+      "lon": 115.3594,
+      "insideGeographe": false
+    },
+    "sticker": "A smug cow and her calf standing proudly under a rustic wooden farm gate",
+    "sources": [
+      "https://adb.anu.edu.au/biography/bussell-john-garrett-1860"
+    ]
+  },
+  {
+    "id": "a-house-built-from-a-whaler",
+    "title": "A House Built From a Whaler",
+    "body": "In August 1844 a storm snapped the anchor cables of the American whaling barque Halcyon and put her in the shallows west of Toby Inlet. John Molloy and Alfred Bussell bought the hull for £60 to build a schooner, but the nearly finished boat fell onto its side in a gale. Molloy pulled it apart and used the timber for his house, Fairlawn, on the Vasse River.",
+    "category": "the-sea",
+    "place": {
+      "name": "Fairlawn homestead",
+      "lat": -33.67062,
+      "lon": 115.35434,
+      "insideGeographe": false
+    },
+    "sticker": "A cosy cottage built from curved ship planks with a little anchor hanging by the front door",
+    "sources": [
+      "https://museum.wa.gov.au/maritime-archaeology-db/wrecks/id-1221",
+      "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/10/query?where=full_name%3D%27Fairlawn%27&outFields=full_name,origins,date_approved&f=json"
+    ]
+  },
+  {
+    "id": "seventeen-ships-one-summer",
+    "title": "Seventeen Ships One Summer",
+    "body": "American whaling ships were regulars in the bay in the early days, swapping supplies for the settlers' fresh vegetables, cream, butter and meat. A Vasse correspondent counted seventeen vessels in Geographe Bay over the summer of 1855 to 1856, including the whaler Vesper with 500 barrels of oil and a ship taking Timor ponies to Hobart. Locals grumbled that with no custom house or bond store, dodging duty was too easy.",
+    "category": "the-sea",
+    "place": null,
+    "sticker": "A whaling ship at anchor with a little rowboat bringing out a cabbage and a pat of butter",
+    "sources": [
+      "https://trove.nla.gov.au/newspaper/article/66006844",
+      "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/78bf831c-1397-4b5f-85c2-0a72d933e81a"
+    ]
+  },
+  {
+    "id": "the-sundial-in-the-scrub",
+    "title": "The Sundial in the Scrub",
+    "body": "The sundial on the corner of Signal Park is believed to have belonged to Lieutenant Colonel Molloy and was first set up around 1853. As the story goes, it later vanished from a private garden and turned up years afterwards in the beach scrub. The local Masonic lodge re-erected it for the 1929 Centenary and sealed a time capsule inside the plinth they built.",
+    "category": "odd-records",
+    "place": {
+      "name": "Signal Park sundial, Busselton",
+      "lat": -33.64668,
+      "lon": 115.34336,
+      "insideGeographe": false
+    },
+    "sticker": "A brass sundial peeking out of a coastal bush with a startled lizard beside it",
+    "sources": [
+      "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/009bb826-459f-45d2-974a-27bb033315ea"
+    ]
+  },
+  {
+    "id": "garden-of-the-rainbow-girls",
+    "title": "Garden of the Rainbow Girls",
+    "body": "Waljin Aboriginal Garden on Peel Terrace was designed by local Noongar Mitchella Thompson, and the City's heritage listing says Waljin means rainbow girls. Rings of native plants and paving wind like a maze towards a seat shaped like a snake in the centre. The plants are labelled with how Noongar people used them.",
+    "category": "first-nations",
+    "place": {
+      "name": "Waljin Aboriginal Garden, Busselton",
+      "lat": -33.65498,
+      "lon": 115.34497,
+      "insideGeographe": false
+    },
+    "sticker": "A spiral garden path seen from above with a soft rainbow arching over it",
+    "sources": [
+      "https://inherit.dplh.wa.gov.au/Public/Inventory/Details/f72a80a5-14be-4aa5-afad-ff86a5fcfa9c"
+    ]
+  },
+  {
+    "id": "one-town-three-names",
+    "title": "One Town, Three Names",
+    "body": "Before it was Busselton, this place was Undalup, the Wadandi name honouring the respected warrior and leader Undal. Then came the Vasse, after the French sailor lost here in 1801. Busselton, after the Bussell family, first turned up officially in 1835, but people used it and the Vasse side by side until around 1900.",
+    "category": "first-nations",
+    "place": null,
+    "sticker": "A wooden signpost with three blank arrows all pointing the same way, each painted a different colour",
+    "sources": [
+      "https://busselton.wa.gov.au/community/aboriginal-culture",
+      "https://www.undalup.com/aboutus",
+      "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/6/query?where=full_name%3D%27Busselton%27&outFields=full_name,origins,date_approved&f=json"
+    ]
+  },
+  {
+    "id": "place-of-the-digging-stick",
+    "title": "Place of the Digging Stick",
+    "body": "Plenty of local names end in up, which means place of. The City of Busselton gives Wonnerup as the place of the women's digging stick, and the name has been on maps of the area since 1839. Down the coast, Quindalup is the place of the quenda, a little bandicoot, and Yallingup is the place of holes.",
+    "category": "first-nations",
+    "place": {
+      "name": "Wonnerup Inlet",
+      "lat": -33.6138,
+      "lon": 115.42234,
+      "insideGeographe": false
+    },
+    "sticker": "A wooden digging stick standing upright in the sand beside a calm inlet",
+    "sources": [
+      "https://busselton.wa.gov.au/community/aboriginal-culture",
+      "https://public-services.slip.wa.gov.au/public/rest/services/SLIP_Public_Services/Places_and_Addresses/MapServer/6/query?where=full_name%3D%27Wonnerup%27&outFields=full_name,origins,date_approved&f=json",
+      "https://boodjar.sis.uwa.edu.au/boodjar-placenames/wonnerup"
+    ]
+  },
+  {
+    "id": "six-seasons-not-four",
+    "title": "Six Seasons, Not Four",
+    "body": "The Noongar year has six seasons, and the Busselton-based Undalup Association shares them publicly. Djilba, in August and September, is when the koola or emu plum starts to fruit. Bunuru, in February and March, is the hottest, traditionally a great time for living and fishing on the coast and estuaries. In Djeran, April and May, the ngari (salmon) are abundant.",
+    "category": "first-nations",
+    "place": null,
+    "sticker": "A round calendar wheel split into six coloured slices with a tiny picture in each one",
+    "sources": [
+      "https://www.undalup.com/free-ressources"
+    ]
+  },
+  {
+    "id": "a-rest-stop-for-whales",
+    "title": "A Rest Stop for Whales",
+    "body": "Geographe Bay is one of very few places in the world where blue whales, the biggest of the lot, migrate within a few hundred metres of the coast. A Curtin University researcher also called it a last stop for many whales heading south with young calves. Parks Australia puts it plainly: migrating humpbacks and blue whales call in here for a rest.",
+    "category": "nature",
+    "place": null,
+    "sticker": "A big blue whale snoozing on the bay with a tiny pillow under its head",
+    "sources": [
+      "https://www.curtin.edu.au/news/media-release/saving-western-australias-iconic-whales/",
+      "https://australianmarineparks.gov.au/parks/south-west/geographe"
+    ]
+  },
+  {
+    "id": "possums-in-the-peppermints",
+    "title": "Possums in the Peppermints",
+    "body": "The western ringtail possum, or ngwayir, is critically endangered in WA, yet the coastal strip between Busselton and Dunsborough has its highest densities. Peppermint trees make up 95 per cent of its diet, and it will move into a roof space. In GeoCatch's 2025 tally, possums turned up at 91 per cent of the 56 sites surveyed. Of 450 deaths reported between 2016 and 2023, 64 per cent were cars.",
+    "category": "nature",
+    "place": null,
+    "sticker": "A wide-eyed ringtail possum curled around a peppermint branch with its tail in a perfect loop",
+    "sources": [
+      "https://www.busselton.wa.gov.au/resident/environment/plants-and-animals/native-flora-and-fauna.aspx",
+      "https://geocatch.asn.au/ringtail-tally-reaches-10-year-milestone/"
+    ]
+  },
+  {
+    "id": "the-last-big-tuart-forest",
+    "title": "The Last Big Tuart Forest",
+    "body": "Out at Ludlow is the largest remaining pure tuart forest in the world. Tuarts only grow on coastal limestone, within about 200 kilometres either side of Perth, and some of these are over 33 metres tall with trunks around 10 metres round. The national park, declared in 1987, also holds WA's largest remaining wild population of western ringtail possums.",
+    "category": "nature",
+    "place": {
+      "name": "Membenup Picnic Area, Tuart Forest National Park",
+      "lat": -33.62333,
+      "lon": 115.4475,
+      "insideGeographe": false
+    },
+    "sticker": "A giant pale-trunked tuart tree with a tiny possum waving from a high branch",
+    "sources": [
+      "https://exploreparks.dbca.wa.gov.au/park/tuart-forest-national-park"
+    ]
+  },
+  {
+    "id": "a-piano-on-a-truck",
+    "title": "A Piano on a Truck",
+    "body": "Busselton's summer campers once arrived by the trainload. From the 1920s to the 1950s the Midland railway workshops ran a two-week Christmas holiday, and special trains brought workers and their families down to the campsites here. The council supplied a piano on Saturday nights, which arrived and stayed on a truck, and lent out blackened, burnt saplings to use as tent poles.",
+    "category": "history",
+    "place": {
+      "name": "Busselton Jetty Tourist Park, once the Kookaburra Caravan Park",
+      "lat": -33.64642,
+      "lon": 115.3476,
+      "insideGeographe": false
+    },
+    "sticker": "An upright piano sitting on the back of an old truck next to a striped canvas tent",
+    "sources": [
+      "https://inherit.dplh.wa.gov.au/Public/Inventory/PrintSingleRecord/d17a5024-e291-49ca-b659-cbc36acf5520"
+    ]
+  }
+]

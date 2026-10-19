@@ -60,7 +60,15 @@ struct StickerBookView: View {
     @State private var open: LoreEntry?
 
     var body: some View {
-        let stickers = model.stickersHere
+        // Found ones first, newest at the top, then the rest.
+        let stickers = model.stickersHere.sorted { a, b in
+            switch (model.foundStickers[a.entry.id], model.foundStickers[b.entry.id]) {
+            case let (x?, y?): x > y
+            case (.some, nil): true
+            case (nil, .some): false
+            case (nil, nil): a.entry.title < b.entry.title
+            }
+        }
         let found = stickers.filter { model.foundStickers[$0.entry.id] != nil }.count
 
         NavigationStack {
@@ -122,6 +130,14 @@ private struct StickerTile: View {
         VStack(spacing: 8) {
             if found {
                 StickerArt(entry: entry, size: 88)
+            } else if let image = UIImage(named: "sticker-\(entry.id)") {
+                // A grey silhouette, like the empty spaces in a sticker album.
+                Image(uiImage: image)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(.quaternary)
+                    .frame(width: 88, height: 88)
             } else {
                 ZStack {
                     Circle().fill(.quaternary)

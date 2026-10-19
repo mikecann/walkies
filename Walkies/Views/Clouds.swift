@@ -41,6 +41,8 @@ nonisolated struct CloudField: Sendable {
     var outline: [[MKMapPoint]] = []
     /// Stickers still hidden under the clouds, which twinkle to give you something to aim for.
     var hints: [MKMapPoint] = []
+    /// A tile's centre-to-corner size in map points, for sizing things to the zoom.
+    var tileRadius = 0.0
 
     init() {}
 
@@ -72,6 +74,7 @@ nonisolated struct CloudField: Sendable {
         lines = (city.roads ?? []).map { Line(points: $0.points.map { MKMapPoint($0.cl) }, kind: $0.kind) }
         outline = city.boundary.polygons.map { $0.outer.map { MKMapPoint($0.cl) } }
         hints = hidden.map(centre)
+        tileRadius = hexSize
     }
 
     private static func hash(_ hex: Hex) -> Int {
@@ -240,11 +243,15 @@ private struct CloudPainter {
 
     /// A small gold sparkle over each hidden sticker, glinting on its own beat.
     private func drawHints(in context: inout GraphicsContext) {
+        guard let first = field.hints.first else { return }
+        // Small glints when the whole suburb's on screen, proper sparkles up close.
+        let tile = projection.ellipse(centre: first, radius: field.tileRadius).width / 2
+        let scale = min(1, max(0.35, tile / 40))
         for (i, hint) in field.hints.enumerated() {
             let at = projection.point(hint)
             guard bounds.insetBy(dx: -20, dy: -20).contains(at) else { continue }
             let beat = 0.5 + 0.5 * sin(clock * 1.6 + Double(i) * 2.399)
-            let size = 9 + 5 * beat
+            let size = (9 + 5 * beat) * scale
             var star = Path()
             for k in 0..<8 {
                 let angle = Double(k) * .pi / 4 - .pi / 2
