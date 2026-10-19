@@ -1,6 +1,7 @@
 import CoreLocation
 import Foundation
 import Observation
+import os
 
 @Observable
 final class AppModel {
@@ -380,6 +381,8 @@ final class AppModel {
     /// Suburbs around your places, fetched from OpenStreetMap.
     private(set) var nearby: [PlaceResult] = []
     @ObservationIgnored private var fetchingNearby = false
+    @ObservationIgnored private var nearbyRetries = 0
+    nonisolated private static let log = Logger(subsystem: "com.mikecann.walkies", category: "places")
 
     /// How far around your places to offer suburbs, in metres. Twice this is fetched
     /// and kept, so adding the next suburb over doesn't mean fetching again.
@@ -408,6 +411,9 @@ final class AppModel {
     }
 
     /// Uses the saved list if it still covers your places and is under a month old.
+    /// Otherwise asks Overpass, which is quick when it's up, and falls back to asking
+    /// Nominatim point by point when it isn't. Tries again a few times if both fail,
+    /// and again whenever the app comes back.
     func refreshNeighbours() {
         guard !fetchingNearby, let wanted = box(around: Self.neighbourhood), let fetch = box(around: Self.neighbourhood * 2) else { return }
         if let saved = store.loadNearby(),
@@ -417,19 +423,51 @@ final class AppModel {
             return
         }
         fetchingNearby = true
+        let points = samplePoints(in: wanted)
         Task {
             defer { fetchingNearby = false }
+            var found: (places: [PlaceResult], box: (south: Double, west: Double, north: Double, east: Double))?
             do {
-                let places = try await OSMClient.placesNear(south: fetch.south, west: fetch.west, north: fetch.north, east: fetch.east)
-                nearby = places
-                store.save(nearby: NearbyPlaces(
-                    south: fetch.south, west: fetch.west, north: fetch.north, east: fetch.east,
-                    fetchedAt: .now, places: places
-                ))
+                found = (try await OSMClient.placesNear(south: fetch.south, west: fetch.west, north: fetch.north, east: fetch.east), fetch)
             } catch {
-                // No signal or OpenStreetMap is busy: try again next launch.
+                Self.log.error("Overpass couldn't list suburbs, asking Nominatim instead: \(error)")
+                do {
+                    found = (try await OSMClient.placesAt(points), wanted)
+                } catch {
+                    Self.log.error("Nominatim couldn't list suburbs either: \(error)")
+                }
+            }
+            guard let found else {
+                if nearbyRetries < 3 {
+                    nearbyRetries += 1
+                    try? await Task.sleep(for: .seconds(90))
+                    refreshNeighbours()
+                }
+                return
+            }
+            nearbyRetries = 0
+            nearby = found.places
+            store.save(nearby: NearbyPlaces(
+                south: found.box.south, west: found.box.west, north: found.box.north, east: found.box.east,
+                fetchedAt: .now, places: found.places
+            ))
+        }
+    }
+
+    /// Points about 2.5 km apart across the box, leaving out the ones inside places
+    /// you've already got, for asking Nominatim which suburb each is in.
+    private func samplePoints(in box: (south: Double, west: Double, north: Double, east: Double)) -> [Coordinate] {
+        let step = 2500.0 / 111_320
+        let lonStep = step / max(0.1, cos((box.south + box.north) / 2 * .pi / 180))
+        var points: [Coordinate] = []
+        for lat in stride(from: box.south + step / 2, to: box.north, by: step) {
+            for lon in stride(from: box.west + lonStep / 2, to: box.east, by: lonStep) {
+                let point = Coordinate(lat: lat, lon: lon)
+                let inside = cities.contains { shape(for: $0).contains($0.grid.projection.project(point)) }
+                if !inside { points.append(point) }
             }
         }
+        return points
     }
 
     // MARK: Sync

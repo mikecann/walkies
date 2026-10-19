@@ -2,13 +2,38 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { vAppleProfile } from "@convex-dev/auth/methods/apple/server";
 import { vGoogleProfile } from "@convex-dev/auth/methods/google/server";
-import { internalMutation, query, type MutationCtx } from "./_generated/server";
+import { internalMutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 
 const vApple = v.object({ name: v.literal("apple"), accountId: v.string(), profile: vAppleProfile });
 const vGoogle = v.object({ name: v.literal("google"), accountId: v.string(), profile: vGoogleProfile });
 
 type Details = { name?: string; email?: string; emailVerified: boolean };
+
+/**
+ * Who's signed in: the user their session belongs to, or the one that user was
+ * merged into. Use this rather than getAuthUserId everywhere.
+ */
+export async function currentUserId(ctx: QueryCtx | MutationCtx): Promise<Id<"users"> | null> {
+  const userId = await getAuthUserId(ctx);
+  if (userId === null) return null;
+  const user = await ctx.db.get("users", userId);
+  return user?.mergedInto ?? userId;
+}
+
+/**
+ * Someone who's already signed in with this email. Apple and Google both vouch for
+ * the address, so signing in the other way gets you the same account. Only for
+ * verified emails on both sides, or anyone could claim an address and get in.
+ */
+async function existingUser(ctx: MutationCtx, details: Details): Promise<Id<"users"> | null> {
+  if (!details.email || !details.emailVerified) return null;
+  const matches = await ctx.db
+    .query("users")
+    .withIndex("by_email", (q) => q.eq("email", details.email))
+    .collect();
+  return matches.find((user) => user.emailVerified && user.mergedInto === undefined)?._id ?? null;
+}
 
 /**
  * Keeps the user's name and email up to date from what Apple or Google sent. The
@@ -29,7 +54,10 @@ export const createUserApple = internalMutation({
   args: { provider: vApple },
   returns: v.id("users"),
   handler: async (ctx, { provider: { profile } }) => {
-    return await ctx.db.insert("users", { name: profile.name, email: profile.email, emailVerified: profile.emailVerified });
+    return (
+      (await existingUser(ctx, profile)) ??
+      (await ctx.db.insert("users", { name: profile.name, email: profile.email, emailVerified: profile.emailVerified }))
+    );
   },
 });
 
@@ -46,12 +74,15 @@ export const createUserGoogle = internalMutation({
   args: { provider: vGoogle },
   returns: v.id("users"),
   handler: async (ctx, { provider: { profile } }) => {
-    return await ctx.db.insert("users", {
-      name: profile.name,
-      email: profile.email,
-      emailVerified: profile.emailVerified,
-      picture: profile.picture,
-    });
+    return (
+      (await existingUser(ctx, profile)) ??
+      (await ctx.db.insert("users", {
+        name: profile.name,
+        email: profile.email,
+        emailVerified: profile.emailVerified,
+        picture: profile.picture,
+      }))
+    );
   },
 });
 
@@ -69,10 +100,65 @@ export const me = query({
   args: {},
   returns: v.union(v.null(), v.object({ name: v.union(v.string(), v.null()), email: v.union(v.string(), v.null()) })),
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
+    const userId = await currentUserId(ctx);
     if (userId === null) return null;
     const user = await ctx.db.get("users", userId);
     if (user === null) return null;
     return { name: user.name ?? null, email: user.email ?? null };
   },
 });
+
+/**
+ * Folds together users that share a verified email, made before sign-ins were
+ * linked: the oldest keeps everything and the others point at it. Safe to run
+ * again. `npx convex run users:mergeDuplicateUsers --prod`
+ */
+export const mergeDuplicateUsers = internalMutation({
+  args: {},
+  returns: v.object({ merged: v.number() }),
+  handler: async (ctx) => {
+    const users = await ctx.db.query("users").collect();
+    const byEmail = new Map<string, typeof users>();
+    for (const user of users) {
+      if (!user.email || !user.emailVerified || user.mergedInto !== undefined) continue;
+      byEmail.set(user.email, [...(byEmail.get(user.email) ?? []), user]);
+    }
+    let merged = 0;
+    for (const group of byEmail.values()) {
+      if (group.length < 2) continue;
+      const [keep, ...rest] = group.sort((a, b) => a._creationTime - b._creationTime);
+      for (const dup of rest) {
+        await moveData(ctx, dup._id, keep._id);
+        await ctx.db.patch("users", dup._id, { mergedInto: keep._id });
+        await ctx.db.patch("users", keep._id, { picture: keep.picture ?? dup.picture, name: keep.name ?? dup.name });
+        merged++;
+      }
+    }
+    return { merged };
+  },
+});
+
+/** Hands one user's walks, places and secrets to another, skipping any they already have. */
+async function moveData(ctx: MutationCtx, from: Id<"users">, to: Id<"users">) {
+  for (const walk of await ctx.db.query("walks").withIndex("by_user_client", (q) => q.eq("userId", from)).collect()) {
+    const has = await ctx.db.query("walks").withIndex("by_user_client", (q) => q.eq("userId", to).eq("clientId", walk.clientId)).unique();
+    if (has === null) await ctx.db.patch("walks", walk._id, { userId: to });
+    else await ctx.db.delete("walks", walk._id);
+  }
+  for (const place of await ctx.db.query("places").withIndex("by_user_client", (q) => q.eq("userId", from)).collect()) {
+    const has = await ctx.db.query("places").withIndex("by_user_client", (q) => q.eq("userId", to).eq("clientId", place.clientId)).unique();
+    if (has === null) await ctx.db.patch("places", place._id, { userId: to });
+    else if (place.updatedAt > has.updatedAt) {
+      await ctx.db.delete("places", has._id);
+      await ctx.db.patch("places", place._id, { userId: to });
+    } else await ctx.db.delete("places", place._id);
+  }
+  for (const secret of await ctx.db.query("secrets").withIndex("by_user_secret", (q) => q.eq("userId", from)).collect()) {
+    const has = await ctx.db.query("secrets").withIndex("by_user_secret", (q) => q.eq("userId", to).eq("secretId", secret.secretId)).unique();
+    if (has === null) await ctx.db.patch("secrets", secret._id, { userId: to });
+    else {
+      if (secret.foundAt < has.foundAt) await ctx.db.patch("secrets", has._id, { foundAt: secret.foundAt });
+      await ctx.db.delete("secrets", secret._id);
+    }
+  }
+}

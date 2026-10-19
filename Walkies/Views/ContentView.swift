@@ -130,6 +130,7 @@ struct ContentView: View {
             if phase == .background { model.saveNow() }
             if phase == .active {
                 model.finishStaleAutoWalk()
+                model.refreshNeighbours()
                 sync.schedule()
             }
         }

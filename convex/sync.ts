@@ -1,9 +1,9 @@
 import { ConvexError, v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { currentUserId } from "./users";
 
 async function requireUser(ctx: QueryCtx | MutationCtx) {
-  const userId = await getAuthUserId(ctx);
+  const userId = await currentUserId(ctx);
   if (userId === null) throw new ConvexError("Not signed in");
   return userId;
 }

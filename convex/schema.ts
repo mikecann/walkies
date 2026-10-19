@@ -12,7 +12,12 @@ export default defineSchema({
     email: v.optional(v.string()),
     emailVerified: v.optional(v.boolean()),
     picture: v.optional(v.string()),
-  }),
+    /**
+     * Set on a duplicate made by signing in another way before sign-ins were
+     * linked by email. Everything treats it as this other user instead.
+     */
+    mergedInto: v.optional(v.id("users")),
+  }).index("by_email", ["email"]),
 
   walks: defineTable({
     userId: v.id("users"),

@@ -86,9 +86,42 @@ nonisolated enum OSMClient {
         relation["boundary"="administrative"]["admin_level"~"^(9|10)$"](\(south),\(west),\(north),\(east));
         out ids;
         """
-        let decoded = try JSONDecoder().decode(OverpassResponse.self, from: await overpass(query))
-        let ids = decoded.elements.compactMap(\.id)
+        // Overpass can be slow or down, so don't wait long: there's a fallback.
+        let decoded = try JSONDecoder().decode(OverpassResponse.self, from: await overpass(query, timeout: 45))
+        return try await lookup(relations: decoded.elements.compactMap(\.id))
+    }
 
+    /// The fallback for when Overpass is down: ask Nominatim which suburb each of
+    /// these points is in, one a second as it asks, then fetch their outlines.
+    @concurrent
+    static func placesAt(_ points: [Coordinate]) async throws -> [PlaceResult] {
+        var ids: [Int] = []
+        for (n, point) in points.enumerated() {
+            if n > 0 { try await Task.sleep(for: .seconds(1.1)) }
+            var components = URLComponents(string: "https://nominatim.openstreetmap.org/reverse")!
+            components.queryItems = [
+                URLQueryItem(name: "lat", value: String(point.lat)),
+                URLQueryItem(name: "lon", value: String(point.lon)),
+                // Suburb level. Any closer and it can answer with the suburb's
+                // name pin rather than its boundary.
+                URLQueryItem(name: "zoom", value: "12"),
+                URLQueryItem(name: "format", value: "jsonv2"),
+            ]
+            var request = URLRequest(url: components.url!)
+            request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            try check(response)
+            guard let item = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  item["osm_type"] as? String == "relation", let id = item["osm_id"] as? Int, !ids.contains(id)
+            else { continue }
+            ids.append(id)
+        }
+        try await Task.sleep(for: .seconds(1.1))
+        return try await lookup(relations: ids)
+    }
+
+    /// Outlines for these OSM boundary relations, from Nominatim.
+    private static func lookup(relations ids: [Int]) async throws -> [PlaceResult] {
         var places: [PlaceResult] = []
         // Nominatim looks up at most 50 at a time, and asks for one request a second.
         for (n, start) in stride(from: 0, to: ids.count, by: 50).enumerated() {
@@ -112,12 +145,12 @@ nonisolated enum OSMClient {
     }
 
     /// Runs an Overpass query, trying each server in turn.
-    private static func overpass(_ query: String) async throws -> Data {
+    private static func overpass(_ query: String, timeout: TimeInterval = 150) async throws -> Data {
         let body = "data=" + (query.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "")
         var lastError: Error = OSMError.badResponse(0)
         for endpoint in overpassEndpoints {
             do {
-                var request = URLRequest(url: endpoint, timeoutInterval: 150)
+                var request = URLRequest(url: endpoint, timeoutInterval: timeout)
                 request.httpMethod = "POST"
                 request.httpBody = Data(body.utf8)
                 request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
