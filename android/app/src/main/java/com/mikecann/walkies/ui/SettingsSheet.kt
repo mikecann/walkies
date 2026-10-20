@@ -13,6 +13,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -22,6 +25,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,15 +36,51 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import android.text.format.DateUtils
+import com.mikecann.walkies.sync.SyncEngine
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/** Who's signed in and how sync's going, for Settings' Account section. */
+class AccountRows(
+    val signedInAs: String,
+    val email: String?,
+    val sync: String,
+    val syncing: Boolean,
+    /** Things on this phone the account hasn't got yet. */
+    val waiting: Int,
+    /** A walk's going, so signing out would lose it. */
+    val walking: Boolean,
+)
+
+/** Settings' Sync line (syncText in SettingsView.swift). [lastSynced] is seconds since 1970. */
+fun syncText(status: SyncEngine.Status, waiting: Int, lastSynced: Double?): String = when (status) {
+    SyncEngine.Status.Syncing -> "Syncing…"
+    is SyncEngine.Status.Failed -> if (waiting > 0) "$waiting waiting (${status.reason})" else "Couldn't check (${status.reason})"
+    SyncEngine.Status.Idle -> when {
+        waiting > 0 -> "$waiting waiting to upload"
+        lastSynced == null -> "Not synced yet"
+        else -> {
+            val now = System.currentTimeMillis()
+            val then = (lastSynced * 1000).toLong()
+            val ago = if (now - then < 60_000) "just now"
+            else DateUtils.getRelativeTimeSpanString(then, now, DateUtils.MINUTE_IN_MILLIS).toString()
+            "Up to date, $ago"
+        }
+    }
+}
+
 /**
- * Settings, as far as stage 3 goes: the Always on switch, and a way back into the
- * setup when something's missing. Laid out like the iPhone's grouped Form.
+ * Settings (SettingsView.swift): the account and sync, the Always on switch, and a way
+ * back into the setup when something's missing. Laid out like the iPhone's grouped Form.
  */
 @Composable
 fun SettingsSheet(
+    account: AccountRows,
+    onSyncNow: () -> Unit,
+    /** Sync stops first, so nothing from this account comes back after the wipe. */
+    onSignOut: () -> Unit,
     alwaysOn: Boolean,
     onAlwaysOn: (Boolean) -> Unit,
     /** Something the setup asks for is missing. */
@@ -68,7 +109,32 @@ fun SettingsSheet(
             style = Type.headline.copy(fontFamily = roundedFont(), fontWeight = FontWeight.Black, fontSize = 34.sp),
             modifier = Modifier.padding(start = 4.dp, bottom = 16.dp),
         )
-        Column(verticalArrangement = Arrangement.spacedBy(24.dp), modifier = Modifier.widthIn(max = 600.dp)) {
+        var confirmingSignOut by remember { mutableStateOf(false) }
+        var cantSignOut by remember { mutableStateOf<String?>(null) }
+        var notUploaded by remember { mutableStateOf<Int?>(null) }
+        Column(
+            verticalArrangement = Arrangement.spacedBy(24.dp),
+            modifier = Modifier.widthIn(max = 600.dp).verticalScroll(rememberScrollState()),
+        ) {
+            Section(footer = null, header = "Account") {
+                Labeled("Signed in as", account.signedInAs)
+                if (account.email != null && account.email != account.signedInAs) {
+                    Divider()
+                    Labeled("Email", account.email)
+                }
+                Divider()
+                Labeled("Sync", account.sync)
+                Divider()
+                RowButton("Sync now", Walkies.burnt, enabled = !account.syncing, onClick = onSyncNow)
+                Divider()
+                RowButton("Sign out", red, enabled = true) {
+                    when {
+                        account.walking -> cantSignOut = "Finish your walk first."
+                        account.waiting > 0 -> notUploaded = account.waiting
+                        else -> confirmingSignOut = true
+                    }
+                }
+            }
             Section(footer = "Records walks in the background. Walking and jogging count; bikes and cars don't.") {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -100,12 +166,70 @@ fun SettingsSheet(
                 }
             }
         }
+        if (confirmingSignOut) {
+            WalkiesDialog(
+                "Sign out of Walkies?",
+                "This clears Walkies off this phone. Everything's saved in your account and comes back when you sign in again.",
+                listOf(DialogButton("Sign out", destructive = true, action = onSignOut), DialogButton("Cancel", bold = true)),
+                onDismiss = { confirmingSignOut = false },
+            )
+        }
+        cantSignOut?.let {
+            WalkiesDialog("Not yet", it, listOf(DialogButton("OK", bold = true)), onDismiss = { cantSignOut = null })
+        }
+        notUploaded?.let { count ->
+            WalkiesDialog(
+                "Not uploaded yet",
+                "$count things haven't uploaded to your account yet. If you sign out now, they'll be lost.",
+                listOf(DialogButton("Wait", bold = true), DialogButton("Sign out anyway", destructive = true, action = onSignOut)),
+                onDismiss = { notUploaded = null },
+            )
+        }
+    }
+}
+
+private val red = Color(0.85f, 0.2f, 0.17f)
+
+/** A row with its value on the right in grey (LabeledContent). */
+@Composable
+private fun Labeled(label: String, value: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 11.dp),
+    ) {
+        BasicText(label, style = Type.body)
+        BasicText(
+            value,
+            style = Type.body.copy(color = Walkies.ink.copy(alpha = 0.5f), textAlign = TextAlign.End),
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
 @Composable
-private fun Section(footer: String?, content: @Composable ColumnScope.() -> Unit) {
+private fun RowButton(title: String, colour: Color, enabled: Boolean, onClick: () -> Unit) {
+    BasicText(
+        title,
+        style = Type.body.copy(color = if (enabled) colour else colour.copy(alpha = 0.4f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 11.dp),
+    )
+}
+
+@Composable
+private fun Divider() {
+    Box(Modifier.fillMaxWidth().padding(start = 16.dp).height(1.dp).background(Walkies.ink.copy(alpha = 0.08f)))
+}
+
+@Composable
+private fun Section(footer: String?, header: String? = null, content: @Composable ColumnScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        header?.let {
+            BasicText(it.uppercase(), style = Type.footnote.copy(color = Walkies.ink.copy(alpha = 0.6f)), modifier = Modifier.padding(horizontal = 16.dp))
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()

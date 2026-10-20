@@ -28,9 +28,29 @@ data class Ledger(
         val celebration: String = "celebration.confetti",
         val updatedAt: Double = 0.0,
     )
+
+    /**
+     * Another phone's ledger folded into this one (Ledger.merged in Progression.swift):
+     * every purchase and spyglass once, the first claim and offer for each level, and
+     * the most recently changed equipment.
+     */
+    fun merged(other: Ledger): Ledger {
+        val ids = HashSet<String>()
+        val levels = HashSet<Int>()
+        val offerLevels = HashSet<Int>()
+        val glasses = HashSet<String>()
+        val offers = (this.offers.orEmpty() + other.offers.orEmpty()).filter { offerLevels.add(it.level) }
+        return copy(
+            purchases = (purchases + other.purchases).filter { ids.add(it.id) },
+            claims = (claims + other.claims).filter { levels.add(it.level) },
+            spyglasses = (spyglasses + other.spyglasses).filter { glasses.add(it.id) },
+            offers = offers.ifEmpty { null },
+            equipped = if (other.equipped.updatedAt > equipped.updatedAt) other.equipped else equipped,
+        )
+    }
 }
 
-/** What's been sent to the account (SyncState in Sync.swift). Sync itself comes in stage 4. */
+/** What's been sent to the account (SyncState in Sync.swift). */
 data class SyncState(
     val uploadedWalks: Set<UUID> = emptySet(),
     /** The change time of the copy of each city last sent. */

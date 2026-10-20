@@ -29,9 +29,17 @@ android {
         buildConfigField("String", "MAPBOX_ACCESS_TOKEN", "\"${mapboxToken.replace("\"", "")}\"")
     }
 
+    // The Convex deployments, both in Sydney (Backend in Convex.swift). Debug builds talk
+    // to dev, which also allows test sign-in; release builds to the real walks on prod.
     buildTypes {
+        debug {
+            buildConfigField("String", "CONVEX_CLOUD_URL", "\"https://resolute-pig-177.ap-southeast-2.convex.cloud\"")
+            buildConfigField("String", "CONVEX_SITE_URL", "\"https://resolute-pig-177.ap-southeast-2.convex.site\"")
+        }
         release {
             isMinifyEnabled = false
+            buildConfigField("String", "CONVEX_CLOUD_URL", "\"https://savory-bee-296.ap-southeast-2.convex.cloud\"")
+            buildConfigField("String", "CONVEX_SITE_URL", "\"https://savory-bee-296.ap-southeast-2.convex.site\"")
         }
     }
 
@@ -72,13 +80,15 @@ dependencies {
     implementation(libs.mapbox.maps)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.play.services.location)
+    implementation(libs.kotlinx.coroutines.android)
+    // Google sign-in runs in a Custom Tab.
+    implementation(libs.androidx.browser)
     testImplementation(libs.junit)
 }
 
 /**
- * Copies the lore, the iPhone app's imagesets and the shared place fixture into the
- * app's assets at build time. Each `name.imageset/whatever.png` lands as
- * `images/name.png`; lore JSON into `lore/`; fixtures into `places/`.
+ * Copies the lore and the iPhone app's imagesets into the app's assets at build time.
+ * Each `name.imageset/whatever.png` lands as `images/name.png`; lore JSON into `lore/`.
  * (No slash-star in here: Kotlin nests block comments.)
  */
 abstract class CopyIosAssets : DefaultTask() {
@@ -89,10 +99,6 @@ abstract class CopyIosAssets : DefaultTask() {
     @get:InputDirectory
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val xcassets: DirectoryProperty
-
-    @get:InputDirectory
-    @get:PathSensitive(PathSensitivity.RELATIVE)
-    abstract val places: DirectoryProperty
 
     /** Which folders of the asset catalogue to bring across. */
     @get:Input
@@ -107,8 +113,6 @@ abstract class CopyIosAssets : DefaultTask() {
         out.deleteRecursively()
         val lore = File(out, "lore").apply { mkdirs() }
         this.lore.get().asFile.listFiles { f -> f.extension == "json" }?.forEach { it.copyTo(File(lore, it.name)) }
-        val places = File(out, "places").apply { mkdirs() }
-        this.places.get().asFile.listFiles { f -> f.extension == "json" }?.forEach { it.copyTo(File(places, it.name)) }
         val images = File(out, "images").apply { mkdirs() }
         for (group in groups.get()) {
             val folder = File(xcassets.get().asFile, group)
@@ -127,7 +131,6 @@ val copyIosAssets = tasks.register<CopyIosAssets>("copyIosAssets") {
     outputDir.set(iosAssetsDir)
     lore.set(File(repoRoot, "Walkies/Lore"))
     xcassets.set(File(repoRoot, "Walkies/Assets.xcassets"))
-    places.set(File(repoRoot, "shared/fixtures/places"))
     groups.set(listOf("Icons", "Stickers"))
 }
 

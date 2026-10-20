@@ -8,6 +8,7 @@ import com.mikecann.walkies.model.SyncState
 import com.mikecann.walkies.model.Walk
 import com.mikecann.walkies.model.uuidString
 import com.mikecann.walkies.place.City
+import com.mikecann.walkies.place.NearbyPlaces
 import com.mikecann.walkies.place.RoadLine
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -22,7 +23,7 @@ import java.util.logging.Logger
 /**
  * Plain JSON files, laid out exactly like the iPhone's Store.swift: cities.json with
  * their streets in roads.json, one file per walk in walks/, stickers.json, progress.json,
- * sync.json, owner.json and data-version.json.
+ * sync.json, owner.json, nearby.json and data-version.json.
  */
 class Store(private val root: File) {
     private val citiesFile = File(root, "cities.json")
@@ -33,6 +34,7 @@ class Store(private val root: File) {
     private val progressFile = File(root, "progress.json")
     private val syncFile = File(root, "sync.json")
     private val ownerFile = File(root, "owner.json")
+    private val nearbyFile = File(root, "nearby.json")
     private val cityFiles = CityFiles.at(citiesFile, roadsFile)
 
     init {
@@ -41,7 +43,10 @@ class Store(private val root: File) {
         if (isNew) write(JsonPrimitive(HexGrid.VERSION), versionFile)
     }
 
-    /** True when the files were written for an older grid. Rebuilding them comes with sync (stage 4). */
+    /**
+     * True when the files were written for an older grid. Only the iPhone ever wrote
+     * those, so unlike Store.swift there's nothing here to rebuild them.
+     */
     val needsWorldGridReset: Boolean
         get() = read(versionFile) { (it as JsonPrimitive).int } != HexGrid.VERSION
 
@@ -91,6 +96,10 @@ class Store(private val root: File) {
     /** The user id of the account this phone's data belongs to. */
     fun loadOwner(): String? = read(ownerFile) { (it as JsonPrimitive).content }
     fun saveOwner(owner: String) = write(JsonPrimitive(owner), ownerFile)
+
+    /** Suburbs around your places, so the map can offer them without asking OpenStreetMap every launch. */
+    fun loadNearby(): NearbyPlaces? = read(nearbyFile, NearbyPlaces::from)
+    fun saveNearby(nearby: NearbyPlaces) = write(nearby.toJson(), nearbyFile)
 
     /** Deletes everything the app has saved, for signing out. */
     fun wipe() {

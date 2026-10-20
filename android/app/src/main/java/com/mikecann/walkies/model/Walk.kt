@@ -52,6 +52,15 @@ data class Walk(
 
     /** Seconds, up to now for a walk still going. */
     fun duration(now: SwiftDate = SwiftDate.now()) = (endedAt ?: now).sinceReference - startedAt.sinceReference
+
+    /** For a walk from the old grid: forget its tiles, which are worked out again from its points. */
+    fun resetGridCoverage() = copy(
+        gridVersion = HexGrid.VERSION,
+        newTiles = 0,
+        newTilesByPlace = null,
+        newTileHexesByPlace = null,
+        addedTilesByPlace = null,
+    )
 }
 
 /** The uppercase form Swift's `uuidString` uses, for ids and dictionary keys in the files. */

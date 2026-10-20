@@ -1,16 +1,36 @@
 package com.mikecann.walkies
 
+import com.mikecann.walkies.convex.ConvexClient
 import com.mikecann.walkies.grid.Coordinate
 import com.mikecann.walkies.grid.Hex
 import com.mikecann.walkies.model.CoverageTracer
+import com.mikecann.walkies.model.Ledger
 import com.mikecann.walkies.model.SwiftDate
 import com.mikecann.walkies.model.TrackPoint
 import com.mikecann.walkies.model.Walk
 import com.mikecann.walkies.model.uuidString
+import com.mikecann.walkies.place.Boundary
 import com.mikecann.walkies.place.BoundaryShape
 import com.mikecann.walkies.place.City
+import com.mikecann.walkies.place.CityBuilder
+import com.mikecann.walkies.place.NearbyPlaces
+import com.mikecann.walkies.place.OSMClient
+import com.mikecann.walkies.place.PlaceResult
 import com.mikecann.walkies.store.Store
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.util.UUID
+import java.util.logging.Logger
+import kotlin.math.cos
+import kotlin.math.max
 
 /** What the model needs to know about location permission. LocationTracker on the phone, a fake in tests. */
 interface LocationAccess {
@@ -40,6 +60,8 @@ interface Settings {
     /** Seconds; zero means the usual ten minutes. Overridable for testing on the emulator. */
     var autoWalkGap: Double
     var selectedCity: String?
+    /** Whether the first-run setup (location, activity, notifications, battery, always on) is done. */
+    var setupDone: Boolean
 }
 
 /**
@@ -47,8 +69,11 @@ interface Settings {
  * AppModel.swift. Lives on the main thread. Tells its listeners after anything changes,
  * so the UI can redraw and the notification can keep up.
  *
+ * Also the places: adding them from search or the suburbs next door, deleting them,
+ * and taking in what sync pulls down.
+ *
  * Not ported yet: progression and recaps (stage 5), secrets placement and pop-ups
- * (stage 5), sync and the world-grid rebuild (stage 4).
+ * (stage 5). There's no world-grid rebuild: Android never wrote the old grid.
  */
 class AppModel(
     private val store: Store,
@@ -57,6 +82,7 @@ class AppModel(
     private val motion: Motion = Motion.Unknown,
     /** Seconds since 1970. */
     private val clock: () -> Double = { System.currentTimeMillis() / 1000.0 },
+    private val osm: OSMClient = OSMClient(),
 ) {
     private val listeners = ArrayList<() -> Unit>()
 
@@ -120,6 +146,21 @@ class AppModel(
     private var startWhenAllowed = false
     private var addedTiles: Map<UUID, Set<Hex>> = emptyMap()
     private var loading = false
+    /** Bumps when the phone's data is wiped, so work that started before can't put anything back. */
+    private var dataGeneration = 0
+
+    /** The shop and level-reward ledger, kept and synced for the iPhone. The shop itself comes in stage 5. */
+    var ledger = Ledger()
+        private set
+
+    /** Asks sync to push and pull shortly. Set by the app. */
+    var requestSync: (() -> Unit)? = null
+    /** Tells sync which places were deleted on purpose. Set by the sync engine. */
+    var placesDeleted: ((List<UUID>) -> Unit)? = null
+    /** A client for the server's street cache, from Account.client(), like sync. Tests leave it null. */
+    var makePlaceClient: (suspend () -> ConvexClient?)? = null
+    /** Where background place work runs (the main thread on the phone). Null in tests, which turns it off. */
+    var services: CoroutineScope? = null
 
     /** Record walks by themselves, so there's no Start walk to press. */
     var alwaysOn = false
@@ -142,6 +183,7 @@ class AppModel(
     private fun load() {
         loading = true
         cities = store.loadCities()
+        ledger = store.loadProgress()
         alwaysOn = settings.alwaysOn
         loading = false
 
@@ -212,6 +254,7 @@ class AppModel(
         tilesRevision++
         store.save(walk)
         store.save(cities)
+        requestSync?.invoke()
         onChange()
     }
 
@@ -402,6 +445,7 @@ class AppModel(
             store.delete(walk)
         }
         store.save(cities)
+        requestSync?.invoke()
         onChange()
     }
 
@@ -452,6 +496,7 @@ class AppModel(
         val at = if (notify) now() else SwiftDate.distantFuture
         foundStickers = foundStickers + ids.associateWith { at }
         store.saveStickers(foundStickers)
+        requestSync?.invoke()
         return ids.size
     }
 
@@ -464,6 +509,325 @@ class AppModel(
         select(added.id)
         tilesRevision++
         store.save(cities)
+        requestSync?.invoke()
+        refreshNeighbours()
+        onChange()
+    }
+
+    /** Both the neighbour buttons and place search add to your own places, with your walks so far replayed into it. */
+    suspend fun addPlace(place: PlaceResult, status: (String) -> Unit) {
+        val generation = dataGeneration
+        val city = CityBuilder.build(place, walks, makePlaceClient?.invoke(), osm, status)
+        if (generation != dataGeneration) throw CancellationException("Signed out while adding ${place.name}")
+        add(city)
+    }
+
+    /**
+     * Deletes a place on purpose, so sync deletes it from the account too. Its walks
+     * are kept. A place that's just missing, say from a file that wouldn't load,
+     * is never deleted from the account.
+     */
+    fun deleteCity(id: UUID) {
+        if (cities.none { it.id == id }) return
+        placesDeleted?.invoke(listOf(id))
+        cities = cities.filter { it.id != id }
+        shapes.remove(id)
+        if (selectedCityId == id) {
+            val next = cities.firstOrNull()?.id
+            if (next != null) {
+                select(next)
+            } else {
+                selectedCityId = null
+                settings.selectedCity = null
+            }
+        }
+        tilesRevision++
+        store.save(cities)
+        requestSync?.invoke()
+        onChange()
+    }
+
+    // Neighbours
+
+    /** Suburbs around your places, fetched from OpenStreetMap. */
+    var nearby: List<PlaceResult> = emptyList()
+        private set
+    private var fetchingNearby = false
+    private var nearbyRetries = 0
+    private var warmedNeighbourIds: List<Long>? = null
+    private var warmingNeighbours = false
+
+    /** Suburbs within reach of your places that you haven't added yet, for the map to offer. */
+    val neighbours: List<PlaceResult>
+        get() {
+            val box = box(NEIGHBOURHOOD) ?: return emptyList()
+            val have = cities.mapTo(HashSet()) { it.name.lowercase() }
+            return nearby.filter { place ->
+                val b = place.boundary.bounds
+                place.name.lowercase() !in have && place.area <= CityBuilder.MAX_AREA &&
+                    b.north >= box.south && b.south <= box.north && b.east >= box.west && b.west <= box.east
+            }
+        }
+
+    /** The box around all your places, grown by this many metres each way. */
+    private fun box(metres: Double): Boundary.Bounds? {
+        val all = cities.map { it.boundary.bounds }
+        if (all.isEmpty()) return null
+        val south = all.minOf { it.south }
+        val west = all.minOf { it.west }
+        val north = all.maxOf { it.north }
+        val east = all.maxOf { it.east }
+        val dLat = metres / 111_320
+        val dLon = dLat / max(0.1, cos((south + north) / 2 * Math.PI / 180))
+        return Boundary.Bounds(south - dLat, west - dLon, north + dLat, east + dLon)
+    }
+
+    /**
+     * Uses the saved list if it still covers your places and is under a month old.
+     * Otherwise asks Overpass, which is quick when it's up, and falls back to asking
+     * Nominatim point by point when it isn't. Tries again a few times if both fail,
+     * and again whenever the app comes back.
+     */
+    fun refreshNeighbours() {
+        val scope = services ?: return
+        if (fetchingNearby) return
+        val wanted = box(NEIGHBOURHOOD) ?: return
+        val fetch = box(NEIGHBOURHOOD * 2) ?: return
+        val saved = store.loadNearby()
+        if (saved != null && saved.covers(wanted.south, wanted.west, wanted.north, wanted.east) &&
+            clock() - saved.fetchedAt.epochSeconds < 30 * 24 * 3600
+        ) {
+            if (saved.places != nearby) {
+                nearby = saved.places
+                onChange()
+            }
+            warmNeighbours()
+            return
+        }
+        fetchingNearby = true
+        val generation = dataGeneration
+        val points = samplePoints(wanted)
+        scope.launch {
+            var found: Pair<List<PlaceResult>, Boundary.Bounds>? = null
+            try {
+                found = osm.placesNear(fetch.south, fetch.west, fetch.north, fetch.east) to fetch
+            } catch (e: CancellationException) {
+                fetchingNearby = false
+                throw e
+            } catch (e: Exception) {
+                log.info("Overpass couldn't list suburbs, asking Nominatim instead: $e")
+                try {
+                    found = osm.placesAt(points) to wanted
+                } catch (e: CancellationException) {
+                    fetchingNearby = false
+                    throw e
+                } catch (e: Exception) {
+                    log.info("Nominatim couldn't list suburbs either: $e")
+                }
+            }
+            fetchingNearby = false
+            if (generation != dataGeneration) return@launch
+            if (found == null) {
+                if (nearbyRetries < 3) {
+                    nearbyRetries++
+                    delay(90_000)
+                    refreshNeighbours()
+                }
+                return@launch
+            }
+            nearbyRetries = 0
+            val (places, box) = found
+            nearby = places
+            warmNeighbours()
+            store.saveNearby(NearbyPlaces(box.south, box.west, box.north, box.east, now(), places))
+            onChange()
+        }
+    }
+
+    /**
+     * Asks the server to get the suburbs next door ready, so adding one is quick.
+     * One warm per list. Failed or offline attempts retry on the next refresh, and
+     * signing in can warm a list loaded before then.
+     */
+    private fun warmNeighbours() {
+        val scope = services ?: return
+        val makeClient = makePlaceClient ?: return
+        val ids = nearby.mapNotNull { it.osmId }.distinct().sorted()
+        if (ids.isEmpty() || ids == warmedNeighbourIds || warmingNeighbours) return
+        warmingNeighbours = true
+        scope.launch {
+            try {
+                val client = makeClient() ?: return@launch
+                // Keep each request bounded for larger neighbourhoods.
+                for (chunk in ids.chunked(100)) {
+                    client.action("places:warm", buildJsonObject { put("osmIds", JsonArray(chunk.map(::JsonPrimitive))) })
+                }
+                warmedNeighbourIds = ids
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.info("Couldn't warm nearby streets: $e")
+            } finally {
+                warmingNeighbours = false
+            }
+            // A newer list may have arrived while this request was running.
+            if (warmedNeighbourIds != null && ids != nearby.mapNotNull { it.osmId }.distinct().sorted()) warmNeighbours()
+        }
+    }
+
+    /**
+     * Points about 2.5 km apart across the box, leaving out the ones inside places
+     * you've already got, for asking Nominatim which suburb each is in.
+     */
+    private fun samplePoints(box: Boundary.Bounds): List<Coordinate> {
+        val step = 2500.0 / 111_320
+        val lonStep = step / max(0.1, cos((box.south + box.north) / 2 * Math.PI / 180))
+        val points = ArrayList<Coordinate>()
+        var lat = box.south + step / 2
+        while (lat < box.north) {
+            var lon = box.west + lonStep / 2
+            while (lon < box.east) {
+                val point = Coordinate(lat, lon)
+                if (cities.none { shape(it).contains(it.grid.projection.project(point)) }) points.add(point)
+                lon += lonStep
+            }
+            lat += step
+        }
+        return points
+    }
+
+    // Sync
+
+    /**
+     * Takes in a batch from the account (addRemote in AppModel.swift): the ledger,
+     * secrets, places and walks. Places merge with the ones here; walks this phone
+     * hasn't got are added, then every place they touch has its coverage replayed
+     * on a worker thread.
+     */
+    suspend fun addRemote(remoteCities: List<City>, remoteWalks: List<Walk>, progress: Ledger?, secrets: Map<String, SwiftDate>) {
+        val generation = dataGeneration
+        progress?.let(::addRemoteProgress)
+        addRemoteSecrets(secrets)
+        val changedCities = HashSet<UUID>()
+        val merged = cities.toMutableList()
+        for (remote in remoteCities) {
+            changedCities.add(remote.id)
+            val i = merged.indexOfFirst { it.id == remote.id }
+            if (i >= 0) {
+                val city = merged[i]
+                val localCredits = city.tileCredits.orEmpty().mapTo(HashSet()) { it.id }
+                val remoteCredits = remote.tileCredits.orEmpty().mapTo(HashSet()) { it.id }
+                val hadMore = !remote.visited.containsAll(city.visited) || !remoteCredits.containsAll(localCredits)
+                val credited = city.mergeTileCredits(remote)
+                merged[i] = credited.copy(
+                    visited = credited.visited + remote.visited,
+                    tiles = credited.tiles + remote.tiles,
+                    roads = credited.roads ?: remote.roads,
+                    // Theirs win, as in Swift's merging(_:uniquingKeysWith:).
+                    stickers = credited.stickers.orEmpty() + remote.stickers.orEmpty(),
+                    updatedAt = if (hadMore) now() else maxOf(city.lastChanged, remote.lastChanged),
+                )
+            } else {
+                merged.add(remote)
+            }
+            shapes.remove(remote.id)
+        }
+        cities = merged
+        if (selectedCityId == null) cities.firstOrNull { it.id in changedCities }?.let { select(it.id) }
+
+        val have = walks.mapTo(HashSet()) { it.id }
+        val missing = remoteWalks.filter { it.endedAt != null && it.id != activeWalk?.id && it.id !in have }
+        walks = (walks + missing).sortedBy { it.startedAt }
+        for (walk in missing) store.save(walk)
+        if (changedCities.isEmpty() && missing.isEmpty()) {
+            onChange()
+            return
+        }
+        tilesRevision++
+        onChange()
+
+        val snapshotCities = cities
+        val snapshotWalks = walks
+        val newIds = missing.mapTo(HashSet()) { it.id }
+        val restored = withContext(Dispatchers.Default) {
+            val out = snapshotCities.toMutableList()
+            val shapes = out.map { it.shape() }
+            for (walk in snapshotWalks) {
+                val targets = out.indices.filter { out[it].id in changedCities || walk.id in newIds }
+                if (targets.isEmpty()) continue
+                val samples = CoverageTracer.samples(walk.points)
+                for (i in targets) out[i] = out[i].visit(samples, shapes[i]).first
+            }
+            out
+        }
+        if (generation != dataGeneration) return
+        // Location fixes can arrive while the worker runs. Union its result so no
+        // live coverage is overwritten by the snapshot it started with.
+        cities = cities.map { city ->
+            val again = restored.firstOrNull { it.id == city.id } ?: return@map city
+            city.copy(visited = city.visited + again.visited, tiles = city.tiles + again.tiles)
+        }
+        tilesRevision++
+        for (city in cities) unlockStickers(city, city.visited, notify = false)
+        store.save(cities)
+        refreshNeighbours()
+        onChange()
+    }
+
+    /** Another phone's ledger, merged so both converge. The server's copy goes first. */
+    fun addRemoteProgress(remote: Ledger) {
+        val merged = remote.merged(ledger)
+        if (merged == ledger) return
+        ledger = merged
+        store.saveProgress(ledger)
+        requestSync?.invoke()
+    }
+
+    /**
+     * A genuine discovery beats the explored-coverage sentinel; otherwise the
+     * earliest discovery wins, matching the server's secret merge.
+     */
+    fun addRemoteSecrets(remote: Map<String, SwiftDate>) {
+        val found = foundStickers.toMutableMap()
+        var changed = false
+        for ((id, date) in remote) {
+            val mine = found[id]
+            if (mine == null || date < mine) {
+                found[id] = date
+                changed = true
+            }
+        }
+        if (changed) {
+            foundStickers = found
+            store.saveStickers(foundStickers)
+        }
+    }
+
+    /** Forgets everything on this phone, for signing out. It's all in the account. */
+    fun wipeLocalData() {
+        dataGeneration++
+        // Dropped rather than finished, so turning always-on off below can't save it.
+        activeWalk = null
+        alwaysOn = false
+        settings.setupDone = false
+        autoWalkPending = false
+        activePath = emptyList()
+        freshTiles = emptyMap()
+        addedTiles = emptyMap()
+        tracer = CoverageTracer()
+        cities = emptyList()
+        walks = emptyList()
+        shapes.clear()
+        foundStickers = emptyMap()
+        ledger = Ledger()
+        nearby = emptyList()
+        warmedNeighbourIds = null
+        nearbyRetries = 0
+        selectedCityId = null
+        settings.selectedCity = null
+        placeYouOnNextFix = true
+        tilesRevision++
+        store.wipe()
         onChange()
     }
 
@@ -484,6 +848,14 @@ class AppModel(
          * forth, which adds up as distance but never carries you this far away.
          */
         const val AUTO_WALK_CONFIRM_DISTANCE = 150.0
+
+        /**
+         * How far around your places to offer suburbs, in metres. Twice this is fetched
+         * and kept, so adding the next suburb over doesn't mean fetching again.
+         */
+        const val NEIGHBOURHOOD = 5000.0
+
+        private val log: Logger = Logger.getLogger("walkies.places")
 
         /** How far the furthest point gets from the first, in metres. */
         fun displacement(points: List<TrackPoint>): Double {

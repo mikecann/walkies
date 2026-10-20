@@ -14,6 +14,13 @@
     <!-- Sideloaded, so the direct battery prompt is fine. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Which browser can show Google's sign-in in a Custom Tab. -->
+    <queries>
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
+    </queries>
+
     <application
         android:name=".WalkiesApplication"
         android:allowBackup="true"
@@ -23,11 +30,20 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTop"
+            android:launchMode="singleTask"
             android:screenOrientation="portrait">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Google sign-in comes back here (singleTask, so it closes the Custom Tab
+                 and lands on this same activity): the deployment's /app/signed-in page
+                 302s to walkies://signed-in?convexAuthCode=... -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="walkies" android:host="signed-in" />
             </intent-filter>
         </activity>
 

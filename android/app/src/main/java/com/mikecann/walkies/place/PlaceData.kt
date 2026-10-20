@@ -1,6 +1,11 @@
 package com.mikecann.walkies.place
 
+import com.mikecann.walkies.convex.ConvexClient
 import com.mikecann.walkies.grid.Coordinate
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -23,6 +28,14 @@ data class PlaceData(val boundary: Boundary, val ways: List<OSMWay>) {
     class Invalid : Exception("Invalid cached OSM geometry")
 
     companion object {
+        /** The server's shared street file for this OSM relation (CachedPlaceData.fetch). */
+        suspend fun fetch(osmId: Long, client: ConvexClient): PlaceData {
+            val file = client.action("places:get", buildJsonObject { put("osmId", osmId) }) as? JsonObject ?: throw Invalid()
+            val url = (file["url"] as? JsonPrimitive)?.contentOrNull ?: throw Invalid()
+            val bytes = client.download(url)
+            return withContext(Dispatchers.Default) { parse(bytes.decodeToString()) }
+        }
+
         fun parse(text: String): PlaceData {
             val root = Json.parseToJsonElement(text).jsonObject
             val polygons = root.array("boundary")

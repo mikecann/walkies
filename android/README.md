@@ -18,7 +18,11 @@ The first build downloads Nunito (the rounded heading font) into `app/src/main/a
 
 ## Where things are
 
-- `AppModel.kt`: places, walks and turning GPS fixes into uncovered tiles (the walk side of `AppModel.swift`). Plain Kotlin, tested on the JVM.
+- `AppModel.kt`: places, walks and turning GPS fixes into uncovered tiles (the walk side of `AppModel.swift`), adding and deleting places, the suburbs next door, and taking in what sync pulls down. Plain Kotlin, tested on the JVM.
+- `convex/`: `ConvexClient`, calling Convex functions over HTTP (`Convex.swift`). Debug builds use the dev deployment (resolute-pig-177), release builds prod (savory-bee-296), from `BuildConfig`.
+- `auth/`: `Account` (`Account.swift`): Google sign-in through Convex Auth in a Custom Tab, coming back on `walkies://signed-in`, the session sealed by the Android Keystore, and refreshing it only in its last five seconds. Test sign-in lives in `src/debug` and isn't in release builds.
+- `sync/`: `SyncEngine`, a port of `Sync.swift`: push, explicit place deletions, incremental pull, the owner check.
+- `place/OSMClient.kt`: Nominatim search and the suburbs nearby. Adding a place gets its streets from the server's cache (`places:get`), falling back to Overpass like the iPhone.
 - `model/`: `Walk`, `TrackPoint`, `CoverageTracer`, `Ledger`, `SyncState`, and `Codec`, which reads and writes exactly the iPhone's JSON (`Walk.swift`, `Progression.swift`, `Sync.swift`).
 - `store/`: the save files, laid out like `Store.swift` (`cities.json` with streets in `roads.json`, `walks/<id>.json`, ...), under the app's files folder in `Walkies/`.
 - `location/`: always-on tracking (`LocationTracker.swift`, `StationaryFence.swift`, `MotionMonitor.swift`). `AlwaysOnTracking` decides where the stationary fence goes and how hard the GPS works, as plain tested Kotlin; `LocationTracker` (fused location), `Wakeups.kt` (Geofencing, Activity Recognition, boot/update receivers) and `TrackingService` (the foreground service and its notification) are the thin Android parts. `WalkiesApplication.refreshTracking()` keeps them in line with the one `AppModel`.
@@ -26,13 +30,25 @@ The first build downloads Nunito (the rounded heading font) into `app/src/main/a
 - `grid/`: the world hex grid, matching `HexGrid.swift` and `convex/grid.ts` (`design/grid.md`).
 - `place/`: boundaries, places and the street-cache blob (`City.swift`, `Boundary.swift`, `CityBuilder.swift`).
 - `map/`: Mapbox, the cloud field, the homography and the cloud painter (`Clouds.swift`, `FogMapView.swift`).
-- `ui/`: colours, the sticker cards, hex badges and the place chip (`Theme.swift`, `ContentView.swift`).
+- `ui/`: colours, the sticker cards, hex badges and the place chip (`Theme.swift`, `ContentView.swift`), sign-in (`SignInView.swift`), Places and Add a place (`MapsAndPlacesView.swift`, `AddCityView.swift`), Settings.
 
-Lore, icons and stickers are copied from the iOS sources into the app's assets at build time (`copyIosAssets` in `app/build.gradle.kts`), as is the Geographe fixture from `shared/fixtures/places`.
+Lore, icons and stickers are copied from the iOS sources into the app's assets at build time (`copyIosAssets` in `app/build.gradle.kts`).
+
+## Signing in on the emulator
+
+Google sign-in works on the emulator if it has a browser. For testing sync without Google, debug builds take the iPhone's test sign-in, which makes a fresh account on the dev deployment (only dev allows it, with `WALKIES_TEST_SIGNIN=1`):
+
+```
+adb shell am start -n com.mikecann.walkies/.MainActivity --ez testSignIn true --es testUserName "Emu"
+```
+
+There's also a "Test sign-in" link under the Google button on debug builds. Signing out (Settings) clears the phone, as on the iPhone; signing in as someone else wipes the last account's data first.
+
+With no places yet the map is empty: tap the place chip, Change place, Add a place, and search (say "Geographe"). Zoomed out, the suburbs next door show with a "+" to add them.
 
 ## Walking on the emulator
 
-On first run, with no places saved, Geographe is added from the bundled fixture (place search comes in stage 4). The setup switches always-on on, so walks start by themselves, show "walk pending" until you're 150 m from the start, then uncover everything since the start. With the app closed the foreground service keeps recording, and its notification shows the walk.
+The setup switches always-on on, so walks start by themselves, show "walk pending" until you're 150 m from the start, then uncover everything since the start. With the app closed the foreground service keeps recording, and its notification shows the walk. Finished walks sync to the account a couple of seconds later (`npx convex data walks --limit 3` on dev).
 
 To skip the setup with everything granted:
 

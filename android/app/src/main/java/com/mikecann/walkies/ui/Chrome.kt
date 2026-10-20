@@ -9,6 +9,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.expandVertically
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -38,6 +39,8 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -101,10 +104,21 @@ private fun LocationArrow(modifier: Modifier) {
     }
 }
 
-/** A round head with a white sticker edge (Avatar.swift). Initials until there's an account. */
+/** A round head with a white sticker edge (Avatar.swift): their photo, or their initials on their colour. */
 @Composable
-fun Avatar(initials: String, colour: Color, size: Float = 30f, border: Float = 2.5f) {
+fun Avatar(initials: String, colour: Color, image: ImageBitmap? = null, size: Float = 30f, border: Float = 2.5f) {
     val rounded = roundedFont()
+    if (image != null) {
+        Image(
+            image, contentDescription = null, contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .softShadow(CircleShape, 2.dp, 1.dp, 0.15f, colour)
+                .size(size.dp)
+                .clip(CircleShape)
+                .border(border.dp, Color.White, CircleShape),
+        )
+        return
+    }
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
@@ -128,9 +142,10 @@ private fun lighten(c: Color, amount: Float) =
 /**
  * The place you're exploring, kept small: your head, the place and percentage.
  * Tap it for the details and to change place. PlaceChip in ContentView.swift.
+ * [name] and [picture] are whoever's signed in.
  */
 @Composable
-fun PlaceChip(city: City?, onChangePlace: () -> Unit) {
+fun PlaceChip(city: City?, name: String?, picture: String?, onChangePlace: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     val chevron by animateFloatAsState(if (open) 180f else 0f, label = "chevron")
     val shape = RoundedCornerShape(if (open) 22.dp else 24.dp)
@@ -151,7 +166,7 @@ fun PlaceChip(city: City?, onChangePlace: () -> Unit) {
                     contentDescription = city?.let { "${it.name}, ${it.progress.percentText.replace("%", " percent")}" } ?: "Places"
                 },
         ) {
-            Avatar(initials = "?", colour = Walkies.orange)
+            Avatar(initials = initials(name), colour = Walkies.orange, image = rememberHeadImage(picture))
             BasicText(city?.name ?: "Places", style = Type.headline, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (city != null) {
                 BasicText(city.progress.percentText, style = Type.headline.copy(color = Walkies.orange, fontFeatureSettings = "tnum"))

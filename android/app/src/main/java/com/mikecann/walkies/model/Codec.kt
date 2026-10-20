@@ -293,6 +293,57 @@ object Codec {
         )
     }
 
+    /**
+     * JSON as Swift's JSONEncoder writes it with `.sortedKeys`: keys sorted at every
+     * level, no spaces, and slashes escaped. Sync compares the ledger in this form
+     * (`progressJSON` in Sync.swift), so it must match the iPhone's byte for byte.
+     */
+    fun sortedKeys(e: JsonElement): String = StringBuilder().also { write(e, it) }.toString()
+
+    private fun write(e: JsonElement, out: StringBuilder) {
+        when (e) {
+            is JsonObject -> {
+                out.append('{')
+                // Swift compares String keys by Unicode scalars; for these ASCII keys that's plain ordering.
+                for ((i, key) in e.keys.sorted().withIndex()) {
+                    if (i > 0) out.append(',')
+                    writeString(key, out)
+                    out.append(':')
+                    write(e.getValue(key), out)
+                }
+                out.append('}')
+            }
+            is JsonArray -> {
+                out.append('[')
+                for ((i, item) in e.withIndex()) {
+                    if (i > 0) out.append(',')
+                    write(item, out)
+                }
+                out.append(']')
+            }
+            is JsonNull -> out.append("null")
+            is JsonPrimitive -> if (e.isString) writeString(e.content, out) else out.append(e.content)
+        }
+    }
+
+    private fun writeString(s: String, out: StringBuilder) {
+        out.append('"')
+        for (c in s) {
+            when (c) {
+                '"' -> out.append("\\\"")
+                '\\' -> out.append("\\\\")
+                '/' -> out.append("\\/")
+                '\n' -> out.append("\\n")
+                '\r' -> out.append("\\r")
+                '\t' -> out.append("\\t")
+                '\b' -> out.append("\\b")
+                '\u000C' -> out.append("\\f")
+                else -> if (c < ' ') out.append(String.format("\\u%04x", c.code)) else out.append(c)
+            }
+        }
+        out.append('"')
+    }
+
     // Sync bookkeeping
 
     fun syncState(s: SyncState) = buildJsonObject {

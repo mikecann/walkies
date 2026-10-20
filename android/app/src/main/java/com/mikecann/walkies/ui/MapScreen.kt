@@ -1,6 +1,5 @@
 package com.mikecann.walkies.ui
 
-import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,14 +20,17 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -44,37 +46,38 @@ import com.mikecann.walkies.map.CloudSprites
 import com.mikecann.walkies.map.MapPoints
 import com.mikecann.walkies.map.MapState
 import com.mikecann.walkies.map.MapboxMap
+import com.mikecann.walkies.map.NeighbourLayer
 import com.mikecann.walkies.map.StandInMap
 import com.mikecann.walkies.map.YouAreHere
-import com.mikecann.walkies.place.City
-import com.mikecann.walkies.place.CityBuilder
-import com.mikecann.walkies.place.PlaceData
+import com.mikecann.walkies.place.PlaceResult
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** The starting place until place search comes in stage 4: Geographe, from the shared street-cache fixture. */
-private suspend fun loadStartingPlace(context: Context): City = withContext(Dispatchers.Default) {
-    val text = context.assets.open("places/geographe.json").bufferedReader().use { it.readText() }
-    val data = PlaceData.parse(text)
-    CityBuilder.build(
-        name = "Geographe", detail = "Busselton, Western Australia, Australia", osmId = 11688696,
-        boundary = data.boundary, ways = data.ways,
-    )
-}
-
-/** The map with the clouds over it and the buttons on top: ContentView.swift, as far as stage 3 goes. */
+/**
+ * The map with the clouds over it and the buttons on top: ContentView.swift, as far
+ * as stage 4 goes. With no places yet the map's just the world, and the place chip
+ * leads to adding one, as on the iPhone.
+ */
 @Composable
 fun MapScreen(
     model: AppModel,
     tracker: LocationTracker,
     /** Why always-on can't notice walks with the app closed, if it can't. */
     alwaysOnWarning: String?,
+    /** Whoever's signed in, for your head on the place chip. */
+    name: String?,
+    picture: String?,
+    /** Where adding a neighbour runs, so it carries on if the screen goes. */
+    scope: CoroutineScope,
     onOpenSettings: () -> Unit,
     onShowSettings: () -> Unit,
+    onShowPlaces: () -> Unit,
     onFixPermissions: () -> Unit,
 ) {
-    val context = LocalContext.current
     val state = remember { MapState() }
     val hasToken = BuildConfig.MAPBOX_ACCESS_TOKEN.isNotBlank()
     val haptics = LocalHapticFeedback.current
@@ -99,10 +102,27 @@ fun MapScreen(
     state.onUserMove = { following = false }
 
     LaunchedEffect(Unit) { sprites = withContext(Dispatchers.Default) { CloudSprites.build() } }
-    LaunchedEffect(Unit) {
-        if (model.cities.isEmpty()) {
-            val place = loadStartingPlace(context)
-            if (model.cities.isEmpty()) model.add(place)
+
+    /** A suburb next door you've tapped, waiting for you to confirm adding it. */
+    var pickedNeighbour by remember { mutableStateOf<PlaceResult?>(null) }
+    /** What's happening while a suburb from the map is being added. */
+    var addingStatus by remember { mutableStateOf<String?>(null) }
+    var addingError by remember { mutableStateOf<String?>(null) }
+    /** Where the buttons over the map are, so the neighbour labels keep out from under them. */
+    val buttonFrames = remember { mutableStateMapOf<String, Rect>() }
+
+    /** Fetches a neighbouring suburb's streets and adds it on the world grid. */
+    fun add(place: PlaceResult) {
+        addingStatus = "Getting ${place.name} ready…"
+        scope.launch {
+            try {
+                model.addPlace(place) { addingStatus = it }
+            } catch (e: CancellationException) {
+                // Signed out meanwhile.
+            } catch (e: Exception) {
+                addingError = "Couldn't load the streets for ${place.name}. OpenStreetMap might be busy, so try again in a minute."
+            }
+            addingStatus = null
         }
     }
 
@@ -176,6 +196,12 @@ fun MapScreen(
             StandInMap(state, onTap = {}, onReady = { mapReady = true })
         }
         CloudLayer(field, state, sprites, route, freshOutlines, you)
+        NeighbourLayer(
+            neighbours = if (addingStatus == null) model.neighbours else emptyList(),
+            state = state,
+            avoid = buttonFrames.values.toList(),
+            onPick = { pickedNeighbour = it },
+        )
 
         // Keeps the status bar readable over dark water.
         Box(
@@ -192,11 +218,11 @@ fun MapScreen(
                 .statusBarsPadding()
                 .padding(horizontal = 16.dp),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                PlaceChip(model.selectedCity, onChangePlace = {})
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.mapButton("top leading", buttonFrames)) {
+                PlaceChip(model.selectedCity, name, picture, onChangePlace = onShowPlaces)
             }
             Spacer(Modifier.weight(1f).widthIn(min = 12.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.mapButton("top trailing", buttonFrames)) {
                 HexBadge(BadgeIcon.Art("icon-gear"), "Settings", onClick = onShowSettings)
                 HexBadge(BadgeIcon.Art("icon-book"), "Secrets") {}
                 HexBadge(BadgeIcon.Art("icon-idea"), "Suggest a feature") {}
@@ -209,7 +235,8 @@ fun MapScreen(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                .padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+                .mapButton("bottom", buttonFrames),
         ) {
             if (!hasToken) MissingToken()
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -231,8 +258,26 @@ fun MapScreen(
                 HexBadge(BadgeIcon.Location, "Where am I", fill = Walkies.badgeTeal) { focusOnYou() }
             }
         }
+
+        addingStatus?.let { BuildingCard(it, "This can take up to a minute.", Modifier.align(Alignment.Center)) }
+    }
+
+    pickedNeighbour?.let { place ->
+        WalkiesDialog(
+            "Add ${place.name}?",
+            "${place.summary}. It'll go under the clouds next to your other places, and any walks you've already done there count.",
+            listOf(DialogButton("Add ${place.name}", bold = true) { add(place) }, DialogButton("Not now")),
+            onDismiss = { pickedNeighbour = null },
+        )
+    }
+    addingError?.let {
+        WalkiesDialog("Couldn't add it", it, listOf(DialogButton("OK", bold = true)), onDismiss = { addingError = null })
     }
 }
+
+/** Tells the map where this button sits, so the labels on the map keep clear of it. */
+private fun Modifier.mapButton(key: String, frames: MutableMap<String, Rect>) =
+    onGloballyPositioned { frames[key] = it.boundsInRoot() }
 
 @Composable
 private fun MissingToken() {
