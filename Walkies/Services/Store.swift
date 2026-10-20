@@ -11,7 +11,64 @@ nonisolated struct Store {
 
     init(root: URL = URL.applicationSupportDirectory.appending(path: "Walkies", directoryHint: .isDirectory)) {
         self.root = root
+        let isNew = !FileManager.default.fileExists(atPath: root.path)
         try? FileManager.default.createDirectory(at: walksDir, withIntermediateDirectories: true)
+        if isNew { write(HexGrid.version, to: versionURL) }
+    }
+
+    private var versionURL: URL { root.appending(path: "data-version.json") }
+    private var resetURL: URL { root.appending(path: "world-grid-reset.json") }
+
+    /// Only geometry and identity survive. No legacy hex can leak into a rebuilt city.
+    struct ResetPlace: Codable, Sendable {
+        var id: UUID
+        var name: String
+        var detail: String
+        var boundary: Boundary
+        var osmId: Int?
+        var createdAt: Date
+    }
+
+    var needsWorldGridReset: Bool {
+        read(Int.self, from: versionURL) != HexGrid.version || FileManager.default.fileExists(atPath: resetURL.path)
+    }
+
+    func pendingResetPlaces() throws -> [ResetPlace] {
+        try JSONDecoder().decode([ResetPlace].self, from: Data(contentsOf: resetURL))
+    }
+
+    /// The pending descriptor file is written first and removed last. Offline launches
+    /// and a process killed halfway through replay can retry without losing the places.
+    func prepareWorldGridReset() throws {
+        guard read(Int.self, from: versionURL) != HexGrid.version else { return }
+        if !FileManager.default.fileExists(atPath: resetURL.path) {
+            let nearby = loadNearby()?.places ?? []
+            let oldCities = FileManager.default.fileExists(atPath: citiesURL.path)
+                ? try JSONDecoder().decode([City].self, from: Data(contentsOf: citiesURL)) : []
+            let places = oldCities.map { city in
+                ResetPlace(id: city.id, name: city.name, detail: city.detail, boundary: city.boundary,
+                           osmId: city.osmId ?? nearby.first { $0.name == city.name && $0.detail == city.detail }?.osmId,
+                           createdAt: city.createdAt)
+            }
+            try JSONEncoder().encode(places).write(to: resetURL, options: .atomic)
+        }
+        for url in [citiesURL, stickersURL, progressURL, nearbyURL, syncURL] where FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+        for var walk in loadWalks() {
+            walk.resetGridCoverage()
+            try JSONEncoder().encode(walk).write(to: file(for: walk), options: .atomic)
+        }
+        try JSONEncoder().encode(HexGrid.version).write(to: versionURL, options: .atomic)
+    }
+
+    func finishWorldGridReset(cities: [City], walks: [Walk], stickers: [String: Date], progress: Ledger) throws {
+        // Failures must leave the retry marker intact, unlike ordinary best-effort saves.
+        for walk in walks { try JSONEncoder().encode(walk).write(to: file(for: walk), options: .atomic) }
+        try JSONEncoder().encode(cities).write(to: citiesURL, options: .atomic)
+        try JSONEncoder().encode(stickers).write(to: stickersURL, options: .atomic)
+        try JSONEncoder().encode(progress).write(to: progressURL, options: .atomic)
+        if FileManager.default.fileExists(atPath: resetURL.path) { try FileManager.default.removeItem(at: resetURL) }
     }
 
     func loadCities() -> [City] {
@@ -77,6 +134,7 @@ nonisolated struct Store {
     func wipe() {
         try? FileManager.default.removeItem(at: root)
         try? FileManager.default.createDirectory(at: walksDir, withIntermediateDirectories: true)
+        write(HexGrid.version, to: versionURL)
     }
 
     func loadWalks() -> [Walk] {

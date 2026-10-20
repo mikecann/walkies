@@ -52,7 +52,7 @@ nonisolated struct Boundary: Codable, Hashable, Sendable {
     }
 }
 
-/// A boundary projected into a city's local metres, for fast point-in-polygon tests.
+/// A boundary projected into local or world coordinates, for fast point-in-polygon tests.
 nonisolated struct BoundaryShape: Sendable {
     private struct Part: Sendable {
         var outer: [SIMD2<Double>]
@@ -63,7 +63,7 @@ nonisolated struct BoundaryShape: Sendable {
     let lo: SIMD2<Double>
     let hi: SIMD2<Double>
 
-    init(_ boundary: Boundary, projection: LocalProjection) {
+    init(_ boundary: Boundary, projection: some GeoProjection) {
         parts = boundary.polygons.map { poly in
             Part(outer: poly.outer.map(projection.project), holes: poly.holes.map { $0.map(projection.project) })
         }

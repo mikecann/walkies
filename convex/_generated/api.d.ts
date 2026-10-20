@@ -10,6 +10,7 @@
 
 import type * as auth from "../auth.js";
 import type * as chef from "../chef.js";
+import type * as grid from "../grid.js";
 import type * as http from "../http.js";
 import type * as placeData from "../placeData.js";
 import type * as places from "../places.js";
@@ -27,6 +28,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   chef: typeof chef;
+  grid: typeof grid;
   http: typeof http;
   placeData: typeof placeData;
   places: typeof places;

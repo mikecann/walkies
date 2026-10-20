@@ -149,7 +149,7 @@ counting tiles can change historical totals.
 existing whole-directory sign-out wipe removes it. Ledger timestamps are Unix
 **seconds** as numbers in both languages, rather than Swift's default Date epoch.
 
-`sync:saveProgress({ ledger: String })` authenticates through `currentUserId`,
+`sync:saveProgress({ gridVersion: 2, ledger: String })` authenticates through `currentUserId`,
 merges with the existing `progress` row and returns null. `sync:snapshot` adds
 `progress: String | null`. The iPhone pushes only when canonical ledger JSON
 changes, then merges the snapshot with server precedence. Duplicate-account

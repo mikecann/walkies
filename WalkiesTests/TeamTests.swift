@@ -32,7 +32,7 @@ struct TeamTests {
         #expect(restored.you?.userId == "you")
         #expect(restored.inviteURL.path == "/join/ABCD2345")
         let files = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
-        #expect(files.map(\.lastPathComponent).sorted() == ["teams.json", "walks"])
+        #expect(files.map(\.lastPathComponent).sorted() == ["data-version.json", "teams.json", "walks"])
         store.save(teams: [])
         #expect(store.loadTeams().isEmpty)
     }
@@ -75,10 +75,10 @@ struct TeamTests {
         defer { store.wipe() }
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
-        let grid = HexGrid(projection: LocalProjection(origin: Coordinate(lat: -33.6, lon: 115.4)), size: 50)
+        let grid = HexGrid.world
         let ring = [SIMD2(-200.0, -200), SIMD2(200.0, -200), SIMD2(200.0, 200), SIMD2(-200.0, 200)].map(grid.projection.unproject)
         let boundary = Boundary(polygons: [GeoPolygon(outer: ring, holes: [])])
-        let city = City(name: "Home", detail: "Tests", grid: grid, boundary: boundary, tiles: [Hex(q: 0, r: 0)], visited: [], roads: [])
+        let city = City(name: "Home", detail: "Tests", boundary: boundary, tiles: [Hex(q: 0, r: 0)], visited: [], roads: [])
         model.add(city)
         let key = model.cloudKey
         let secrets = model.foundStickers

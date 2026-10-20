@@ -144,13 +144,13 @@ struct CoverageTests {
 
     @Test func walkingAStreetUncoversTilesInsideTheCity() {
         let projection = LocalProjection(origin: start)
-        let grid = HexGrid(projection: projection, size: 50)
+        let grid = HexGrid.world
         // A 1 km square city with the walk starting in the middle and heading east, out of it.
         let corners = [SIMD2(-500.0, -500.0), SIMD2(500, -500), SIMD2(500, 500), SIMD2(-500, 500)]
         let boundary = Boundary(polygons: [GeoPolygon(outer: corners.map(projection.unproject), holes: [])])
-        let shape = BoundaryShape(boundary, projection: projection)
+        let shape = BoundaryShape(boundary, projection: grid.projection)
         let inside = Set(grid.hexes(from: shape.lo, to: shape.hi))
-        var city = City(name: "Test", detail: "", grid: grid, boundary: boundary, tiles: inside, visited: [])
+        var city = City(name: "Test", detail: "", boundary: boundary, tiles: inside, visited: [])
 
         let walk = stride(from: 0.0, through: 900, by: 15).map { fix(east: $0, at: $0 / 1.4) }
         let fresh = city.visit(CoverageTracer.samples(for: walk), within: shape)
@@ -166,13 +166,13 @@ struct CoverageTests {
 
     @Test func visitingAnUnlistedTileInsideTheBoundaryAddsIt() {
         let projection = LocalProjection(origin: start)
-        let grid = HexGrid(projection: projection, size: 50)
+        let grid = HexGrid.world
         let corners = [SIMD2(-500.0, -500.0), SIMD2(500, -500), SIMD2(500, 500), SIMD2(-500, 500)]
         let boundary = Boundary(polygons: [GeoPolygon(outer: corners.map(projection.unproject), holes: [])])
         // No tiles listed at all, as if it were beach with no mapped paths.
-        var city = City(name: "Test", detail: "", grid: grid, boundary: boundary, tiles: [], visited: [])
+        var city = City(name: "Test", detail: "", boundary: boundary, tiles: [], visited: [])
 
-        let fresh = city.visit([start], within: BoundaryShape(boundary, projection: projection))
+        let fresh = city.visit([start], within: BoundaryShape(boundary, projection: grid.projection))
         #expect(fresh.count == 1)
         #expect(city.tiles == fresh)
         #expect(city.progress == 1)

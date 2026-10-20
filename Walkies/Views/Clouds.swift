@@ -3,10 +3,9 @@ import MapKit
 import SwiftUI
 
 /// Everything the cloud layer draws, worked out in map points whenever the tiles change.
-/// It covers every place you've added at once. Neighbouring places usually share one
-/// hex grid, so a tile on the border between two is the same tile in both.
+/// It covers every place you've added at once, on the same world grid.
 nonisolated struct CloudField: Sendable {
-    /// A tile on a particular grid. Older places each have their own grid.
+    /// A world tile. The grid is stateless, so shared tiles deduplicate across places.
     struct Tile: Hashable, Sendable {
         var grid: HexGrid
         var hex: Hex
@@ -100,7 +99,7 @@ nonisolated struct CloudField: Sendable {
             MKMapPoint(tile.grid.projection.unproject(tile.grid.centre(of: tile.hex)).cl)
         }
         func hexSize(_ grid: HexGrid) -> Double {
-            grid.size * MKMapPointsPerMeterAtLatitude(grid.projection.origin.lat)
+            grid.size * MKMapSize.world.width / (2 * .pi * WorldProjection.radius)
         }
 
         clearings = clear.map { Clearing(tile: $0, centre: centre(of: $0), radius: hexSize($0.grid) * Self.clearing) }

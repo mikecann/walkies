@@ -166,8 +166,7 @@ struct ContentView: View {
 }
 
 extension ContentView {
-    /// Fetches a neighbouring suburb's streets and adds it, sharing the hex grid with
-    /// your places next door so the tiles line up along the border.
+    /// Fetches a neighbouring suburb's streets and adds it on the world grid.
     private func add(_ place: PlaceResult) {
         addingStatus = "Getting \(place.name) ready…"
         Task {

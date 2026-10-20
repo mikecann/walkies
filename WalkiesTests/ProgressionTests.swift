@@ -13,13 +13,22 @@ struct ProgressionTests {
 
     func day(_ n: Int) -> Date { calendar.date(byAdding: .day, value: n, to: monday)! }
 
+    func hex(q: Int32, r: Int32, origin: Coordinate = Coordinate(lat: -33.638, lon: 115.386)) -> Hex {
+        let base = HexGrid.world.hex(containing: origin)
+        return Hex(q: base.q + q, r: base.r + r)
+    }
+
+    func offset(in city: City) -> SIMD2<Double> {
+        city.grid.centre(of: city.grid.hex(containing: city.boundary.centre))
+    }
+
     func city(visited: Int, total: Int = 100, id: UUID = UUID()) -> City {
-        let grid = HexGrid(projection: LocalProjection(origin: origin), size: 50)
-        let ring = [SIMD2(-1000.0, -1000), SIMD2(1000.0, -1000), SIMD2(1000.0, 1000), SIMD2(-1000.0, 1000)].map(grid.projection.unproject)
-        return City(id: id, name: "Geographe", detail: "Busselton", grid: grid,
+        let grid = HexGrid.world
+        let ring = [SIMD2(-1000.0, -1000), SIMD2(1000.0, -1000), SIMD2(1000.0, 1000), SIMD2(-1000.0, 1000)].map { grid.projection.unproject(grid.centre(of: grid.hex(containing: origin)) + $0) }
+        return City(id: id, name: "Geographe", detail: "Busselton",
                     boundary: Boundary(polygons: [GeoPolygon(outer: ring, holes: [])]),
-                    tiles: Set((0..<total).map { Hex(q: Int32($0), r: 0) }),
-                    visited: Set((0..<visited).map { Hex(q: Int32($0), r: 0) }))
+                    tiles: Set((0..<total).map { hex(q: Int32($0), r: 0) }),
+                    visited: Set((0..<visited).map { hex(q: Int32($0), r: 0) }))
     }
 
     func walk(_ n: Int = 0, tiles: Int = 0, metres: Double = 300, place: UUID? = nil) -> Walk {
@@ -82,7 +91,7 @@ struct ProgressionTests {
 
     @Test func tilesUseIntersectionAndMilestonesAreCumulative() {
         var a = city(visited: 50)
-        a.visited.insert(Hex(q: 999, r: 0)) // Non-counting coverage earns nothing.
+        a.visited.insert(hex(q: 999, r: 0)) // Non-counting coverage earns nothing.
         let earned = Progression.state(inputs(cities: [a, city(visited: 100)])).earned
         #expect(earned.tiles == 150)
         #expect(earned.milestones == 100 + 525)
@@ -211,7 +220,7 @@ struct ProgressionTests {
 
     @Test func spyglassIsNearestSeededAndExpiresOrEndsWhenFound() throws {
         var place = city(visited: 0)
-        place.stickers = ["near": Hex(q: 0, r: 0), "far": Hex(q: 10, r: 0)]
+        place.stickers = ["near": hex(q: 0, r: 0), "far": hex(q: 10, r: 0)]
         let use = try #require(Progression.spyglass(in: place, from: origin, found: [:], now: monday, id: "one"))
         let again = try #require(Progression.spyglass(in: place, from: origin, found: [:], now: day(1), id: "two"))
         #expect(use.secretId == "near")
@@ -231,7 +240,7 @@ struct ProgressionTests {
     @Test func oneWalkReportsShellsXPAndQuestGains() {
         var place = city(visited: 9)
         let before = inputs(cities: [place], walks: [walk(-1)], now: day(0))
-        place.visited.insert(Hex(q: 9, r: 0))
+        place.visited.insert(hex(q: 9, r: 0))
         let after = inputs(cities: [place], walks: before.walks + [walk(0, tiles: 1)], secrets: ["new": day(0)], now: day(0))
         let earned = Progression.walkEarnings(before: before, after: after)
         #expect(earned.breakdown.tiles == 1)
@@ -254,7 +263,7 @@ struct ProgressionTests {
     @Test func recapCarriesTheComputedWalkRewards() {
         let place = city(visited: 10)
         let walk = walk(0, tiles: 1)
-        let recap = WalkRecap.make(walk: walk, cities: [place], fresh: [place.id: [Hex(q: 9, r: 0)]],
+        let recap = WalkRecap.make(walk: walk, cities: [place], fresh: [place.id: [hex(q: 9, r: 0)]],
                                    found: ["new": day(0).addingTimeInterval(60)], history: [self.walk(-1)], now: day(0).addingTimeInterval(3600))
         #expect(recap.earnings.breakdown.tiles == 1)
         #expect(recap.earnings.breakdown.milestones == 20)
@@ -276,7 +285,7 @@ struct ProgressionTests {
         let place = city(visited: 2)
         func points(_ east: [Double], start: Date) -> [TrackPoint] {
             east.enumerated().map { index, metres in
-                let p = place.grid.projection.unproject(SIMD2(metres, 0))
+                let p = place.grid.projection.unproject(offset(in: place) + SIMD2(metres, 0))
                 return TrackPoint(lat: p.lat, lon: p.lon, time: start.timeIntervalSince1970 + Double(index) * 20,
                                   accuracy: 5, speed: 1)
             }
@@ -298,7 +307,7 @@ struct ProgressionTests {
 
     @Test func duplicatePhoneCoverageCountsEachTileOnlyInItsFirstWeek() throws {
         let place = city(visited: 40)
-        let hexes = Set((0..<40).map { Hex(q: Int32($0), r: 0) })
+        let hexes = Set((0..<40).map { hex(q: Int32($0), r: 0) })
         var first = walk(0, tiles: 40, metres: 3000, place: place.id)
         first.newTileHexesByPlace = [place.id.uuidString: hexes]
         var duplicate = first
@@ -328,7 +337,7 @@ struct ProgressionTests {
         let place = city(visited: 2)
         var first = walk(0, tiles: 2, place: place.id)
         first.points = [0.0, 90.0].enumerated().map { index, x in
-            let c = place.grid.projection.unproject(SIMD2(x, 0))
+            let c = place.grid.projection.unproject(offset(in: place) + SIMD2(x, 0))
             return TrackPoint(lat: c.lat, lon: c.lon, time: first.startedAt.timeIntervalSince1970 + Double(index) * 40,
                               accuracy: 5, speed: 1)
         }
@@ -388,7 +397,7 @@ struct ProgressionTests {
     @Test func discardedCoverageKeepsWeekStartFavouriteAndWeeklyTileCredit() throws {
         let favourite = city(visited: 100, total: 200)
         var other = city(visited: 110, total: 200)
-        let hexes = Set((90..<110).map { Hex(q: Int32($0), r: 0) })
+        let hexes = Set((90..<110).map { hex(q: Int32($0), r: 0) })
         other.tileCredits = [.init(id: UUID(), at: day(0), hexes: hexes)]
         let week = Progression.week(containing: monday, calendar: calendar)
         var input = inputs(cities: [favourite, other])
@@ -398,7 +407,7 @@ struct ProgressionTests {
         #expect(Progression.questProgress(.metres5000, week: week, inputs: input) == 0)
         #expect(Progression.state(input).earned.streaks == 0)
         var inFavourite = walk(0, tiles: 1, place: favourite.id)
-        inFavourite.newTileHexesByPlace = [favourite.id.uuidString: [Hex(q: 99, r: 0)]]
+        inFavourite.newTileHexesByPlace = [favourite.id.uuidString: [hex(q: 99, r: 0)]]
         input.walks = [inFavourite]
         #expect(Progression.questProgress(.anotherPlace, week: week, inputs: input) == 1)
         // Both phones finding the discarded coverage doesn't duplicate the credit.
@@ -420,7 +429,7 @@ struct ProgressionTests {
         })
         var place = city(visited: 1)
         let entry = try #require(LoreLibrary.all.first)
-        let hex = Hex(q: 0, r: 0)
+        let hex = hex(q: 0, r: 0)
         place.stickers = [entry.id: hex]
         let end = start.addingTimeInterval(600)
         let walk = Walk(startedAt: start, endedAt: end, distance: 300, newTiles: 1,
@@ -448,11 +457,11 @@ struct ProgressionTests {
     @Test func mixedSavedAndLegacyWalksKeepCountsAndOnlyRecoverTheRequiredPrefix() throws {
         let place = city(visited: 2)
         var saved = walk(-2, tiles: 1, place: place.id)
-        saved.newTileHexesByPlace = [place.id.uuidString: [Hex(q: 0, r: 0)]]
+        saved.newTileHexesByPlace = [place.id.uuidString: [hex(q: 0, r: 0)]]
         var legacy = walk(-1, tiles: 1)
         legacy.newTilesByPlace = nil
         legacy.points = [0.0, 90.0].enumerated().map { index, x in
-            let p = place.grid.projection.unproject(SIMD2(x, 0))
+            let p = place.grid.projection.unproject(offset(in: place) + SIMD2(x, 0))
             return TrackPoint(lat: p.lat, lon: p.lon, time: legacy.startedAt.timeIntervalSince1970 + Double(index) * 40,
                               accuracy: 5, speed: 1)
         }
@@ -474,7 +483,7 @@ struct ProgressionTests {
         var saved = walk(-1, tiles: 1, place: place.id), legacy = walk(0, tiles: 1)
         func points(start: Date, end: Double) -> [TrackPoint] {
             [0.0, end].enumerated().map { index, x in
-                let p = place.grid.projection.unproject(SIMD2(x, 0))
+                let p = place.grid.projection.unproject(offset(in: place) + SIMD2(x, 0))
                 return TrackPoint(lat: p.lat, lon: p.lon, time: start.timeIntervalSince1970 + Double(index) * 40,
                                   accuracy: 5, speed: 1)
             }
@@ -494,7 +503,7 @@ struct ProgressionTests {
 
     @Test func recapDoesNotReawardMilestoneWhenWalkAddsACountingTile() {
         var place = city(visited: 10)
-        let fresh = Hex(q: -1, r: 0)
+        let fresh = hex(q: -1, r: 0)
         place.tiles.insert(fresh)
         place.visited.insert(fresh)
         var walk = walk(0, tiles: 1, place: place.id)
@@ -523,7 +532,7 @@ struct ProgressionTests {
         let history = Progression.historicalRewards(input)
         let before = Progression.state(input)
         input.historicalRewards = history
-        input.cities[1].visited.insert(Hex(q: 10, r: 0))
+        input.cities[1].visited.insert(hex(q: 10, r: 0))
         input.unrecordedTilesByPlace = [other.id: 1]
         let after = Progression.state(input)
         #expect(after.earned.tiles == before.earned.tiles + 1)

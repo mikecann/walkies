@@ -42,7 +42,7 @@ nonisolated enum OSMClient {
     /// Places matching the query that have a proper boundary. Nominatim asks for
     /// no search-as-you-type, so only call this when the user submits.
     @concurrent
-    static func searchPlaces(_ query: String) async throws -> [PlaceResult] {
+    static func searchPlaces(_ query: String, session: URLSession = .shared) async throws -> [PlaceResult] {
         var components = URLComponents(string: "https://nominatim.openstreetmap.org/search")!
         components.queryItems = [
             URLQueryItem(name: "q", value: query),
@@ -54,7 +54,7 @@ nonisolated enum OSMClient {
         var request = URLRequest(url: components.url!)
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("en", forHTTPHeaderField: "Accept-Language")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         try check(response)
         let items = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] ?? []
         return items.compactMap(place)

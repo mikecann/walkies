@@ -1,7 +1,9 @@
 import Foundation
 import simd
 import Testing
+#if canImport(UIKit)
 import UIKit
+#endif
 @testable import Walkies
 
 struct LoreTests {
@@ -10,11 +12,11 @@ struct LoreTests {
     /// A 1 km square suburb where every tile has a street, `east` metres east of the start.
     func city(visited: Set<Hex> = [], east: Double = 0, detail: String = "Busselton") -> City {
         let projection = LocalProjection(origin: start)
-        let grid = HexGrid(projection: projection, size: 50)
+        let grid = HexGrid.world
         let corners = [SIMD2(-500.0, -500.0), SIMD2(500, -500), SIMD2(500, 500), SIMD2(-500, 500)].map { $0 + SIMD2(east, 0) }
         let boundary = Boundary(polygons: [GeoPolygon(outer: corners.map(projection.unproject), holes: [])])
-        let tiles = City.hexes(inside: BoundaryShape(boundary, projection: projection), grid: grid)
-        return City(name: "Test", detail: detail, grid: grid, boundary: boundary, tiles: tiles, visited: visited)
+        let tiles = City.hexes(inside: BoundaryShape(boundary, projection: grid.projection), grid: grid)
+        return City(name: "Test", detail: detail, boundary: boundary, tiles: tiles, visited: visited)
     }
 
     func assign(_ entries: [LoreEntry], to cities: [City]) -> [UUID: [String]] {
@@ -36,7 +38,7 @@ struct LoreTests {
         let test = city()
         let placed = test.placeStickers([entry("jetty", at: SIMD2(200, -150))])
         let hex = try! #require(placed["jetty"])
-        #expect(simd_distance(test.grid.centre(of: hex), SIMD2(200, -150)) < 60)
+        #expect(simd_distance(test.grid.centre(of: hex), test.grid.projection.project(LocalProjection(origin: start).unproject(SIMD2(200, -150)))) < 60)
     }
 
     @Test func spotsOutsideTheSuburbGetScatteredInstead() {
@@ -59,7 +61,7 @@ struct LoreTests {
     }
 
     @Test func scatteredStickersAvoidTilesYouveWalked() {
-        let walked = city().tiles.filter { $0.q < 0 }
+        let walked = city().tiles.filter { $0.q < HexGrid.world.hex(containing: start).q }
         let test = city(visited: walked)
         let placed = test.placeStickers((0..<8).map { entry("story-\($0)") })
         #expect(placed.values.allSatisfy { !walked.contains($0) })
@@ -111,9 +113,13 @@ struct LoreTests {
         #expect(all.count > 100)
         #expect(Set(all.map(\.id)).count == all.count)
         for entry in all {
+            #if canImport(UIKit)
             #expect(UIImage(named: "sticker-\(entry.id)") != nil, "no sticker for \(entry.id)")
+            #endif
             for photo in entry.photos ?? [] {
+                #if canImport(UIKit)
                 #expect(UIImage(named: photo.asset) != nil, "no photo \(photo.asset)")
+                #endif
                 #expect(!photo.credit.isEmpty && photo.source.hasPrefix("https://commons.wikimedia.org/"), "photo \(photo.asset) needs a credit and its Commons page")
             }
         }

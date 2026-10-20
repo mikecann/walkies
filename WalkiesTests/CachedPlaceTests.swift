@@ -39,22 +39,20 @@ struct CachedPlaceTests {
         return try JSONSerialization.data(withJSONObject: ["boundary": [[outline, hole]], "ways": streets])
     }
 
-    @Test func cachedCityMatchesOverpassIncludingReplayAndSharedGrid() throws {
+    @Test func cachedCityMatchesOverpassIncludingReplayOnWorldGrid() throws {
         let cached = try JSONDecoder().decode(CachedPlaceData.self, from: file(ways: ways))
         #expect(cached.boundary == boundary)
         #expect(cached.ways.map(\.tags) == ways.map(\.tags))
         #expect(cached.ways.map(\.points) == ways.map(\.points))
-        // An existing place supplies a different origin, as in the neighbour '+' flow.
-        var neighbour = CityBuilder.build(from: place, ways: ways, walks: [])
-        neighbour.grid = HexGrid(projection: LocalProjection(origin: point(-33.641, 115.379)), size: CityBuilder.tileSize)
         let walk = Walk(startedAt: Date(timeIntervalSince1970: 1000), points: (0...6).map { n in
             TrackPoint(lat: -33.638, lon: 115.381 + Double(n) * 0.0002, time: 1000 + Double(n) * 20, accuracy: 5, speed: 1)
         })
-        let direct = CityBuilder.build(from: place, ways: ways, walks: [walk], near: [neighbour])
+        let direct = CityBuilder.build(from: place, ways: ways, walks: [walk])
         var cachedPlace = place
         cachedPlace.boundary = cached.boundary
-        let restored = CityBuilder.build(from: cachedPlace, ways: cached.ways, walks: [walk], near: [neighbour])
-        #expect(restored.grid == neighbour.grid)
+        let restored = CityBuilder.build(from: cachedPlace, ways: cached.ways, walks: [walk])
+        #expect(restored.grid == .world)
+        #expect(restored.osmId == 123)
         #expect(restored.tiles == direct.tiles)
         #expect(restored.visited == direct.visited)
         #expect(!restored.visited.isEmpty)
@@ -62,8 +60,8 @@ struct CachedPlaceTests {
         #expect(restored.roads?.map(\.kind) == [.road, .path])
         #expect(restored.tiles.count < City.hexes(inside: restored.shape(), grid: restored.grid).count)
 
-        let noDriveway = CityBuilder.build(from: place, ways: ways.filter { $0.tags["service"] != "driveway" }, walks: [], near: [neighbour])
-        let withDriveway = CityBuilder.build(from: place, ways: cached.ways, walks: [], near: [neighbour])
+        let noDriveway = CityBuilder.build(from: place, ways: ways.filter { $0.tags["service"] != "driveway" }, walks: [])
+        let withDriveway = CityBuilder.build(from: place, ways: cached.ways, walks: [])
         #expect(noDriveway.tiles == withDriveway.tiles)
     }
 

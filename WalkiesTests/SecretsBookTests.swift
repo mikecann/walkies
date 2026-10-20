@@ -19,7 +19,7 @@ struct SecretsBookTests {
         let projection = LocalProjection(origin: origin)
         let corners = [SIMD2(east - 100, -100), SIMD2(east + 100, -100), SIMD2(east + 100, 100), SIMD2(east - 100, 100)]
         return City(
-            name: name, detail: "Busselton", grid: HexGrid(projection: projection, size: 50),
+            name: name, detail: "Busselton",
             boundary: Boundary(polygons: [GeoPolygon(outer: corners.map(projection.unproject), holes: [])]),
             tiles: [], visited: []
         )

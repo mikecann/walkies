@@ -5,7 +5,10 @@ nonisolated struct City: Codable, Identifiable, Sendable {
     var name: String
     /// The rest of the place name, e.g. "Busselton, Western Australia, Australia".
     var detail: String
-    var grid: HexGrid
+    /// The grid is never saved: all places and all users use the world grid.
+    var grid: HexGrid { .world }
+    var osmId: Int? = nil
+    var gridVersion: Int? = HexGrid.version
     var boundary: Boundary
     /// Tiles that count towards completion: every tile in the boundary with a street or
     /// path through it, plus any other tile in the boundary you've actually been to.

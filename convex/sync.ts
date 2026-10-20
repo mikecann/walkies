@@ -19,9 +19,10 @@ export const generateUploadUrl = mutation({
   },
 });
 
-/** Saves a finished walk. Safe to retry: a walk the server already has is ignored. */
+/** Replaces a finished walk so its raw GPS survives while derived coverage is rebuilt. */
 export const saveWalk = mutation({
   args: {
+    gridVersion: v.literal(2),
     clientId: v.string(),
     startedAt: v.number(),
     endedAt: v.number(),
@@ -30,14 +31,15 @@ export const saveWalk = mutation({
     file: v.id("_storage"),
   },
   returns: v.null(),
-  handler: async (ctx, walk) => {
+  handler: async (ctx, { gridVersion: _gridVersion, ...walk }) => {
     const userId = await requireUser(ctx);
     const existing = await ctx.db
       .query("walks")
       .withIndex("by_user_client", (q) => q.eq("userId", userId).eq("clientId", walk.clientId))
       .unique();
     if (existing !== null) {
-      await ctx.storage.delete(walk.file);
+      await ctx.db.patch("walks", existing._id, walk);
+      if (existing.file !== walk.file) await ctx.storage.delete(existing.file);
       return null;
     }
     await ctx.db.insert("walks", { userId, ...walk });
@@ -48,6 +50,7 @@ export const saveWalk = mutation({
 /** Saves a city, keeping whichever copy is newest. */
 export const savePlace = mutation({
   args: {
+    gridVersion: v.literal(2),
     clientId: v.string(),
     name: v.string(),
     createdAt: v.number(),
@@ -55,7 +58,7 @@ export const savePlace = mutation({
     file: v.id("_storage"),
   },
   returns: v.null(),
-  handler: async (ctx, place) => {
+  handler: async (ctx, { gridVersion: _gridVersion, ...place }) => {
     const userId = await requireUser(ctx);
     const existing = await ctx.db
       .query("places")
@@ -74,7 +77,7 @@ export const savePlace = mutation({
 });
 
 export const deletePlace = mutation({
-  args: { clientId: v.string() },
+  args: { gridVersion: v.literal(2), clientId: v.string() },
   returns: v.null(),
   handler: async (ctx, { clientId }) => {
     const userId = await requireUser(ctx);
@@ -92,7 +95,7 @@ export const deletePlace = mutation({
 
 /** Records found secrets, keeping the earliest time each was found. */
 export const saveSecrets = mutation({
-  args: { secrets: v.array(v.object({ secretId: v.string(), foundAt: v.number() })) },
+  args: { gridVersion: v.literal(2), secrets: v.array(v.object({ secretId: v.string(), foundAt: v.number() })) },
   returns: v.null(),
   handler: async (ctx, { secrets }) => {
     const userId = await requireUser(ctx);
@@ -113,7 +116,7 @@ export const saveSecrets = mutation({
 
 /** The stored copy wins duplicate ids and claims; equipment uses its own clock. */
 export const saveProgress = mutation({
-  args: { ledger: v.string() },
+  args: { gridVersion: v.literal(2), ledger: v.string() },
   returns: v.null(),
   handler: async (ctx, { ledger }) => {
     const userId = await requireUser(ctx);

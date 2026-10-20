@@ -31,9 +31,32 @@ nonisolated struct Coordinate: Codable, Hashable, Sendable {
     }
 }
 
-/// Flat east/north metres around an origin. Accurate enough at city scale,
-/// and it keeps hex tiles the same real-world size wherever the city is.
-nonisolated struct LocalProjection: Codable, Hashable, Sendable {
+nonisolated protocol GeoProjection: Sendable {
+    func project(_ c: Coordinate) -> SIMD2<Double>
+    func unproject(_ p: SIMD2<Double>) -> Coordinate
+}
+
+/// Spherical Web Mercator, scaled to ground metres at Busselton's latitude.
+/// This has no local origin: a projected point means the same thing everywhere.
+nonisolated struct WorldProjection: GeoProjection, Hashable, Sendable {
+    static let earthRadius = 6_378_137.0
+    static let referenceLatitude = -33.65
+    static let scale = cos(referenceLatitude * .pi / 180)
+    static let radius = earthRadius * scale
+
+    func project(_ c: Coordinate) -> SIMD2<Double> {
+        let lat = c.lat * .pi / 180
+        return SIMD2(Self.radius * c.lon * .pi / 180, Self.radius * log(tan(.pi / 4 + lat / 2)))
+    }
+
+    func unproject(_ p: SIMD2<Double>) -> Coordinate {
+        Coordinate(lat: (2 * atan(exp(p.y / Self.radius)) - .pi / 2) * 180 / .pi,
+                   lon: p.x / Self.radius * 180 / .pi)
+    }
+}
+
+/// Flat east/north metres around an origin, for local boundary and route geometry.
+nonisolated struct LocalProjection: GeoProjection, Codable, Hashable, Sendable {
     static let earthRadius = 6_371_008.8
 
     let origin: Coordinate

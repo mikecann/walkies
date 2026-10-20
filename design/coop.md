@@ -22,7 +22,7 @@ Start and Join say: “Your team can see each other here. Your clouds and secret
 
 There are no shared places, tiles, trails, secrets or uploads. There is one map, containing your own places and progress. Walking, past-walk replay for newly added personal places, secret discovery, shells, levels and celebrations all belong to you.
 
-The previous shared-map state, server tables, snapshot and upload APIs, background replay jobs, team upload queues, per-team files, sharing choices and contribution pause rules have been deleted. There is no migration of shared-map data. Existing development data is disposable; the upcoming world-grid change will reset data separately. Personal grid behaviour is unchanged apart from removing the team-only explicit grid override.
+The previous shared-map state, server tables, snapshot and upload APIs, background replay jobs, team upload queues, per-team files, sharing choices and contribution pause rules have been deleted. There is no migration of shared-map data. The [world-grid reset](grid.md) rebuilds personal exploration separately and retains team memberships.
 
 ## Later ideas, not implemented
 

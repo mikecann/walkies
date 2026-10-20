@@ -88,6 +88,7 @@ final class AppModel {
 
     @ObservationIgnored private var historyTask: Task<Void, Never>?
     private(set) var historyReady = false
+    private(set) var worldGridResetPending = false
     @ObservationIgnored private var dataGeneration = 0
     @ObservationIgnored private var recapRequest = 0
     @ObservationIgnored private var historyRevision = 0
@@ -100,8 +101,12 @@ final class AppModel {
     init(store: Store = Store(), servicesEnabled: Bool = true, alwaysOn: Bool? = nil) {
         self.store = store
         self.servicesEnabled = servicesEnabled
-        ledger = store.loadProgress()
-        cities = store.loadCities()
+        do { try store.prepareWorldGridReset() }
+        catch { Self.log.error("Couldn't prepare world grid reset: \(error)") }
+        worldGridResetPending = store.needsWorldGridReset
+        if worldGridResetPending { UserDefaults.standard.removeObject(forKey: "lastSynced") }
+        ledger = worldGridResetPending ? Ledger() : store.loadProgress()
+        cities = worldGridResetPending ? [] : store.loadCities()
         teams = store.loadTeams()
         self.alwaysOn = alwaysOn ?? UserDefaults.standard.bool(forKey: "alwaysOn")
 
@@ -109,7 +114,7 @@ final class AppModel {
         // relaunched us during an always-on walk, carry on with it; otherwise close it off.
         for var walk in store.loadWalks() {
             if walk.endedAt == nil {
-                if self.alwaysOn, walk.isAutomatic, let last = walk.points.last,
+                if !worldGridResetPending, self.alwaysOn, walk.isAutomatic, let last = walk.points.last,
                    Date.now.timeIntervalSince1970 - last.time < Self.autoWalkGap {
                     activeWalk = walk
                     autoWalkPending = Self.displacement(of: walk.points) < Self.autoWalkConfirmDistance
@@ -128,13 +133,78 @@ final class AppModel {
         tracker.onLocation = { [weak self] in self?.record($0) }
         tracker.onAuthorizationChange = { [weak self] in self?.authorizationChanged() }
         if servicesEnabled { fetchMissingRoads() }
-        foundStickers = store.loadStickers()
+        foundStickers = worldGridResetPending ? [:] : store.loadStickers()
         placeStickers()
         refreshNeighbours()
         rebuildCountingTiles()
         // Migration can be sizeable on an older phone. Never trace saved routes
         // while opening the app, reading balance or processing a location fix.
         historyTask = Task { await prepareHistory() }
+    }
+
+    /// Sync calls this before uploading anything. If the cache/network is unavailable,
+    /// keep the descriptor file and retry on the next sync instead of accepting old tiles.
+    func rebuildWorldGrid(using client: ConvexClient) async throws {
+        guard worldGridResetPending else { return }
+        await historyTask?.value
+        try store.prepareWorldGridReset()
+        let generation = dataGeneration
+        var rebuilt: [City] = []
+        for saved in try store.pendingResetPlaces() {
+            var place = PlaceResult(id: 0, name: saved.name, detail: saved.detail, kind: "suburb",
+                                    boundary: saved.boundary, area: 0, osmId: saved.osmId)
+            // Older City saves never retained osmId. Resolve the saved name once;
+            // new saves retain it and go straight to the shared street cache.
+            if place.osmId == nil {
+                let matches = try await OSMClient.searchPlaces("\(saved.name), \(saved.detail)", session: client.session)
+                if let match = matches.first(where: {
+                    $0.name.caseInsensitiveCompare(saved.name) == .orderedSame
+                        && $0.boundary.centre.distance(to: saved.boundary.centre) < 10_000
+                }) { place.osmId = match.osmId }
+            }
+            let city: City
+            if let osmId = place.osmId {
+                let cached = try await CachedPlaceData.fetch(osmId: osmId, client: client)
+                place.boundary = cached.boundary
+                city = await Task.detached(priority: .utility) {
+                    CityBuilder.build(from: place, ways: cached.ways, walks: [])
+                }.value
+            } else {
+                // Custom/retired boundaries can still be rebuilt from current OSM ways.
+                city = try await CityBuilder.build(from: place, walks: [], client: client, status: { _ in })
+            }
+            var restored = city
+            restored.id = saved.id
+            restored.createdAt = saved.createdAt
+            restored.updatedAt = .now
+            rebuilt.append(restored)
+        }
+        guard generation == dataGeneration else { throw CancellationError() }
+        cities = rebuilt
+        shapes = [:]
+        foundStickers = [:]
+        ledger = Ledger()
+        placeStickers()
+        let replayCities = cities
+        let replayWalks = walks
+        let replayed = await Task.detached(priority: .utility) {
+            CityBuilder.replay(replayWalks, through: replayCities)
+        }.value
+        guard generation == dataGeneration else { throw CancellationError() }
+        cities = replayed.cities
+        let savedSelection = UserDefaults.standard.string(forKey: "selectedCity").flatMap(UUID.init)
+        if let id = cities.first(where: { $0.id == savedSelection })?.id ?? cities.first?.id { select(id) }
+        walks = replayed.walks
+        foundStickers = replayed.secrets
+        stickerQueue = []
+        // Remove the retry marker only after all rebuilt files are on disk.
+        try store.finishWorldGridReset(cities: cities, walks: walks, stickers: foundStickers, progress: ledger)
+        worldGridResetPending = false
+        placesRevision += 1
+        tilesRevision += 1
+        rebuildCountingTiles()
+        await prepareHistory()
+        if servicesEnabled { resumeAlwaysOn(); refreshNeighbours() }
     }
 
     private func rebuildCountingTiles() {
@@ -144,6 +214,7 @@ final class AppModel {
     func waitForHistory() async { await historyTask?.value }
 
     private func prepareHistory() async {
+        guard !worldGridResetPending else { return }
         let generation = dataGeneration
         let savedWalks = walks
         let savedCities = cities
@@ -179,7 +250,9 @@ final class AppModel {
         let byID = Dictionary(repaired.walks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for i in walks.indices {
             guard let recovered = byID[walks[i].id] else { continue }
-            if walks[i].newTilesByPlace != recovered.newTilesByPlace || walks[i].newTileHexesByPlace != recovered.newTileHexesByPlace {
+            let newTiles = recovered.newTileHexesByPlace.map { $0.values.reduce(0) { $0 + $1.count } } ?? recovered.newTiles
+            if walks[i].newTiles != newTiles || walks[i].newTilesByPlace != recovered.newTilesByPlace || walks[i].newTileHexesByPlace != recovered.newTileHexesByPlace {
+                walks[i].newTiles = newTiles
                 walks[i].newTilesByPlace = recovered.newTilesByPlace
                 walks[i].newTileHexesByPlace = recovered.newTileHexesByPlace
                 store.save(walks[i])
@@ -227,7 +300,7 @@ final class AppModel {
     // MARK: Walks
 
     func startWalk() {
-        guard activeWalk == nil, !alwaysOn else { return }
+        guard !worldGridResetPending, activeWalk == nil, !alwaysOn else { return }
         if servicesEnabled {
             switch tracker.authorization {
             case .notDetermined:
@@ -335,7 +408,7 @@ final class AppModel {
 
     private func record(_ location: CLLocation) {
         // iOS can hand over a cached fix from wherever you last were when tracking starts.
-        guard location.timestamp.timeIntervalSinceNow > -10 else { return }
+        guard !worldGridResetPending, location.timestamp.timeIntervalSinceNow > -10 else { return }
         lastLocation = location
         var point = TrackPoint(location)
         if motion.onWheels { point.wheels = true }
@@ -505,6 +578,7 @@ final class AppModel {
 
     /// Called at launch, including when iOS relaunches the app in the background.
     func resumeAlwaysOn() {
+        guard !worldGridResetPending else { return }
         // Starting motion asks for permission, so leave that to the setup the first time.
         if setupDone { motion.start() }
         if alwaysOn {
@@ -513,6 +587,7 @@ final class AppModel {
     }
 
     private func turnOnAlwaysOn() {
+        guard !worldGridResetPending else { return }
         Notifier.requestPermission()
         // Hand over from a walk you started yourself, without the summary popping up.
         if activeWalk != nil {
@@ -999,6 +1074,7 @@ final class AppModel {
         historyTask?.cancel()
         historyTask = nil
         historyReady = true
+        worldGridResetPending = false
         alwaysOn = false
         setupDone = false
         tracker.stop()
@@ -1092,8 +1168,9 @@ extension AppModel {
 
     /// Both the neighbour buttons and place search add to your own places.
     func addPlace(_ place: PlaceResult, status: @escaping @MainActor @Sendable (String) -> Void) async throws {
+        guard !worldGridResetPending else { throw ConvexError.server("Connect to finish rebuilding your places first.") }
         let generation = dataGeneration
-        let city = try await CityBuilder.build(from: place, walks: walks, near: cities, client: await makePlaceClient?(), status: status)
+        let city = try await CityBuilder.build(from: place, walks: walks, client: await makePlaceClient?(), status: status)
         guard generation == dataGeneration else { throw CancellationError() }
         add(city)
     }

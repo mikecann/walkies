@@ -1,24 +1,15 @@
 import Foundation
 
 nonisolated enum CityBuilder {
-    /// Centre-to-corner size of a tile in metres, so about 87 m across.
-    /// Small enough that walking one street doesn't uncover the next one over.
-    static let tileSize = 50.0
     /// Square metres. Anything bigger is years of walking, so we suggest a suburb instead.
     static let maxArea = 400_000_000.0
 
-    /// How far away another place's grid can be and still be shared, so neighbouring
-    /// places' tiles line up along their borders.
-    static let shareGridWithin = 40_000.0
-
     /// Lays a hex grid over the place, keeps the tiles with a street or path through
     /// them, then replays every past walk so the new city starts with what you've done.
-    /// Uses the same grid as any place you've already got nearby.
     @concurrent
     static func build(
         from place: PlaceResult,
         walks: [Walk],
-        near cities: [City] = [],
         client: ConvexClient? = nil,
         status: @escaping @MainActor @Sendable (String) -> Void
     ) async throws -> City {
@@ -29,7 +20,7 @@ nonisolated enum CityBuilder {
                 var cachedPlace = place
                 cachedPlace.boundary = cached.boundary
                 await status("Laying out the tiles…")
-                return build(from: cachedPlace, ways: cached.ways, walks: walks, near: cities)
+                return build(from: cachedPlace, ways: cached.ways, walks: walks)
             } catch {
                 // The local-first path still works with older deployments or an
                 // unavailable cache. Cancellation should stop the add altogether.
@@ -40,16 +31,12 @@ nonisolated enum CityBuilder {
         let b = place.boundary.bounds
         let ways = try await OSMClient.walkableWays(south: b.south, west: b.west, north: b.north, east: b.east, session: client?.session ?? .shared)
         await status("Laying out the tiles…")
-        return build(from: place, ways: ways, walks: walks, near: cities)
+        return build(from: place, ways: ways, walks: walks)
     }
 
     /// Both network paths use the same tile selection, road hints and walk replay.
-    static func build(from place: PlaceResult, ways: [OSMWay], walks: [Walk], near cities: [City] = []) -> City {
-        let centre = place.boundary.centre
-        let neighbour = cities
-            .filter { $0.grid.size == tileSize && $0.grid.projection.origin.distance(to: centre) < shareGridWithin }
-            .min { $0.grid.projection.origin.distance(to: centre) < $1.grid.projection.origin.distance(to: centre) }
-        let grid = neighbour?.grid ?? HexGrid(projection: LocalProjection(origin: centre), size: tileSize)
+    static func build(from place: PlaceResult, ways: [OSMWay], walks: [Walk]) -> City {
+        let grid = HexGrid.world
         let shape = BoundaryShape(place.boundary, projection: grid.projection)
         let inside = City.hexes(inside: shape, grid: grid)
 
@@ -65,13 +52,50 @@ nonisolated enum CityBuilder {
         if tiles.isEmpty { tiles = inside }
 
         var city = City(
-            name: place.name, detail: place.detail, grid: grid, boundary: place.boundary,
+            name: place.name, detail: place.detail, osmId: place.osmId, boundary: place.boundary,
             tiles: tiles, visited: [], roads: roadLines(from: ways)
         )
         for walk in walks {
             _ = city.visit(CoverageTracer.samples(for: walk.points), within: shape)
         }
         return city
+    }
+
+    struct Replay: Sendable {
+        var cities: [City]
+        var walks: [Walk]
+        var secrets: [String: Date]
+    }
+
+    /// Rebuild derived records in walk order, using exactly the live coverage filters
+    /// and City.visit path. Purchases, spyglasses and short-outing credits stay gone.
+    static func replay(_ walks: [Walk], through cities: [City]) -> Replay {
+        var result = Replay(cities: cities, walks: [], secrets: [:])
+        let shapes = cities.map { $0.shape() }
+        for var walk in walks.sorted(by: {
+            $0.startedAt == $1.startedAt ? $0.id.uuidString < $1.id.uuidString : $0.startedAt < $1.startedAt
+        }) {
+            walk.resetGridCoverage()
+            var fresh: [String: Set<Hex>] = [:]
+            var added: [String: Set<Hex>] = [:]
+            let samples = CoverageTracer.samples(for: walk.points)
+            for i in result.cities.indices {
+                let old = result.cities[i].tiles
+                let uncovered = result.cities[i].visit(samples, within: shapes[i])
+                fresh[result.cities[i].id.uuidString] = uncovered
+                added[result.cities[i].id.uuidString] = uncovered.subtracting(old)
+                for (id, hex) in result.cities[i].stickers ?? [:] where uncovered.contains(hex) && result.secrets[id] == nil {
+                    result.secrets[id] = walk.endedAt ?? walk.startedAt
+                }
+            }
+            walk.newTileHexesByPlace = fresh
+            walk.addedTilesByPlace = added
+            walk.newTilesByPlace = fresh.mapValues(\.count)
+            walk.newTiles = fresh.values.reduce(0) { $0 + $1.count }
+            walk.distance = CoverageTracer.distance(for: walk.points)
+            result.walks.append(walk)
+        }
+        return result
     }
 
     /// The streets and paths worth hinting at under the clouds. Everything walkable

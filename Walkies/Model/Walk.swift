@@ -39,6 +39,7 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
     /// so changing the filters or adding a city later uses the full history.
     var points: [TrackPoint] = []
     var distance: Double = 0
+    var gridVersion: Int? = HexGrid.version
     var newTiles = 0
     /// Counting tiles first uncovered on this walk, by place UUID. Nil on older saves.
     var newTilesByPlace: [String: Int]?
@@ -49,6 +50,15 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
     /// Recorded by always-on mode rather than started with the button. Optional so
     /// walks saved before always-on existed still load.
     var automatic: Bool?
+
+    /// Old server files may still contain local-grid hexes. Keep only their GPS.
+    mutating func resetGridCoverage() {
+        gridVersion = HexGrid.version
+        newTiles = 0
+        newTilesByPlace = nil
+        newTileHexesByPlace = nil
+        addedTilesByPlace = nil
+    }
 
     var isAutomatic: Bool { automatic == true }
 

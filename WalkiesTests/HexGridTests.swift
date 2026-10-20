@@ -5,7 +5,71 @@ import Testing
 
 struct HexGridTests {
     let geographe = Coordinate(lat: -33.638, lon: 115.386)
-    var grid: HexGrid { HexGrid(projection: LocalProjection(origin: geographe), size: 50) }
+    var grid: HexGrid { HexGrid.world }
+
+    // Kept identical to convex/grid.test.ts and design/grid.md.
+    @Test(arguments: [
+        [0.0, 0, 0, 0],
+        [-33.65, 115.35, 145525, -44196],
+        [-33.638, 115.386, 145554, -44178],
+        [51.5074, -0.1278, -37383, 74493],
+        [0, 30, 32101, 0],
+        [-33.65, -115.35, -101329, -44196],
+        [40.7128, -74.006, -106770, 55164],
+        [85, 179.9, 81661, 221671],
+        [-85, -179.9, -81661, -221671],
+    ]) func worldExamplesAndCoordinateHexCentreRoundTrips(example: [Double]) {
+        let coordinate = Coordinate(lat: example[0], lon: example[1])
+        let hex = Hex(q: Int32(example[2]), r: Int32(example[3]))
+        #expect(grid.hex(containing: coordinate) == hex)
+        #expect(grid.hex(containing: grid.projection.unproject(grid.centre(of: hex))) == hex)
+    }
+
+    @Test func neighboursAndHalfTiesHaveAStableOrder() {
+        #expect(Hex(q: 0, r: 0).neighbours == [Hex(q: 1, r: 0), Hex(q: 1, r: -1), Hex(q: 0, r: -1),
+                                            Hex(q: -1, r: 0), Hex(q: -1, r: 1), Hex(q: 0, r: 1)])
+        #expect(HexGrid.round(q: 0.5, r: 0) == Hex(q: 1, r: 0))
+        #expect(HexGrid.round(q: -0.5, r: 0) == Hex(q: -1, r: 0))
+        #expect(HexGrid.round(q: 0.5, r: 0.5) == Hex(q: 1, r: 0))
+        #expect(HexGrid.round(q: -0.5, r: -0.5) == Hex(q: -1, r: 0))
+        #expect(HexGrid.round(q: 0.4, r: 0.4) == Hex(q: 0, r: 1))
+    }
+
+    @Test func projectedSizeIsGroundMetresAtBusselton() {
+        let c = Coordinate(lat: -33.65, lon: 115.35)
+        let p = grid.projection.project(c)
+        // Ground distance uses the same spherical radius as the specified projection.
+        // Coordinate.distance uses the mean Earth radius, about 0.056 m different here.
+        for direction in [SIMD2(50.0, 0), SIMD2(0.0, 50)] {
+            let ground = c.distance(to: grid.projection.unproject(p + direction))
+                * WorldProjection.earthRadius / LocalProjection.earthRadius
+            #expect(abs(ground - 50) < 0.001)
+        }
+    }
+
+    @Test func adjacentPlacesUseTheSameBorderTilesRegardlessOfBuildOrder() {
+        let base = grid.centre(of: grid.hex(containing: geographe))
+        func place(_ west: Double, _ east: Double) -> PlaceResult {
+            let points = [SIMD2(west, -300), SIMD2(east, -300), SIMD2(east, 300), SIMD2(west, 300)]
+                .map { grid.projection.unproject(base + $0) }
+            return PlaceResult(id: 1, name: "Neighbour", detail: "", kind: "suburb",
+                               boundary: Boundary(polygons: [GeoPolygon(outer: points, holes: [])]), area: 0)
+        }
+        // The border cuts a hex 20 projected metres east of its centre.
+        let east = CityBuilder.build(from: place(20, 300), ways: [], walks: [])
+        var west = CityBuilder.build(from: place(-300, 20), ways: [], walks: [])
+        let whole = CityBuilder.build(from: place(-300, 300), ways: [], walks: [])
+        #expect(west.grid == east.grid)
+        #expect(west.tiles.isDisjoint(with: east.tiles))
+        #expect(west.tiles.union(east.tiles) == whole.tiles)
+        let a = grid.projection.unproject(base + SIMD2(15, 0))
+        let b = grid.projection.unproject(base + SIMD2(25, 0))
+        let hex = grid.hex(containing: a)
+        #expect(east.grid.hex(containing: b) == hex)
+        #expect(west.tiles.contains(hex))
+        #expect(!east.tiles.contains(hex)) // Membership follows the centre, not the GPS point.
+        #expect(west.visit([b], within: west.shape()) == [hex])
+    }
 
     @Test func projectionRoundTrips() {
         let projection = grid.projection
@@ -19,7 +83,7 @@ struct HexGridTests {
         let a = Coordinate(lat: -33.640, lon: 115.380)
         let b = Coordinate(lat: -33.632, lon: 115.392)
         let flat = simd_length(projection.project(a) - projection.project(b))
-        #expect(abs(flat - a.distance(to: b)) < 1)
+        #expect(abs(flat - a.distance(to: b)) < 2)
     }
 
     @Test func centreOfAHexIsInThatHex() {
@@ -32,7 +96,7 @@ struct HexGridTests {
     }
 
     @Test func cornersAreTheRightDistanceFromTheCentre() {
-        let hex = Hex(q: 7, r: -3)
+        let hex = grid.hex(containing: Coordinate(lat: -33.65, lon: 115.35))
         let centre = grid.projection.unproject(grid.centre(of: hex))
         for corner in grid.corners(of: hex) {
             #expect(abs(corner.distance(to: centre) - 50) < 0.5)

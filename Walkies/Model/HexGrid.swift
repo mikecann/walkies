@@ -27,10 +27,14 @@ nonisolated extension Hex: Codable {
     }
 }
 
-nonisolated struct HexGrid: Codable, Hashable, Sendable {
-    let projection: LocalProjection
-    /// Centre-to-corner distance in metres.
-    let size: Double
+nonisolated struct HexGrid: Hashable, Sendable {
+    static let version = 2
+    static let world = HexGrid()
+    let projection = WorldProjection()
+    /// Centre-to-corner distance in projected units, true metres at -33.65°.
+    let size = 50.0
+
+    private init() {}
 
     var tileArea: Double { 3 * 3.0.squareRoot() / 2 * size * size }
 
@@ -79,7 +83,7 @@ nonisolated struct HexGrid: Codable, Hashable, Sendable {
         return out
     }
 
-    private static func round(q: Double, r: Double) -> Hex {
+    static func round(q: Double, r: Double) -> Hex {
         let s = -q - r
         var rq = q.rounded(), rr = r.rounded()
         let rs = s.rounded()

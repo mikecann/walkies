@@ -14,19 +14,28 @@ struct ProgressionIntegrationTests {
         return Store(root: base.appending(path: UUID().uuidString))
     }
 
+    func hex(q: Int32, r: Int32, origin: Coordinate = Coordinate(lat: 12.345, lon: 45.678)) -> Hex {
+        let base = HexGrid.world.hex(containing: origin)
+        return Hex(q: base.q + q, r: base.r + r)
+    }
+
+    func offset(in city: City) -> SIMD2<Double> {
+        city.grid.centre(of: city.grid.hex(containing: city.boundary.centre))
+    }
+
     func city(visited: Int = 10, origin: Coordinate = Coordinate(lat: 12.345, lon: 45.678)) -> City {
-        let grid = HexGrid(projection: LocalProjection(origin: origin), size: 50)
-        let ring = [SIMD2(-1000.0, -1000), SIMD2(1000.0, -1000), SIMD2(1000.0, 1000), SIMD2(-1000.0, 1000)].map(grid.projection.unproject)
-        return City(name: "Test place", detail: "Tests", grid: grid,
+        let grid = HexGrid.world
+        let ring = [SIMD2(-1000.0, -1000), SIMD2(1000.0, -1000), SIMD2(1000.0, 1000), SIMD2(-1000.0, 1000)].map { grid.projection.unproject(grid.centre(of: grid.hex(containing: origin)) + $0) }
+        return City(name: "Test place", detail: "Tests",
                     boundary: Boundary(polygons: [GeoPolygon(outer: ring, holes: [])]),
-                    tiles: Set((0..<100).map { Hex(q: Int32($0), r: 0) }),
-                    visited: Set((0..<visited).map { Hex(q: Int32($0), r: 0) }), roads: [])
+                    tiles: Set((0..<100).map { hex(q: Int32($0), r: 0, origin: origin) }),
+                    visited: Set((0..<visited).map { hex(q: Int32($0), r: 0, origin: origin) }), roads: [])
     }
 
     func legacyWalk(_ n: Int, in city: City) -> Walk {
         let date = Date.now.addingTimeInterval(-Double(n + 1) * 86400)
         let points = [0.0, 15.0, 30.0].enumerated().map { index, x in
-            let c = city.grid.projection.unproject(SIMD2(x, 0))
+            let c = city.grid.projection.unproject(offset(in: city) + SIMD2(x, 0))
             return TrackPoint(lat: c.lat, lon: c.lon, time: date.timeIntervalSince1970 + Double(index) * 20,
                               accuracy: 5, speed: 1)
         }
@@ -34,7 +43,7 @@ struct ProgressionIntegrationTests {
     }
 
     func visit(_ model: AppModel, x: Double, seconds: Double) {
-        let coordinate = model.cities[0].grid.projection.unproject(SIMD2(x, 0))
+        let coordinate = model.cities[0].grid.projection.unproject(offset(in: model.cities[0]) + SIMD2(x, 0))
         model.tracker.onLocation?(CLLocation(coordinate: coordinate.cl, altitude: 0, horizontalAccuracy: 5,
                                             verticalAccuracy: 5, course: 90, speed: 1,
                                             timestamp: Date.now.addingTimeInterval(seconds)))
@@ -111,13 +120,13 @@ struct ProgressionIntegrationTests {
         let store = store()
         defer { store.wipe() }
         var city = city()
-        let fresh: Set<Hex> = [Hex(q: -1, r: 0)]
+        let fresh: Set<Hex> = [hex(q: -1, r: 0)]
         city.tiles.formUnion(fresh)
         city.visited.formUnion(fresh)
         store.save([city])
         let start = Date.now.addingTimeInterval(-300)
         let points = [-200.0, 0.0].enumerated().map { index, x in
-            let c = city.grid.projection.unproject(SIMD2(x, 0))
+            let c = city.grid.projection.unproject(offset(in: city) + SIMD2(x, 0))
             return TrackPoint(lat: c.lat, lon: c.lon, time: start.timeIntervalSince1970 + Double(index) * 80,
                               accuracy: 5, speed: 1)
         }
@@ -172,7 +181,7 @@ struct ProgressionIntegrationTests {
         let store = store()
         defer { store.wipe() }
         var city = city(visited: 149)
-        city.tiles = Set((0..<10000).map { Hex(q: Int32($0), r: 0) })
+        city.tiles = Set((0..<10000).map { hex(q: Int32($0), r: 0) })
         store.save([city])
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
@@ -197,12 +206,12 @@ struct ProgressionIntegrationTests {
         defer { store.wipe() }
         var city = city(visited: 10)
         let id = UUID(), now = Date.now.addingTimeInterval(-60)
-        city.tileCredits = [.init(id: id, at: now, hexes: [Hex(q: 0, r: 0)])]
+        city.tileCredits = [.init(id: id, at: now, hexes: [hex(q: 0, r: 0)])]
         store.save([city])
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
         var remote = city
-        remote.tileCredits = [.init(id: UUID(), at: now, hexes: [Hex(q: 0, r: 0), Hex(q: 1, r: 0)])]
+        remote.tileCredits = [.init(id: UUID(), at: now, hexes: [hex(q: 0, r: 0), hex(q: 1, r: 0)])]
         await model.addRemote(cities: [remote], walks: [], progress: nil, secrets: [:])
         #expect(model.cities[0].tileCredits?.count == 2)
         let input = Progression.Inputs(cities: model.cities)
@@ -267,6 +276,35 @@ struct ProgressionIntegrationTests {
         #expect(await server.hasPurchase("spyglass"))
         #expect(engine.waiting == 0)
         model.requestSync = nil
+        engine.reset()
+    }
+
+    @Test func retainedServerWalkDropsOldHexesAndUploadsRebuiltCoverage() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let place = city(visited: 0)
+        var old = legacyWalk(0, in: place)
+        old.gridVersion = nil
+        old.newTiles = 999
+        old.newTilesByPlace = [place.id.uuidString: 999]
+        old.newTileHexesByPlace = [place.id.uuidString: [Hex(q: 999, r: 999)]]
+        old.addedTilesByPlace = old.newTileHexesByPlace
+        let server = TestSyncServer(cities: [place], walks: [old])
+        let client = mockClient(server)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, makeClient: { client })
+        await engine.sync()
+        #expect(engine.status == .idle)
+        let rebuilt = try #require(model.walks.first)
+        #expect(rebuilt.gridVersion == 2)
+        #expect(rebuilt.points == old.points)
+        #expect(rebuilt.newTiles == 1)
+        #expect(rebuilt.newTileHexesByPlace?[place.id.uuidString] == [hex(q: 0, r: 0)])
+        #expect(rebuilt.addedTilesByPlace == nil)
+        #expect(!store.loadSyncState().uploadedWalks.contains(old.id))
+        await engine.sync()
+        #expect(await server.calls.filter { $0 == "sync:saveWalk" }.count == 1)
+        #expect(store.loadSyncState().uploadedWalks.contains(old.id))
         engine.reset()
     }
 
@@ -431,6 +469,9 @@ private actor TestSyncServer {
         let path = call["path"] as! String
         let args = call["args"] as! [String: Any]
         calls.append(path)
+        if ["sync:savePlace", "sync:saveWalk", "sync:saveProgress", "sync:saveSecrets", "sync:deletePlace"].contains(path) {
+            #expect(args["gridVersion"] as? Int == 2)
+        }
         var value: Any = NSNull()
         switch path {
         case "teams:myTeams": value = [] as [String]

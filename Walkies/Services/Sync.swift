@@ -94,7 +94,12 @@ final class SyncEngine {
         do {
             // Refresh membership even when personal sync is temporarily unavailable.
             var personalError: Error?
-            do { try await push(client); try await pull(client) } catch { personalError = error }
+            do {
+                try await model.rebuildWorldGrid(using: client)
+                await model.waitForHistory()
+                try await push(client)
+                try await pull(client)
+            } catch { personalError = error }
             try await syncTeams(TeamsAPI(client: client), revision: revision)
             if let personalError { throw personalError }
             lastSynced = .now
@@ -123,7 +128,7 @@ final class SyncEngine {
         // Cities deleted on this phone.
         let here = Set(model.cities.map(\.id))
         for id in state.uploadedPlaces.keys where !here.contains(id) {
-            let _: Nothing = try await client.mutation("sync:deletePlace", ["clientId": id.uuidString])
+            let _: Nothing = try await client.mutation("sync:deletePlace", DeletePlaceArgs(clientId: id.uuidString))
             state.uploadedPlaces[id] = nil
             save()
         }
@@ -153,16 +158,14 @@ final class SyncEngine {
 
         let secrets = model.foundStickers.filter { !state.uploadedSecrets.contains($0.key) }
         if !secrets.isEmpty {
-            let _: Nothing = try await client.mutation("sync:saveSecrets", [
-                "secrets": secrets.map { SecretArgs(secretId: $0.key, foundAt: $0.value.ms) },
-            ])
+            let _: Nothing = try await client.mutation("sync:saveSecrets", SecretsArgs(secrets: secrets.map { SecretArgs(secretId: $0.key, foundAt: $0.value.ms) }))
             state.uploadedSecrets.formUnion(secrets.keys)
             save()
         }
         // A rejected ledger must never hold secret uploads behind it.
         let progress = try progressJSON(model.ledger)
         if state.uploadedProgress != progress {
-            let _: Nothing = try await client.mutation("sync:saveProgress", ["ledger": progress])
+            let _: Nothing = try await client.mutation("sync:saveProgress", ProgressArgs(ledger: progress))
             state.uploadedProgress = progress
             save()
         }
@@ -191,20 +194,31 @@ final class SyncEngine {
             } else if state.uploadedPlaces[id] != nil {
                 continue
             }
-            cities.append(try JSONDecoder().decode(City.self, from: await client.download(url)))
+            let city = try JSONDecoder().decode(City.self, from: await client.download(url))
+            guard city.gridVersion == HexGrid.version else { throw ConvexError.server("The server still has places from the old grid.") }
+            cities.append(city)
         }
         let have = Set(model.walks.map(\.id))
         var walks: [Walk] = []
+        var rebuiltWalks: Set<UUID> = []
         for remote in snapshot.walks {
             guard let id = UUID(uuidString: remote.clientId), !have.contains(id),
                   let url = remote.url.flatMap(URL.init(string:)) else { continue }
-            walks.append(try JSONDecoder().decode(Walk.self, from: await client.download(url)))
+            var walk = try JSONDecoder().decode(Walk.self, from: await client.download(url))
+            if walk.gridVersion != HexGrid.version {
+                walk.resetGridCoverage()
+                rebuiltWalks.insert(walk.id)
+            }
+            walks.append(walk)
         }
         await model.addRemote(cities: cities, walks: walks, progress: progress, secrets: Dictionary(
             snapshot.secrets.map { ($0.secretId, Date(ms: $0.foundAt)) }, uniquingKeysWith: min
         ))
         for city in cities { state.uploadedPlaces[city.id] = max(state.uploadedPlaces[city.id] ?? .distantPast, city.lastChanged) }
-        state.uploadedWalks.formUnion(walks.map(\.id))
+        state.uploadedWalks.formUnion(walks.map(\.id).filter { !rebuiltWalks.contains($0) })
+        // A retained server walk can still contain old hexes. Replace its blob on
+        // the next push, after addRemote has rebuilt coverage from the raw GPS.
+        if !rebuiltWalks.isEmpty { pending = true }
         if let progress { state.uploadedProgress = try progressJSON(progress) }
 
         state.uploadedSecrets.formUnion(snapshot.secrets.map(\.secretId))
@@ -240,6 +254,7 @@ final class SyncEngine {
 // MARK: Wire formats
 
 private nonisolated struct PlaceArgs: Encodable {
+    var gridVersion = HexGrid.version
     var clientId: String
     var name: String
     var createdAt: Double
@@ -248,12 +263,28 @@ private nonisolated struct PlaceArgs: Encodable {
 }
 
 private nonisolated struct WalkArgs: Encodable {
+    var gridVersion = HexGrid.version
     var clientId: String
     var startedAt: Double
     var endedAt: Double
     var distance: Double
     var newTiles: Double
     var file: String
+}
+
+private nonisolated struct DeletePlaceArgs: Encodable {
+    var gridVersion = HexGrid.version
+    var clientId: String
+}
+
+private nonisolated struct ProgressArgs: Encodable {
+    var gridVersion = HexGrid.version
+    var ledger: String
+}
+
+private nonisolated struct SecretsArgs: Encodable {
+    var gridVersion = HexGrid.version
+    var secrets: [SecretArgs]
 }
 
 private nonisolated struct SecretArgs: Encodable {
