@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Walkies" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FF2F3B34</item>
+    </style>
+</resources>

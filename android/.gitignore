@@ -1,0 +1,10 @@
+# Holds MAPBOX_ACCESS_TOKEN and the SDK path. Never commit it.
+local.properties
+.gradle/
+.kotlin/
+build/
+captures/
+.idea/
+*.iml
+.cxx/
+.externalNativeBuild/
