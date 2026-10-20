@@ -27,6 +27,7 @@ enum Notifier {
 }
 final class Account {
     var isSignedIn = false
+    var userId: String?
     func client() async -> ConvexClient? { nil }
 }
 // App-only theme values used by the real cloud renderer in this macOS target.

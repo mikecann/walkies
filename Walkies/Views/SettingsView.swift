@@ -8,6 +8,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingSignOut = false
     @State private var cantSignOut: String?
+    @State private var notUploaded: Int?
 
     private var syncText: String {
         switch sync.status {
@@ -24,9 +25,17 @@ struct SettingsView: View {
         if model.activeWalk != nil {
             cantSignOut = "Finish your walk first."
         } else if sync.waiting > 0 {
-            cantSignOut = "\(sync.waiting) things haven't uploaded to your account yet. Wait until there's signal and they've synced, or they'd be lost."
+            notUploaded = sync.waiting
         } else {
             confirmingSignOut = true
+        }
+    }
+
+    /// Sync stops first, so nothing from this account comes back after the wipe.
+    private func signOutNow() {
+        Task {
+            await sync.wipe()
+            await account.signOut()
         }
     }
 
@@ -85,13 +94,7 @@ struct SettingsView: View {
                 }
             }
             .confirmationDialog("Sign out of Walkies?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
-                Button("Sign out", role: .destructive) {
-                    Task {
-                        await account.signOut()
-                        model.wipeLocalData()
-                        sync.reset()
-                    }
-                }
+                Button("Sign out", role: .destructive, action: signOutNow)
             } message: {
                 Text("This clears Walkies off this phone. Everything's saved in your account and comes back when you sign in again.")
             }
@@ -99,6 +102,12 @@ struct SettingsView: View {
                 Button("OK") {}
             } message: {
                 Text(cantSignOut ?? "")
+            }
+            .alert("Not uploaded yet", isPresented: Binding(get: { notUploaded != nil }, set: { if !$0 { notUploaded = nil } })) {
+                Button("Wait", role: .cancel) {}
+                Button("Sign out anyway", role: .destructive, action: signOutNow)
+            } message: {
+                Text("\(notUploaded ?? 0) things haven't uploaded to your account yet. If you sign out now, they'll be lost.")
             }
             .scrollContentBackground(.hidden)
             .background(Color.cream)

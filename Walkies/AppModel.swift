@@ -728,6 +728,7 @@ final class AppModel {
 
     func deleteCities(at offsets: IndexSet) {
         let removed = offsets.map { cities[$0].id }
+        placesDeleted?(removed)
         cities.remove(atOffsets: offsets)
         placesRevision += 1
         rebuildCountingTiles()
@@ -986,12 +987,15 @@ final class AppModel {
 
     /// Asks the sync engine to push and pull shortly. Set by the app delegate.
     @ObservationIgnored var requestSync: (() -> Void)?
+    /// Tells the sync engine which places were deleted on purpose. Set by the sync engine.
+    @ObservationIgnored var placesDeleted: (([UUID]) -> Void)?
 
     /// Apply a pull as one batch. Merge ownership before preparing any level menu,
     /// and do coverage recovery on a worker rather than once per downloaded walk.
     func addRemote(cities remoteCities: [City], walks remoteWalks: [Walk], progress: Ledger?, secrets: [String: Date]) async {
-        await historyTask?.value
         let generation = dataGeneration
+        await historyTask?.value
+        guard generation == dataGeneration else { return }
         batchingProgress = true
         defer {
             batchingProgress = false

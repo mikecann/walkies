@@ -61,6 +61,8 @@ final class Account {
     }
 
     var isSignedIn: Bool { profile.signedIn }
+    /// Who's signed in, for tying this phone's data to them. Not observed.
+    var userId: String? { session?.userId }
     /// The name to show for whoever's signed in.
     var displayName: String? { profile.name ?? profile.email }
     var email: String? { profile.email }
@@ -213,11 +215,13 @@ final class Account {
         return refreshed
     }
 
+    /// Signed out here straight away, so nothing can sync while the server's told.
     func signOut() async {
-        if let refreshToken = session?.refreshToken {
+        let refreshToken = session?.refreshToken
+        clear()
+        if let refreshToken {
             let _: Nothing? = try? await ConvexClient().mutation("auth:signOut", ["refreshToken": refreshToken])
         }
-        clear()
     }
 
     private func save(_ tokens: Session) {

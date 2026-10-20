@@ -76,8 +76,18 @@ nonisolated struct Store {
         if FileManager.default.fileExists(atPath: resetURL.path) { try FileManager.default.removeItem(at: resetURL) }
     }
 
+    /// A file that won't read is moved aside rather than saved over, and sync brings
+    /// the places back from the account.
     func loadCities() -> [City] {
-        read([City].self, from: citiesURL) ?? []
+        guard let data = try? Data(contentsOf: citiesURL) else { return [] }
+        do {
+            return try JSONDecoder().decode([City].self, from: data)
+        } catch {
+            let aside = root.appending(path: "cities.corrupt-\(Int(Date.now.timeIntervalSince1970)).json")
+            Self.log.error("Couldn't read cities.json, moving it to \(aside.lastPathComponent): \(error)")
+            try? FileManager.default.moveItem(at: citiesURL, to: aside)
+            return []
+        }
     }
 
     func save(_ cities: [City]) {
@@ -123,6 +133,17 @@ nonisolated struct Store {
     private var progressURL: URL { root.appending(path: "progress.json") }
 
     private var syncURL: URL { root.appending(path: "sync.json") }
+
+    /// The user id of the account this phone's data belongs to.
+    func loadOwner() -> String? {
+        read(String.self, from: ownerURL)
+    }
+
+    func save(owner: String) {
+        write(owner, to: ownerURL)
+    }
+
+    private var ownerURL: URL { root.appending(path: "owner.json") }
 
     /// Suburbs around your places, so the map can offer them without asking OpenStreetMap every launch.
     func loadNearby() -> NearbyPlaces? {

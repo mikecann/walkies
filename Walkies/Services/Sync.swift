@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 /// What's already been sent to the server, so each thing only goes up once.
 nonisolated struct SyncState: Codable, Sendable {
@@ -9,12 +10,15 @@ nonisolated struct SyncState: Codable, Sendable {
     var uploadedSecrets: Set<String> = []
     /// Canonical JSON of the last ledger accepted by the server. Optional for old saves.
     var uploadedProgress: String?
+    /// Places deleted on this phone that the server may still have. Optional for old saves.
+    var deletedPlaces: Set<UUID>?
 }
 
 /// Keeps this phone and the account in step. The phone is the source of truth and
 /// works offline; this pushes up anything new and pulls down anything missing
 /// whenever there's a connection. Everything only ever grows, so there's nothing to
-/// reconcile beyond adding. A sync that fails halfway just carries on next time.
+/// reconcile beyond adding, apart from places you delete, which are written down when
+/// you delete them. A sync that fails halfway just carries on next time.
 @Observable
 final class SyncEngine {
     enum Status: Equatable {
@@ -32,25 +36,31 @@ final class SyncEngine {
 
     @ObservationIgnored private let model: AppModel
     @ObservationIgnored private let isSignedIn: () -> Bool
+    @ObservationIgnored private let userId: () -> String?
     @ObservationIgnored private let makeClient: () async -> ConvexClient?
     @ObservationIgnored private let store: Store
     @ObservationIgnored private var state: SyncState
     @ObservationIgnored private var scheduled: Task<Void, Never>?
+    @ObservationIgnored private var current: Task<Void, Never>?
     @ObservationIgnored private var running = false
     @ObservationIgnored private var pending = false
     @ObservationIgnored private var resetRevision = 0
 
     convenience init(model: AppModel, account: Account) {
-        self.init(model: model, store: Store(), isSignedIn: { account.isSignedIn }, makeClient: { await account.client() })
+        self.init(model: model, store: Store(), isSignedIn: { account.isSignedIn }, userId: { account.userId },
+                  makeClient: { await account.client() })
     }
 
-    init(model: AppModel, store: Store, isSignedIn: @escaping () -> Bool, makeClient: @escaping () async -> ConvexClient?) {
+    init(model: AppModel, store: Store, isSignedIn: @escaping () -> Bool, userId: @escaping () -> String? = { nil },
+         makeClient: @escaping () async -> ConvexClient?) {
         self.model = model
         self.store = store
         self.isSignedIn = isSignedIn
+        self.userId = userId
         self.makeClient = makeClient
         state = store.loadSyncState()
         lastSynced = UserDefaults.standard.object(forKey: "lastSynced") as? Date
+        model.placesDeleted = { [weak self] in self?.deleted(places: $0) }
         countWaiting()
     }
 
@@ -75,18 +85,26 @@ final class SyncEngine {
             pending = true
             return
         }
-        let revision = resetRevision
         running = true
+        let task = Task { await run() }
+        current = task
+        await task.value
+    }
+
+    private func run() async {
+        let revision = resetRevision
         pending = false
         status = .syncing
         defer {
             running = false
+            current = nil
             countWaiting()
             if pending {
                 pending = false
                 schedule()
             }
         }
+        claimLocalData()
         guard let client = await makeClient() else {
             status = isSignedIn() ? .failed("Offline") : .idle
             return
@@ -95,10 +113,13 @@ final class SyncEngine {
             // Refresh membership even when personal sync is temporarily unavailable.
             var personalError: Error?
             do {
+                try check(revision)
                 try await model.rebuildWorldGrid(using: client)
+                try check(revision)
                 await model.waitForHistory()
-                try await push(client)
-                try await pull(client)
+                try check(revision)
+                try await push(client, revision: revision)
+                try await pull(client, revision: revision)
             } catch { personalError = error }
             try await syncTeams(TeamsAPI(client: client), revision: revision)
             if let personalError { throw personalError }
@@ -132,13 +153,53 @@ final class SyncEngine {
         countWaiting()
     }
 
+    /// Stops any sync in flight, then clears this phone, for signing out. A sync
+    /// that was running can't put anything back afterwards.
+    func wipe() async {
+        reset()
+        current?.cancel()
+        await current?.value
+        model.wipeLocalData()
+        reset()
+    }
+
+    /// Places deleted on this phone, so the next push deletes them from the account too.
+    private func deleted(places ids: [UUID]) {
+        state.deletedPlaces = (state.deletedPlaces ?? []).union(ids)
+        save()
+        countWaiting()
+    }
+
+    /// This phone's data belongs to whoever it first synced for. Someone else signing in,
+    /// say after a session ran out, starts from their own account instead. Anything the
+    /// last account hadn't uploaded yet is lost here, but that's rare: their session
+    /// would have to end with things still waiting.
+    private func claimLocalData() {
+        guard let user = userId() else { return }
+        let owner = store.loadOwner()
+        guard owner != user else { return }
+        if owner != nil {
+            model.wipeLocalData()
+            state = SyncState()
+            lastSynced = nil
+        }
+        store.save(owner: user)
+    }
+
+    /// Throws when a sign-out or reset has happened since the sync started.
+    private func check(_ revision: Int) throws {
+        guard isSignedIn(), resetRevision == revision, !Task.isCancelled else { throw CancellationError() }
+    }
+
     // MARK: Push
 
-    private func push(_ client: ConvexClient) async throws {
-        // Cities deleted on this phone.
-        let here = Set(model.cities.map(\.id))
-        for id in state.uploadedPlaces.keys where !here.contains(id) {
+    private func push(_ client: ConvexClient, revision: Int) async throws {
+        // Only places deleted on purpose. A place that's just missing, say from a file
+        // that wouldn't load, must never be deleted from the account.
+        for id in state.deletedPlaces ?? [] {
             let _: Nothing = try await client.mutation("sync:deletePlace", DeletePlaceArgs(clientId: id.uuidString))
+            try check(revision)
+            state.deletedPlaces?.remove(id)
             state.uploadedPlaces[id] = nil
             save()
         }
@@ -147,10 +208,12 @@ final class SyncEngine {
             let changed = city.lastChanged
             if let sent = state.uploadedPlaces[city.id], sent >= changed { continue }
             let file = try await upload(JSONEncoder().encode(city), client)
+            try check(revision)
             let _: Nothing = try await client.mutation("sync:savePlace", PlaceArgs(
                 clientId: city.id.uuidString, name: city.name,
                 createdAt: city.createdAt.ms, updatedAt: changed.ms, file: file
             ))
+            try check(revision)
             state.uploadedPlaces[city.id] = changed
             save()
         }
@@ -158,10 +221,12 @@ final class SyncEngine {
         for walk in model.walks where !state.uploadedWalks.contains(walk.id) {
             guard let endedAt = walk.endedAt else { continue }
             let file = try await upload(JSONEncoder().encode(walk), client)
+            try check(revision)
             let _: Nothing = try await client.mutation("sync:saveWalk", WalkArgs(
                 clientId: walk.id.uuidString, startedAt: walk.startedAt.ms, endedAt: endedAt.ms,
                 distance: walk.distance, newTiles: Double(walk.newTiles), file: file
             ))
+            try check(revision)
             state.uploadedWalks.insert(walk.id)
             save()
         }
@@ -169,6 +234,7 @@ final class SyncEngine {
         let secrets = model.foundStickers.filter { !state.uploadedSecrets.contains($0.key) }
         if !secrets.isEmpty {
             let _: Nothing = try await client.mutation("sync:saveSecrets", SecretsArgs(secrets: secrets.map { SecretArgs(secretId: $0.key, foundAt: $0.value.ms) }))
+            try check(revision)
             state.uploadedSecrets.formUnion(secrets.keys)
             save()
         }
@@ -176,6 +242,7 @@ final class SyncEngine {
         let progress = try progressJSON(model.ledger)
         if state.uploadedProgress != progress {
             let _: Nothing = try await client.mutation("sync:saveProgress", ProgressArgs(ledger: progress))
+            try check(revision)
             state.uploadedProgress = progress
             save()
         }
@@ -189,50 +256,99 @@ final class SyncEngine {
 
     // MARK: Pull
 
-    private func pull(_ client: ConvexClient) async throws {
-        let snapshot: Snapshot = try await client.query("sync:snapshot")
+    /// Downloads are applied a batch at a time, so one bad file can't hold back the
+    /// rest and a pull that's cut short keeps what it got. The first batch carries the
+    /// ledger, so ownership is merged before any level menu is prepared.
+    private static let batchSize = 25
 
-        // Download first, then apply one model transaction. No partial-history
-        // reward menus are prepared while a fresh phone pulls its walks.
-        let progress = try snapshot.progress.map { try JSONDecoder().decode(Ledger.self, from: Data($0.utf8)) }
-        var cities: [City] = []
+    private func pull(_ client: ConvexClient, revision: Int) async throws {
+        let snapshot: Snapshot = try await client.query("sync:snapshot")
+        try check(revision)
+
+        var progress = try snapshot.progress.map { try JSONDecoder().decode(Ledger.self, from: Data($0.utf8)) }
+        var secrets = Dictionary(snapshot.secrets.map { ($0.secretId, Date(ms: $0.foundAt)) }, uniquingKeysWith: min)
+        var batch = Batch()
+        var failure: Error?
+
+        func flush() async throws {
+            try await apply(batch, progress: progress, secrets: secrets, revision: revision)
+            batch = Batch()
+            progress = nil
+            secrets = [:]
+        }
+
         for place in snapshot.places {
             guard let id = UUID(uuidString: place.clientId), let url = place.url.flatMap(URL.init(string:)) else { continue }
             let remoteChanged = Date(ms: place.updatedAt)
             if let local = model.cities.first(where: { $0.id == id }) {
                 if local.lastChanged >= remoteChanged { continue }
-            } else if state.uploadedPlaces[id] != nil {
+            } else if state.deletedPlaces?.contains(id) == true {
                 continue
             }
-            let city = try JSONDecoder().decode(City.self, from: await client.download(url))
-            guard city.gridVersion == HexGrid.version else { throw ConvexError.server("The server still has places from the old grid.") }
-            cities.append(city)
+            guard let city = try await fetch(City.self, from: url, client, revision: revision, failure: &failure) else { continue }
+            guard city.gridVersion == HexGrid.version else {
+                failure = failure ?? ConvexError.server("The server still has places from the old grid.")
+                continue
+            }
+            batch.cities.append(city)
+            if batch.count >= Self.batchSize { try await flush() }
         }
         let have = Set(model.walks.map(\.id))
-        var walks: [Walk] = []
-        var rebuiltWalks: Set<UUID> = []
         for remote in snapshot.walks {
             guard let id = UUID(uuidString: remote.clientId), !have.contains(id),
                   let url = remote.url.flatMap(URL.init(string:)) else { continue }
-            var walk = try JSONDecoder().decode(Walk.self, from: await client.download(url))
+            guard var walk = try await fetch(Walk.self, from: url, client, revision: revision, failure: &failure) else { continue }
             if walk.gridVersion != HexGrid.version {
                 walk.resetGridCoverage()
-                rebuiltWalks.insert(walk.id)
+                batch.rebuiltWalks.insert(walk.id)
             }
-            walks.append(walk)
+            batch.walks.append(walk)
+            if batch.count >= Self.batchSize { try await flush() }
         }
-        await model.addRemote(cities: cities, walks: walks, progress: progress, secrets: Dictionary(
-            snapshot.secrets.map { ($0.secretId, Date(ms: $0.foundAt)) }, uniquingKeysWith: min
-        ))
-        for city in cities { state.uploadedPlaces[city.id] = max(state.uploadedPlaces[city.id] ?? .distantPast, city.lastChanged) }
-        state.uploadedWalks.formUnion(walks.map(\.id).filter { !rebuiltWalks.contains($0) })
+        try await flush()
+        // Anything that didn't download is tried again next sync.
+        if let failure { throw failure }
+    }
+
+    private struct Batch {
+        var cities: [City] = []
+        var walks: [Walk] = []
+        var rebuiltWalks: Set<UUID> = []
+        var count: Int { cities.count + walks.count }
+    }
+
+    private func apply(_ batch: Batch, progress: Ledger?, secrets: [String: Date], revision: Int) async throws {
+        try check(revision)
+        await model.addRemote(cities: batch.cities, walks: batch.walks, progress: progress, secrets: secrets)
+        try check(revision)
+        for city in batch.cities { state.uploadedPlaces[city.id] = max(state.uploadedPlaces[city.id] ?? .distantPast, city.lastChanged) }
+        state.uploadedWalks.formUnion(batch.walks.map(\.id).filter { !batch.rebuiltWalks.contains($0) })
         // A retained server walk can still contain old hexes. Replace its blob on
         // the next push, after addRemote has rebuilt coverage from the raw GPS.
-        if !rebuiltWalks.isEmpty { pending = true }
+        if !batch.rebuiltWalks.isEmpty { pending = true }
         if let progress { state.uploadedProgress = try progressJSON(progress) }
-
-        state.uploadedSecrets.formUnion(snapshot.secrets.map(\.secretId))
+        state.uploadedSecrets.formUnion(secrets.keys)
         save()
+    }
+
+    /// Nil when the file wouldn't download, which is tried again next sync, or wouldn't
+    /// read, which is skipped so it can't stop every pull after it.
+    private func fetch<T: Decodable>(_ type: T.Type, from url: URL, _ client: ConvexClient, revision: Int, failure: inout Error?) async throws -> T? {
+        let data: Data
+        do {
+            data = try await client.download(url)
+        } catch {
+            try check(revision)
+            failure = failure ?? error
+            return nil
+        }
+        try check(revision)
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            Self.log.error("Skipping \(url.lastPathComponent) from the account, it won't read: \(error)")
+            return nil
+        }
     }
 
     private func syncTeams(_ api: TeamsAPI, revision: Int) async throws {
@@ -254,11 +370,15 @@ final class SyncEngine {
     }
 
     private func countWaiting() {
-        waiting = model.walks.filter { $0.endedAt != nil && !state.uploadedWalks.contains($0.id) }.count
+        let deletes = state.deletedPlaces?.count ?? 0
+        waiting = deletes
+            + model.walks.filter { $0.endedAt != nil && !state.uploadedWalks.contains($0.id) }.count
             + model.cities.filter { (state.uploadedPlaces[$0.id] ?? .distantPast) < $0.lastChanged }.count
             + model.foundStickers.keys.filter { !state.uploadedSecrets.contains($0) }.count
             + ((try? progressJSON(model.ledger)) == state.uploadedProgress ? 0 : 1)
     }
+
+    nonisolated private static let log = Logger(subsystem: "com.mikecann.walkies", category: "sync")
 }
 
 // MARK: Wire formats
