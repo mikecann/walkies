@@ -29,7 +29,7 @@ nonisolated enum ConvexError: LocalizedError {
             case "RATE_LIMITED": "Too many invite attempts. Please wait up to an hour before trying again."
             case "MEMBER_REMOVED": "You were removed from this team. Ask its creator for a new invite link."
             case "TEAM_FULL": "This team is full. A team can have up to 8 members."
-            case "NOT_A_MEMBER", "TEAM_NOT_FOUND": "You no longer have access to this team map. You may have been removed or the team has closed."
+            case "NOT_A_MEMBER", "TEAM_NOT_FOUND": "You no longer have access to this team. You may have been removed or the team has closed."
             default: message
             }
         case .badResponse(let code): "The server returned an error (\(code))."

@@ -2,7 +2,7 @@ import CryptoKit
 import SwiftUI
 import UIKit
 
-/// Someone's head for the map picker: their photo, or their initials on their colour.
+/// Someone's head for the place chip and team: their photo, or their initials on their colour.
 struct Head: Identifiable, Equatable {
     var id: String
     var name: String?
@@ -21,14 +21,14 @@ struct Head: Identifiable, Equatable {
         return letters.map { String($0).uppercased() }.joined()
     }
 
-    /// Your own head. Your colour from a team map if you've picked one, else Walkies orange.
-    static func you(_ account: Account, teams: [TeamMap]) -> Head {
+    /// Your own head. Your colour from a team if you've picked one, else Walkies orange.
+    static func you(_ account: Account, teams: [Team]) -> Head {
         let colour = teams.lazy.compactMap(\.you).first.map { Color.team($0.colour) } ?? .walkiesOrange
         return Head(id: "you", name: account.displayName, picture: account.picture, colour: colour)
     }
 
     /// A team's heads, you last so you sit on top of the pile.
-    static func team(_ team: TeamMap, you: Head) -> [Head] {
+    static func team(_ team: Team, you: Head) -> [Head] {
         let others = team.members.filter { !$0.isYou }.map {
             Head(id: $0.userId, name: $0.name, picture: $0.picture.flatMap(URL.init(string:)), colour: .team($0.colour))
         }

@@ -23,28 +23,12 @@ nonisolated struct Store {
     }
 
     private var teamsURL: URL { root.appending(path: "teams.json") }
-    private var teamsDir: URL { root.appending(path: "teams", directoryHint: .isDirectory) }
-
-    func loadTeams() -> [TeamMap] {
-        (read([String].self, from: teamsURL) ?? []).compactMap {
-            read(TeamMap.self, from: teamFile($0))
-        }
+    func loadTeams() -> [Team] {
+        read([Team].self, from: teamsURL) ?? []
     }
 
-    func save(teams: [TeamMap], changedIDs: Set<String>? = nil) {
-        try? FileManager.default.createDirectory(at: teamsDir, withIntermediateDirectories: true)
-        for team in teams where changedIDs?.contains(team.id) != false { write(team, to: teamFile(team.id)) }
-        write(teams.map(\.id), to: teamsURL)
-        let keep = Set(teams.map { teamFile($0.id).lastPathComponent })
-        for url in (try? FileManager.default.contentsOfDirectory(at: teamsDir, includingPropertiesForKeys: nil)) ?? [] where !keep.contains(url.lastPathComponent) {
-            try? FileManager.default.removeItem(at: url)
-        }
-    }
-
-    private func teamFile(_ id: String) -> URL {
-        // Server ids are opaque; don't use one as an unchecked filesystem path.
-        let filename = Data(id.utf8).base64EncodedString().replacingOccurrences(of: "/", with: "_")
-        return teamsDir.appending(path: "\(filename).json")
+    func save(teams: [Team]) {
+        write(teams, to: teamsURL)
     }
 
     /// When each sticker was found, by lore id.

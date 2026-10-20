@@ -60,10 +60,10 @@ describe("simulator test sign-in", () => {
     expect(await alice.query(api.users.me)).toEqual({ name: "Sim A", email: null, picture: null });
     expect(await bob.query(api.users.me)).toEqual({ name: "Sim B", email: null, picture: null });
     const { teamId, inviteCode } = await alice.action(api.teams.createTeam, {
-      name: "Simulator team", colour: "#e67834", sharing: "tiles",
+      name: "Simulator team", colour: "#e67834",
     });
-    await bob.action(api.teams.joinTeam, { code: inviteCode, colour: "#467cba", sharing: "tiles" });
-    const snapshot = await alice.query(api.teams.teamSnapshot, { teamId });
+    await bob.action(api.teams.joinTeam, { code: inviteCode, colour: "#467cba" });
+    const snapshot = (await alice.query(api.teams.myTeams)).find((team) => team.teamId === teamId)!;
     expect(snapshot.members.map((m) => m.name).sort()).toEqual(["Sim A", "Sim B"]);
     const rotated = await t.mutation(api.auth.refreshSession, { refreshToken: a.tokens.refreshToken });
     expect(rotated.kind).toBe("rotated");

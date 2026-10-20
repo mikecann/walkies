@@ -29,193 +29,45 @@ enum TeamSheet: Identifiable {
     }
 }
 
-/// Your maps as heads, in the expanded place chip: just you, each team, and "+"
-/// for a new one. Tap a head to switch to that map.
-struct MapHeads: View {
+/// Membership lives below personal progress in the place chip.
+struct TeamSection: View {
     @Environment(AppModel.self) private var model
     @Environment(Account.self) private var account
     @Binding var sheet: TeamSheet?
 
     var body: some View {
-        let you = Head.you(account, teams: model.teams)
-        ScrollView(.horizontal) {
-            HStack(alignment: .top, spacing: 14) {
-                choice("Just me", id: nil, heads: [you])
-                ForEach(model.teams) { team in
-                    choice(team.name, id: team.id, heads: Head.team(team, you: you))
-                }
-                Menu {
-                    Button("Start a team map", systemImage: "person.2") { sheet = .start }
-                    Button("Join with a code", systemImage: "number") { sheet = .join }
-                } label: {
-                    VStack(spacing: 5) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundStyle(Color.ink.opacity(0.6))
-                            .frame(width: 44, height: 44)
-                            .background(Color.cream, in: .circle)
-                            .overlay(Circle().strokeBorder(Color.ink.opacity(0.35), style: StrokeStyle(lineWidth: 2, dash: [4, 3])))
-                        caption("New team")
-                    }
-                }
-                .accessibilityLabel("New team map")
-            }
-            // Room for the selected ring, which sits outside the heads.
-            .padding(5)
-        }
-        .scrollIndicators(.hidden)
-        .buttonStyle(PressScale())
-    }
-
-    private func choice(_ name: String, id: String?, heads: [Head]) -> some View {
-        let selected = model.currentTeamID == id
-        return Button {
-            model.currentTeamID = id
-        } label: {
-            VStack(spacing: 5) {
-                AvatarStack(heads: heads, size: 44, overlap: 14)
-                    .overlay {
-                        if selected { Capsule().strokeBorder(Color.walkiesOrange, lineWidth: 2.5).padding(-4.5) }
-                    }
-                caption(name).fontWeight(selected ? .semibold : .regular)
-            }
-        }
-        .accessibilityLabel(id == nil ? "Just me, My map" : name)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private func caption(_ text: String) -> some View {
-        Text(text)
-            .font(.caption2)
-            .lineLimit(1)
-            .foregroundStyle(Color.ink.opacity(0.75))
-            .frame(maxWidth: 72)
-    }
-}
-
-/// The full list of maps in Maps and places.
-struct MapChoices: View {
-    @Environment(AppModel.self) private var model
-    @Binding var sheet: TeamSheet?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Maps").font(.headline)
-            mapButton("My map", id: nil, members: [])
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Team").font(.subheadline.weight(.semibold))
             ForEach(model.teams) { team in
-                HStack {
-                    mapButton(team.name, id: team.id, members: team.members)
-                    Button { sheet = .settings(team.id) } label: {
-                        Image(systemName: "gearshape")
-                            .frame(width: 44, height: 44)
-                            .contentShape(.rect)
+                Button { sheet = .settings(team.id) } label: {
+                    HStack(spacing: 8) {
+                        AvatarStack(heads: Head.team(team, you: Head.you(account, teams: model.teams)))
+                        Text(team.name).lineLimit(1)
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right").font(.caption)
                     }
-                    .accessibilityLabel("Settings for \(team.name)")
+                    .frame(minHeight: 44)
+                    .contentShape(.rect)
                 }
+                .buttonStyle(.plain)
             }
-            Button { sheet = .start } label: {
-                Text("Start a team map")
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .contentShape(.rect)
-            }
-            Button { sheet = .join } label: {
-                Text("Join with a code")
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .contentShape(.rect)
-            }
+            // Also available when you're already in a team, for a second group.
+            Button("Start a team") { sheet = .start }
+            Button("Join with a code") { sheet = .join }
         }
         .font(.subheadline)
         .buttonStyle(.plain)
-    }
-
-    private func mapButton(_ name: String, id: String?, members: [TeamMember]) -> some View {
-        Button {
-            model.currentTeamID = id
-        } label: {
-            HStack(spacing: 6) {
-                Text(name).lineLimit(1)
-                ForEach(members.prefix(8)) { member in
-                    Circle().fill(Color.team(member.colour)).frame(width: 8, height: 8)
-                        .accessibilityLabel(member.name)
-                }
-                Spacer(minLength: 2)
-                if model.currentTeamID == id { Image(systemName: "checkmark").fontWeight(.bold) }
-            }
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(model.currentTeamID == id ? .isSelected : [])
-    }
-}
-
-struct MapsAndPlacesView: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    @State private var addingPlace = false
-    @State private var teamSheet: TeamSheet?
-
-    var body: some View {
-        NavigationStack {
-            // Keep these independent controls out of List's row tap handling.
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    MapChoices(sheet: $teamSheet)
-                        .padding(18)
-                        .stickerCard(in: .rect(cornerRadius: 24))
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(model.mapName).font(.headline)
-                        ForEach(model.mapCities) { city in
-                            Button {
-                                model.select(city.id)
-                                dismiss()
-                            } label: {
-                                HStack {
-                                    Text(city.name)
-                                    Spacer()
-                                    Text(city.progress.percentText).monospacedDigit()
-                                    if model.selectedCityID == city.id { Image(systemName: "checkmark") }
-                                }
-                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                                .contentShape(.rect)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityAddTraits(model.selectedCityID == city.id ? .isSelected : [])
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(18)
-                    .stickerCard(in: .rect(cornerRadius: 24))
-
-                    Button { addingPlace = true } label: {
-                        Label("Add a place", systemImage: "plus")
-                    }
-                    .buttonStyle(StickerButtonStyle())
-                }
-                .padding()
-            }
-            .background(Color.sand.opacity(0.45))
-            .foregroundStyle(Color.ink)
-            .navigationTitle("Maps and places")
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(isPresented: $addingPlace) {
-                AddCityView { dismiss() }
-            }
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-        }
-        // Presentation belongs to the stable sheet host, not a row or button group.
-        .sheet(item: $teamSheet) { $0.destination }
-        .tint(.burnt)
-        .environment(\.colorScheme, .light)
     }
 }
 
 private struct TeamPreferences: View {
     @Binding var colour: String
-    @Binding var sharing: TeamSharing
+    @Binding var name: String
 
     var body: some View {
+        Section("Your name") {
+            TextField("Name", text: $name).textInputAutocapitalization(.words)
+        }
         Section("Your colour") {
             HStack(spacing: 16) {
                 ForEach(TeamColour.allCases, id: \.rawValue) { option in
@@ -232,20 +84,11 @@ private struct TeamPreferences: View {
                 }
             }
         }
-        Section("What to share") {
-            Picker("Sharing", selection: $sharing) {
-                ForEach(TeamSharing.allCases, id: \.rawValue) { choice in Text(choice.title).tag(choice) }
-            }
-            .pickerStyle(.segmented)
-            ForEach(TeamSharing.allCases, id: \.rawValue) { choice in
-                Text("\(choice.title): \(choice.detail)").font(.caption).foregroundStyle(.secondary)
-            }
-        }
     }
 }
 
 struct TeamInviteCard: View {
-    let team: TeamMap
+    let team: Team
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Invite someone to \(team.name)").font(.headline)
@@ -262,24 +105,25 @@ struct TeamInviteCard: View {
 }
 
 struct StartTeamView: View {
+    @Environment(Account.self) private var account
     @Environment(AppModel.self) private var model
     @Environment(SyncEngine.self) private var sync
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var colour = TeamColour.teal.rawValue
-    @State private var sharing = TeamSharing.tiles
+    @State private var memberName = ""
     @State private var createdID: String?
     @State private var busy = false
     @State private var error: String?
     @FocusState private var nameFocused: Bool
-    private var canCreate: Bool { !busy && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var canCreate: Bool { !busy && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !memberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
         NavigationStack {
             Form {
                 if let id = createdID, let team = model.teams.first(where: { $0.id == id }) {
                     TeamInviteCard(team: team).listRowBackground(Color.clear)
-                    Text("Add a place from Maps and places, then your past walks there will count too.")
+                    Text("Your team can see each other here. Your clouds and secrets stay yours.")
                 } else {
                     Section("Team name") {
                         TextField("Mike & Dad", text: $name)
@@ -288,16 +132,16 @@ struct StartTeamView: View {
                             .submitLabel(.done)
                             .onSubmit { nameFocused = false }
                     }
-                    TeamPreferences(colour: $colour, sharing: $sharing)
+                    TeamPreferences(colour: $colour, name: $memberName)
                     Section {
                         Button(action: create) {
-                            Text("Start team map").frame(maxWidth: .infinity)
+                            Text("Start team").frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(!canCreate)
                         .listRowBackground(Color.clear)
                     } footer: {
-                        Text("Your walks count on My map and this team map. Shells and levels stay yours.")
+                        Text("Your team can see each other here. Your clouds and secrets stay yours.")
                     }
                 }
                 if busy { ProgressView() }
@@ -307,7 +151,8 @@ struct StartTeamView: View {
             .disabled(busy)
             .scrollDismissesKeyboard(.interactively)
             .scrollContentBackground(.hidden).background(Color.cream)
-            .navigationTitle("Start a team map").navigationBarTitleDisplayMode(.inline)
+            .onAppear { if memberName.isEmpty { memberName = account.displayName ?? "Explorer" } }
+            .navigationTitle("Start a team").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(busy) }
                 ToolbarItemGroup(placement: .keyboard) {
@@ -331,12 +176,16 @@ struct StartTeamView: View {
                 let api = try await model.teamAPI()
                 // Keep the id immediately. A failed first pull must not create a second team on retry.
                 if createdID == nil {
-                    createdID = try await api.create(name: teamName, colour: colour, sharing: sharing).teamId
-                    if let createdID { model.joinedTeam(createdID) }
+                    let created = try await api.create(name: teamName, colour: colour, memberName: memberName)
+                    createdID = created.teamId
+                    model.joinedTeam(created.teamId)
+                    model.editTeam(created.teamId) { team in
+                        team.name = teamName
+                        team.inviteCode = created.inviteCode
+                    }
                 }
                 if let id = createdID {
                     try await model.refreshTeam(id, api: api)
-                    model.currentTeamID = id
                 }
                 sync.schedule()
             } catch { self.error = error.localizedDescription }
@@ -345,6 +194,7 @@ struct StartTeamView: View {
 }
 
 struct JoinTeamView: View {
+    @Environment(Account.self) private var account
     var initialCode = ""
     @Environment(AppModel.self) private var model
     @Environment(SyncEngine.self) private var sync
@@ -352,7 +202,7 @@ struct JoinTeamView: View {
     @State private var draft = TeamInviteDraft()
     @State private var checkTask: Task<Void, Never>?
     @State private var colour = TeamColour.blue.rawValue
-    @State private var sharing = TeamSharing.tiles
+    @State private var memberName = ""
     @State private var busy = false
     @State private var error: String?
     private var normalisedCode: String { draft.normalisedCode }
@@ -366,10 +216,10 @@ struct JoinTeamView: View {
                 }
                 if let preview = draft.preview, draft.checkedCode == normalisedCode {
                     Section(preview.name) {
-                        Text("Past walks in the team's places count too.").font(.subheadline)
+                        Text("Your team can see each other here. Your clouds and secrets stay yours.").font(.subheadline)
                     }
-                    TeamPreferences(colour: $colour, sharing: $sharing)
-                    Button("Join \(preview.name)", action: join).disabled(busy)
+                    TeamPreferences(colour: $colour, name: $memberName)
+                    Button("Join \(preview.name)", action: join).disabled(busy || memberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 if busy { ProgressView() }
                 if let error { Text(error).foregroundStyle(.red) }
@@ -377,9 +227,9 @@ struct JoinTeamView: View {
             .buttonStyle(.borderless)
             .disabled(busy)
             .scrollContentBackground(.hidden).background(Color.cream)
-            .navigationTitle("Join a team map").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Join a team").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(busy) } }
-            .onAppear { if draft.code.isEmpty { draft.replace(with: initialCode) }; if TeamInviteCode.isValid(normalisedCode) { check() } }
+            .onAppear { if memberName.isEmpty { memberName = account.displayName ?? "Explorer" }; if draft.code.isEmpty { draft.replace(with: initialCode) }; if TeamInviteCode.isValid(normalisedCode) { check() } }
             .onChange(of: initialCode) {
                 checkTask?.cancel()
                 draft.replace(with: initialCode)
@@ -402,7 +252,7 @@ struct JoinTeamView: View {
                 let api = try await model.teamAPI()
                 let result = try await api.preview(input)
                 guard !Task.isCancelled, draft.receive(result, for: input) else { return }
-                if result == nil { error = "That code doesn't match a team map." }
+                if result == nil { error = "That code doesn't match a team." }
             } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         }
     }
@@ -414,10 +264,9 @@ struct JoinTeamView: View {
             defer { busy = false }
             do {
                 let api = try await model.teamAPI()
-                let id = try await api.join(code: normalisedCode, colour: colour, sharing: sharing)
+                let id = try await api.join(code: normalisedCode, colour: colour, name: memberName)
                 model.joinedTeam(id)
                 try await model.refreshTeam(id, api: api)
-                model.currentTeamID = id
                 sync.schedule()
                 dismiss()
             } catch { self.error = error.localizedDescription }
@@ -432,13 +281,12 @@ struct TeamSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var colour = TeamColour.teal.rawValue
-    @State private var sharing = TeamSharing.tiles
-    @State private var walksCount = true
+    @State private var memberName = ""
     @State private var busy = false
     @State private var error: String?
     @State private var removal: TeamMember?
     @State private var leaving = false
-    private var team: TeamMap? { model.teams.first { $0.id == teamID } }
+    private var team: Team? { model.teams.first { $0.id == teamID } }
 
     var body: some View {
         NavigationStack {
@@ -447,11 +295,8 @@ struct TeamSettingsView: View {
                     Section("Members (\(team.members.count)/8)") {
                         ForEach(team.members) { member in
                             HStack {
-                                Circle().fill(Color.team(member.colour)).frame(width: 14, height: 14)
-                                VStack(alignment: .leading) {
-                                    Text(member.name + (member.isYou ? " (you)" : ""))
-                                    Text(member.sharing.title).font(.caption).foregroundStyle(.secondary)
-                                }
+                                Avatar(Head(id: member.id, name: member.name, picture: member.picture.flatMap(URL.init(string:)), colour: .team(member.colour)), size: 36)
+                                Text(member.name + (member.isYou ? " (you)" : ""))
                                 Spacer()
                                 if team.you?.userId == team.createdBy, !member.isYou {
                                     Button("Remove", role: .destructive) { removal = member }.font(.caption)
@@ -459,22 +304,22 @@ struct TeamSettingsView: View {
                             }
                         }
                     }
-                    TeamPreferences(colour: $colour, sharing: $sharing)
+                    TeamPreferences(colour: $colour, name: $memberName)
                     Section {
-                        Toggle("My walks count here", isOn: $walksCount)
                         Button("Save my choices") {
                             run { api in
-                                let replay = team.you?.sharing != .tilesAndTrail && sharing == .tilesAndTrail
-                                try await api.update(.init(teamId: teamID, colour: colour, sharing: sharing, walksCount: walksCount))
-                                model.setTeamPreferences(teamID, colour: colour, sharing: sharing, walksCount: walksCount)
-                                if replay { await model.replayTeamHistory(teamID, forceTrails: true) }
+                                try await api.update(.init(teamId: teamID, colour: colour, name: memberName))
+                                model.editTeam(teamID) { team in
+                                    if let index = team.members.firstIndex(where: \.isYou) {
+                                        team.members[index].colour = colour
+                                        team.members[index].name = memberName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    }
+                                }
                             }
                         }
-                    } footer: {
-                        Text("Switch off to pause contributions. Tiles you've already shared stay on the team map. Tiles only removes your shared trails.")
+                        .disabled(memberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                     TeamInviteCard(team: team).listRowBackground(Color.clear)
-                    if let message = team.syncMessage { Text(message).foregroundStyle(.red) }
                     if team.you?.userId == team.createdBy {
                         Section {
                             Button("New invite link") {
@@ -488,11 +333,11 @@ struct TeamSettingsView: View {
                         }
                         Section("Team name") {
                             TextField("Name", text: $name)
-                            Button("Rename team map") { run { try await $0.rename(teamID, name: name) } }
+                            Button("Rename team") { run { try await $0.rename(teamID, name: name) } }
                                 .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                     }
-                    Button("Leave team map", role: .destructive) { leaving = true }
+                    Button("Leave team", role: .destructive) { leaving = true }
                 }
                 if busy { ProgressView() }
                 if let error { Text(error).foregroundStyle(.red) }
@@ -500,23 +345,23 @@ struct TeamSettingsView: View {
             .buttonStyle(.borderless)
             .disabled(busy)
             .scrollContentBackground(.hidden).background(Color.cream)
-            .navigationTitle(team?.name ?? "Team map").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(team?.name ?? "Team").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(busy) } }
             .onAppear {
-                if let team, let you = team.you { name = team.name; colour = you.colour; sharing = you.sharing; walksCount = you.walksCount }
+                if let team, let you = team.you { name = team.name; colour = you.colour; memberName = you.name }
             }
-            .confirmationDialog("Leave this team map?", isPresented: $leaving, titleVisibility: .visible) {
-                Button("Leave team map", role: .destructive) {
+            .confirmationDialog("Leave this team?", isPresented: $leaving, titleVisibility: .visible) {
+                Button("Leave team", role: .destructive) {
                     run { api in
                         try await api.leave(teamID)
                         model.retainTeams(Set(model.teams.map(\.id)).subtracting([teamID]))
                         dismiss()
                     }
                 }
-            } message: { Text("Your uncovered tiles and secrets stay. Your shared trails are removed.") }
+            } message: { Text("You can join again with an invite code.") }
             .confirmationDialog("Remove \(removal?.name ?? "member")?", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }), titleVisibility: .visible) {
                 if let member = removal { Button("Remove member", role: .destructive) { run { try await $0.remove(teamID, userId: member.userId) } } }
-            } message: { Text("Their shared trails will be removed and the invite link will change. They can only rejoin after you issue a new invite link.") }
+            } message: { Text("The invite link will change. They can only rejoin after you issue a new invite link.") }
         }
         .interactiveDismissDisabled(busy)
     }
@@ -529,6 +374,7 @@ struct TeamSettingsView: View {
             do {
                 let api = try await model.teamAPI()
                 try await action(api)
+                model.editTeam(teamID) { _ in }
                 if model.teams.contains(where: { $0.id == teamID }) { try await model.refreshTeam(teamID, api: api) }
                 sync.schedule()
             } catch { self.error = error.localizedDescription }

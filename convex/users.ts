@@ -4,8 +4,6 @@ import { vAppleProfile } from "@convex-dev/auth/methods/apple/server";
 import { vGoogleProfile } from "@convex-dev/auth/methods/google/server";
 import { env, internalMutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mergeLedgers, parseLedger } from "./progression";
-import { deleteMemberTrails } from "./teams";
-import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
 const vApple = v.object({ name: v.literal("apple"), accountId: v.string(), profile: vAppleProfile });
@@ -159,56 +157,15 @@ export const mergeDuplicateUsers = internalMutation({
   },
 });
 
-// Large city grids can exceed a mutation's read limit. Resolve membership and
-// privacy in the merge transaction, then drain attribution in bounded batches.
-async function moveTeamCreditsBatch(ctx: MutationCtx, from: Id<"users">, to: Id<"users">) {
-  const tiles = await ctx.db.query("teamTiles").withIndex("by_user", (q) => q.eq("by", from)).take(500);
-  const secrets = await ctx.db.query("teamSecrets").withIndex("by_user", (q) => q.eq("by", from)).take(500);
-  const clocks = new Map<Id<"teams">, number>();
-  for (const tile of tiles) {
-    let receivedAt = clocks.get(tile.teamId);
-    if (receivedAt === undefined) {
-      const team = await ctx.db.get("teams", tile.teamId);
-      if (team !== null) { receivedAt = Math.max(Date.now(), team.tilesUpdatedAt + 1); clocks.set(tile.teamId, receivedAt); }
-    }
-    // Attribution changes must reach phones that already cached the tile too.
-    await ctx.db.patch("teamTiles", tile._id, { by: to, ...(receivedAt === undefined ? {} : { receivedAt }) });
-  }
-  for (const [teamId, tilesUpdatedAt] of clocks) await ctx.db.patch("teams", teamId, { tilesUpdatedAt });
-  for (const secret of secrets) await ctx.db.patch("teamSecrets", secret._id, { by: to });
-  if (tiles.length === 500 || secrets.length === 500) await ctx.scheduler.runAfter(0, internal.users.moveTeamCredits, { from, to });
-}
-export const moveTeamCredits = internalMutation({
-  args: { from: v.id("users"), to: v.id("users") }, returns: v.null(),
-  handler: async (ctx, { from, to }) => { await moveTeamCreditsBatch(ctx, from, to); return null; },
-});
-
 /** Hands one user's walks, places and secrets to another, skipping any they already have. */
 async function moveData(ctx: MutationCtx, from: Id<"users">, to: Id<"users">) {
-  // Preserve the canonical membership's privacy choices. If both accounts were
-  // members, discard the duplicate's routes instead of broadening consent.
+  // Keep the canonical membership when both accounts already belong to a team.
   for (const member of await ctx.db.query("teamMembers").withIndex("by_user", (q) => q.eq("userId", from)).collect()) {
     const keep = await ctx.db.query("teamMembers").withIndex("by_team_user", (q) => q.eq("teamId", member.teamId).eq("userId", to)).unique();
-    if (keep !== null) {
-      await deleteMemberTrails(ctx, { teamId: member.teamId, userId: from, memberId: member._id, epoch: member.trailEpoch ?? 0 });
-      await ctx.db.delete("teamMembers", member._id);
-    } else {
-      await ctx.db.patch("teamMembers", member._id, { userId: to });
-      if (member.sharing === "tilesAndTrail") {
-        const epoch = member.trailEpoch ?? 0;
-        const tagged = await ctx.db.query("teamTrails").withIndex("by_cleanup", (q) => q.eq("teamId", member.teamId).eq("userId", from).eq("memberId", member._id).eq("epoch", epoch)).take(64);
-        const legacy = epoch === 0 ? await ctx.db.query("teamTrails").withIndex("by_cleanup", (q) => q.eq("teamId", member.teamId).eq("userId", from).eq("memberId", undefined)).take(64) : [];
-        const trails = [...tagged, ...legacy.filter((trail) => trail._creationTime >= member._creationTime)].slice(0, 64);
-        for (const trail of trails) await ctx.db.patch("teamTrails", trail._id, { userId: to, memberId: member._id, epoch });
-      }
-      // Also drain any pre-cap legacy excess in bounded transactions.
-      await deleteMemberTrails(ctx, { teamId: member.teamId, userId: from, memberId: member._id, epoch: member.trailEpoch ?? 0 });
-    }
+    if (keep !== null) await ctx.db.delete("teamMembers", member._id);
+    else await ctx.db.patch("teamMembers", member._id, { userId: to });
   }
   for (const team of await ctx.db.query("teams").withIndex("by_creator", (q) => q.eq("createdBy", from)).collect()) await ctx.db.patch("teams", team._id, { createdBy: to });
-  for (const place of await ctx.db.query("teamPlaces").withIndex("by_added", (q) => q.eq("addedBy", from)).collect()) await ctx.db.patch("teamPlaces", place._id, { addedBy: to });
-  await moveTeamCreditsBatch(ctx, from, to);
-  for (const upload of await ctx.db.query("teamUploads").withIndex("by_user", (q) => q.eq("userId", from)).collect()) await ctx.db.patch("teamUploads", upload._id, { userId: to });
   for (const removal of await ctx.db.query("teamRemovals").withIndex("by_user", (q) => q.eq("userId", from)).collect()) {
     const keep = await ctx.db.query("teamRemovals").withIndex("by_team_user", (q) => q.eq("teamId", removal.teamId).eq("userId", to)).unique();
     if (keep === null) await ctx.db.patch("teamRemovals", removal._id, { userId: to });

@@ -52,7 +52,7 @@ main { max-width: 30rem; padding: 2rem; text-align: center; } h1 { font-size: 2r
 a { display: inline-block; padding: .8rem 1.4rem; border-radius: 1rem; background: #3c6549; color: white; text-decoration: none; }
 </style></head><body><main><h1>${heading}</h1>
 ${deepLink === null ? "<p>Ask someone in the team for a fresh link or check the eight-character code in Walkies.</p>" :
-  `<p>Your next walk can help fill in the map together.</p><a href="${deepLink}">Open Walkies</a><p>If nothing opens, install Walkies and enter <strong>${escapeHtml(normalized)}</strong> in Join a team map.</p>`}
+  `<p>Your team can see each other here. Your clouds and secrets stay yours.</p><a href="${deepLink}">Open Walkies</a><p>If nothing opens, install Walkies and enter <strong>${escapeHtml(normalized)}</strong> in Join a team.</p>`}
 </main>${deepLink === null ? "" : `<script>window.location.href = ${JSON.stringify(deepLink)};</script>`}</body></html>`, {
       status: 200,
       headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },

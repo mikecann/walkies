@@ -40,7 +40,6 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
     var points: [TrackPoint] = []
     var distance: Double = 0
     var newTiles = 0
-    var teamTiles: [String: Int]?
     /// Counting tiles first uncovered on this walk, by place UUID. Nil on older saves.
     var newTilesByPlace: [String: Int]?
     /// Fresh hex identities let migrations deduplicate against saved walks without GPS replay.

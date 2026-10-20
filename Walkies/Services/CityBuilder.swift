@@ -19,7 +19,6 @@ nonisolated enum CityBuilder {
         from place: PlaceResult,
         walks: [Walk],
         near cities: [City] = [],
-        grid sharedGrid: HexGrid? = nil,
         client: ConvexClient? = nil,
         status: @escaping @MainActor @Sendable (String) -> Void
     ) async throws -> City {
@@ -30,7 +29,7 @@ nonisolated enum CityBuilder {
                 var cachedPlace = place
                 cachedPlace.boundary = cached.boundary
                 await status("Laying out the tiles…")
-                return build(from: cachedPlace, ways: cached.ways, walks: walks, near: cities, grid: sharedGrid)
+                return build(from: cachedPlace, ways: cached.ways, walks: walks, near: cities)
             } catch {
                 // The local-first path still works with older deployments or an
                 // unavailable cache. Cancellation should stop the add altogether.
@@ -41,16 +40,16 @@ nonisolated enum CityBuilder {
         let b = place.boundary.bounds
         let ways = try await OSMClient.walkableWays(south: b.south, west: b.west, north: b.north, east: b.east, session: client?.session ?? .shared)
         await status("Laying out the tiles…")
-        return build(from: place, ways: ways, walks: walks, near: cities, grid: sharedGrid)
+        return build(from: place, ways: ways, walks: walks, near: cities)
     }
 
     /// Both network paths use the same tile selection, road hints and walk replay.
-    static func build(from place: PlaceResult, ways: [OSMWay], walks: [Walk], near cities: [City] = [], grid sharedGrid: HexGrid? = nil) -> City {
+    static func build(from place: PlaceResult, ways: [OSMWay], walks: [Walk], near cities: [City] = []) -> City {
         let centre = place.boundary.centre
         let neighbour = cities
             .filter { $0.grid.size == tileSize && $0.grid.projection.origin.distance(to: centre) < shareGridWithin }
             .min { $0.grid.projection.origin.distance(to: centre) < $1.grid.projection.origin.distance(to: centre) }
-        let grid = sharedGrid ?? neighbour?.grid ?? HexGrid(projection: LocalProjection(origin: centre), size: tileSize)
+        let grid = neighbour?.grid ?? HexGrid(projection: LocalProjection(origin: centre), size: tileSize)
         let shape = BoundaryShape(place.boundary, projection: grid.projection)
         let inside = City.hexes(inside: shape, grid: grid)
 

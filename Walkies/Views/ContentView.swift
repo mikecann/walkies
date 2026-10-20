@@ -23,12 +23,12 @@ struct ContentView: View {
         @Bindable var model = model
 
         FogMapView(
-            cities: model.mapCities,
+            cities: model.cities,
             selectedID: model.selectedCityID,
             flyID: model.flyToSelected,
-            fresh: model.mapFreshTiles,
+            fresh: model.freshTiles,
             revision: model.tilesRevision,
-            path: model.currentTeamID == nil ? model.activePath : [],
+            path: model.activePath,
             focus: focus,
             tilted: model.tilted3D,
             handle: mapHandle,
@@ -121,7 +121,7 @@ struct ContentView: View {
             StickerBookView()
         }
         .sheet(item: $openSticker) { entry in
-            LoreCardView(entry: entry, foundAt: model.mapSecrets[entry.id], foundBy: model.currentTeam?.secrets[entry.id].map { model.currentTeam?.memberName($0.by) ?? "Past member" })
+            LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id])
         }
         .overlay {
             // A separate host for the new-sticker pop-up, so it doesn't fight the other sheets.
@@ -174,9 +174,7 @@ extension ContentView {
             do {
                 try await model.addPlace(place) { addingStatus = $0 }
             } catch {
-                addingError = model.currentTeamID == nil
-                    ? "Couldn't load the streets for \(place.name). OpenStreetMap might be busy, so try again in a minute."
-                    : "\(error.localizedDescription) Any prepared team place is saved and will retry when there's signal."
+                addingError = "Couldn't load the streets for \(place.name). OpenStreetMap might be busy, so try again in a minute."
             }
             addingStatus = nil
         }
@@ -185,14 +183,14 @@ extension ContentView {
     private var secretsCount: (found: Int, total: Int)? {
         let here = model.stickersHere
         guard !here.isEmpty else { return nil }
-        return (here.filter { model.mapSecrets[$0.entry.id] != nil }.count, here.count)
+        return (here.filter { model.foundStickers[$0.entry.id] != nil }.count, here.count)
     }
 
     /// Found secrets in every place, pinned on the tile they were under. Tap one to read it again.
     private var stickerPins: [StickerPin] {
-        model.mapCities.flatMap { city in
+        model.cities.flatMap { city in
             (city.stickers ?? [:])
-                .filter { model.mapSecrets[$0.key] != nil }
+                .filter { model.foundStickers[$0.key] != nil }
                 .sorted { $0.key < $1.key }
                 .map { StickerPin(id: $0.key, coordinate: city.grid.projection.unproject(city.grid.centre(of: $0.value))) }
         }
@@ -200,7 +198,7 @@ extension ContentView {
 
     /// Tiles uncovered on this walk, for the honeycomb that shows while you drag the map.
     private var walkTiles: Set<CloudField.Tile> {
-        Set(model.mapCities.flatMap { city in (model.mapFreshTiles[city.id] ?? []).map { CloudField.Tile(grid: city.grid, hex: $0) } })
+        Set(model.cities.flatMap { city in (model.freshTiles[city.id] ?? []).map { CloudField.Tile(grid: city.grid, hex: $0) } })
     }
 
     /// The first sticker waiting to pop up. Closing it moves on to the next.
@@ -228,88 +226,65 @@ struct PlaceChip: View {
     @State private var open = false
     @State private var teamSheet: TeamSheet?
 
-    /// You on My map, or the team on a team map.
-    private var heads: [Head] {
-        let you = Head.you(account, teams: model.teams)
-        return model.currentTeam.map { Head.team($0, you: you) } ?? [you]
-    }
+    private var heads: [Head] { [Head.you(account, teams: model.teams)] }
 
     var body: some View {
-        Group {
-            if let city {
-                VStack(alignment: .leading, spacing: 0) {
-                    Button {
-                        withAnimation(.snappy) { open.toggle() }
-                    } label: {
-                        HStack(spacing: 8) {
-                            AvatarStack(heads: heads)
-                            Text(city.name).font(.headline).lineLimit(1)
-                            Text(city.progress.percentText)
-                                .font(.headline.monospacedDigit())
-                                .foregroundStyle(Color.walkiesOrange)
-                                .contentTransition(.numericText())
-                            Image(systemName: "chevron.down")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(Color.ink.opacity(0.5))
-                                .rotationEffect(.degrees(open ? 180 : 0))
-                        }
-                        .padding(.leading, 8)
-                        .padding(.trailing, 16)
-                        .padding(.vertical, 7)
-                        .contentShape(.rect)
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.snappy) { open.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    AvatarStack(heads: heads)
+                    Text(city?.name ?? "Places").font(.headline).lineLimit(1)
+                    if let city {
+                        Text(city.progress.percentText)
+                            .font(.headline.monospacedDigit())
+                            .foregroundStyle(Color.walkiesOrange)
+                            .contentTransition(.numericText())
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(model.mapName), \(city.name), \(city.progress.percentText.replacingOccurrences(of: "%", with: " percent"))")
-                    .accessibilityHint(open ? "Hides the details" : "Shows the details and your maps")
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Color.ink.opacity(0.5))
+                        .rotationEffect(.degrees(open ? 180 : 0))
+                }
+                .padding(.leading, 8)
+                .padding(.trailing, 16)
+                .padding(.vertical, 7)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(city.map { "\($0.name), \($0.progress.percentText.replacingOccurrences(of: "%", with: " percent"))" } ?? "Places")
+            .accessibilityHint(open ? "Hides the details" : "Shows progress and your team")
 
-                    if open {
-                        VStack(alignment: .leading, spacing: 10) {
-                            MapHeads(sheet: $teamSheet)
-                                .padding(.bottom, 4)
-                            ProgressBar(value: city.progress)
-                            Text("\(city.visited.count) of \(city.tiles.count) tiles explored")
+            if open {
+                VStack(alignment: .leading, spacing: 10) {
+                    if let city {
+                        ProgressBar(value: city.progress)
+                        Text("\(city.visited.count) of \(city.tiles.count) tiles explored")
+                            .font(.subheadline)
+                        if let secrets {
+                            Text("\(secrets.found) of \(secrets.total) secrets found")
                                 .font(.subheadline)
-                            if let secrets {
-                                Text("\(secrets.found) of \(secrets.total) secrets found")
-                                    .font(.subheadline)
-                            }
-                            HStack(spacing: 18) {
-                                Button("Change place", action: onChangePlace)
-                                if let team = model.currentTeam {
-                                    Button("Team settings") { teamSheet = .settings(team.id) }
-                                }
-                            }
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Color.burnt)
-                            .buttonStyle(.plain)
-                            .padding(.top, 2)
                         }
-                        .foregroundStyle(Color.ink.opacity(0.75))
-                        .padding(.horizontal, 16)
-                        .padding(.top, 4)
-                        .padding(.bottom, 14)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
+                        Divider()
                     }
+                    TeamSection(sheet: $teamSheet)
+                    Button("Change place", action: onChangePlace)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.burnt)
+                        .buttonStyle(.plain)
+                        .padding(.top, 2)
                 }
-                .frame(minWidth: open ? 250 : nil, alignment: .leading)
-                .stickerCard(in: .rect(cornerRadius: open ? 22 : 24))
-                .animation(.snappy, value: city.visited.count)
-            } else {
-                Button(action: onChangePlace) {
-                    HStack(spacing: 8) {
-                        AvatarStack(heads: heads)
-                        Label("Maps and places", systemImage: "plus")
-                            .font(.headline)
-                    }
-                    .padding(.leading, 8)
-                    .padding(.trailing, 16)
-                    .padding(.vertical, 7)
-                }
-                .buttonStyle(.plain)
-                .stickerCard(in: .capsule)
-                .accessibilityLabel("\(model.mapName), Maps and places")
+                .foregroundStyle(Color.ink.opacity(0.75))
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 14)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+        .frame(minWidth: open ? 250 : nil, alignment: .leading)
+        .stickerCard(in: .rect(cornerRadius: open ? 22 : 24))
+        .animation(.snappy, value: city?.visited.count)
         .sheet(item: $teamSheet) { $0.destination }
     }
 }

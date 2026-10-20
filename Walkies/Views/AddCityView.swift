@@ -143,9 +143,7 @@ struct AddCityView: View {
                 onAdded()
             } catch {
                 buildStatus = nil
-                errorMessage = model.currentTeamID == nil
-                    ? "Couldn't load the streets for \(place.name). OpenStreetMap might be busy, so try again in a minute."
-                    : "\(error.localizedDescription) Any prepared team place is saved and will retry when there's signal."
+                errorMessage = "Couldn't load the streets for \(place.name). OpenStreetMap might be busy, so try again in a minute."
             }
         }
     }

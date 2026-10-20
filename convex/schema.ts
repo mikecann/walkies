@@ -61,8 +61,6 @@ export default defineSchema({
     inviteCode: v.string(),
     inviteEpoch: v.optional(v.number()),
     createdAt: v.number(),
-    /** Monotonic server time for tile uploads, also used as the snapshot cursor. */
-    tilesUpdatedAt: v.number(),
   }).index("by_invite", ["inviteCode"]).index("by_creator", ["createdBy"]),
 
   teamMembers: defineTable({
@@ -70,58 +68,9 @@ export default defineSchema({
     userId: v.id("users"),
     name: v.string(),
     colour: v.string(),
-    sharing: v.union(v.literal("tiles"), v.literal("tilesAndTrail")),
-    walksCount: v.boolean(),
     joinedAt: v.number(),
-    trailEpoch: v.optional(v.number()),
   }).index("by_team_user", ["teamId", "userId"])
     .index("by_user", ["userId"]),
-
-  teamPlaces: defineTable({
-    teamId: v.id("teams"),
-    clientId: v.string(),
-    name: v.string(),
-    /** Dedicated team JSON: shared grid, boundary and streets, no personal progress. */
-    file: v.id("_storage"),
-    addedBy: v.id("users"),
-    updatedAt: v.number(),
-    bounds: v.optional(v.object({ minQ: v.number(), maxQ: v.number(), minR: v.number(), maxR: v.number() })),
-    tileCount: v.optional(v.number()),
-  }).index("by_team_client", ["teamId", "clientId"]).index("by_added", ["addedBy"]),
-
-  teamTiles: defineTable({
-    teamId: v.id("teams"),
-    placeId: v.id("teamPlaces"),
-    q: v.number(),
-    r: v.number(),
-    by: v.id("users"),
-    /** Phone's discovery time, including walks replayed from before joining. */
-    at: v.number(),
-    /** Server ingestion time; an old walk must still appear in the next delta. */
-    receivedAt: v.number(),
-  }).index("by_team_place_hex", ["teamId", "placeId", "q", "r"])
-    .index("by_team_received", ["teamId", "receivedAt"]).index("by_user", ["by"]),
-
-  teamTrails: defineTable({
-    teamId: v.id("teams"),
-    userId: v.id("users"),
-    walkClientId: v.string(),
-    /** Dedicated upload, already clipped by the phone to this team's places. */
-    file: v.id("_storage"),
-    at: v.number(),
-    updatedAt: v.optional(v.number()),
-    memberId: v.optional(v.id("teamMembers")),
-    epoch: v.optional(v.number()),
-  }).index("by_team_user_walk", ["teamId", "userId", "walkClientId"])
-    .index("by_user", ["userId"])
-    .index("by_cleanup", ["teamId", "userId", "memberId", "epoch"]),
-
-  teamSecrets: defineTable({
-    teamId: v.id("teams"),
-    secretId: v.string(),
-    by: v.id("users"),
-    at: v.number(),
-  }).index("by_team_secret", ["teamId", "secretId"]).index("by_user", ["by"]),
 
   // Removal records survive automatic rotations. Only an explicit fresh invite
   // invalidates them, so removing a second person cannot unblock the first.
@@ -130,11 +79,6 @@ export default defineSchema({
 
   teamInviteAttempts: defineTable({ userId: v.id("users"), windowStart: v.number(), count: v.number() })
     .index("by_user", ["userId"]),
-
-  // Only the server's upload action can register ownership, never a client
-  // claiming an arbitrary storage ID. Each file can be consumed once.
-  teamUploads: defineTable({ file: v.id("_storage"), userId: v.id("users"), used: v.boolean() })
-    .index("by_file", ["file"]).index("by_user", ["userId"]),
 
   // Shared OSM data. Missing files are short-lived fetching markers; osmId 0
   // is the shared Nominatim throttle, so every server request observes its limit.

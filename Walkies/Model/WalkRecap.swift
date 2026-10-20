@@ -37,9 +37,6 @@ nonisolated struct WalkRecap: Identifiable, Sendable {
         var weeks: Double? { walksPerWeek.map { Double(walks) / max($0, 0.1) } }
     }
 
-    struct TeamGain: Sendable { var name: String; var tiles: Int }
-    var teamGains: [TeamGain] = []
-
     var id: UUID { walk.id }
     var walk: Walk
     /// The route, as evenly spaced points.

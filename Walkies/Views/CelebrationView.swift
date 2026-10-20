@@ -555,12 +555,6 @@ private struct SummaryCard: View {
                     stat("\(recap.secrets.count)", recap.secrets.count == 1 ? "Secret" : "Secrets")
                 }
 
-                ForEach(Array(recap.teamGains.enumerated()), id: \.offset) { _, gain in
-                    Text("+\(gain.tiles) tiles for \(gain.name)")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Color.badgeTeal)
-                }
-
                 progressionSummary
 
                 if !recap.secrets.isEmpty {
