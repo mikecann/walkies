@@ -43,6 +43,9 @@ struct MapChoices: View {
             Button("Join with a code") { sheet = .join }
         }
         .font(.subheadline)
+        // This whole view can be one List row. Automatic buttons otherwise
+        // turn the row into a shared tap target for settings, start and join.
+        .buttonStyle(.borderless)
         .sheet(item: $sheet) { destination in
             switch destination {
             case .start: StartCrewView()
@@ -74,6 +77,7 @@ struct MapChoices: View {
 struct MapsAndPlacesView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @State private var addingPlace = false
 
     var body: some View {
         NavigationStack {
@@ -93,15 +97,21 @@ struct MapsAndPlacesView: View {
                             }
                         }
                     }
-                    NavigationLink { AddCityView { dismiss() } } label: {
+                    Button { addingPlace = true } label: {
                         Label("Add a place", systemImage: "plus")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(.rect)
                     }
+                    .buttonStyle(.borderless)
                 }
             }
             .scrollContentBackground(.hidden)
             .background(Color.cream)
             .navigationTitle("Maps and places")
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(isPresented: $addingPlace) {
+                AddCityView { dismiss() }
+            }
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
     }
@@ -122,7 +132,7 @@ private struct CrewPreferences: View {
                                 if colour == option.rawValue { Image(systemName: "checkmark").foregroundStyle(.white).fontWeight(.bold) }
                             }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.borderless)
                     .accessibilityLabel(option.rawValue.capitalized)
                     .accessibilityAddTraits(colour == option.rawValue ? .isSelected : [])
                 }
@@ -167,6 +177,8 @@ struct StartCrewView: View {
     @State private var createdID: String?
     @State private var busy = false
     @State private var error: String?
+    @FocusState private var nameFocused: Bool
+    private var canCreate: Bool { !busy && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
         NavigationStack {
@@ -175,25 +187,47 @@ struct StartCrewView: View {
                     CrewInviteCard(crew: crew).listRowBackground(Color.clear)
                     Text("Add a place from Maps and places, then your past walks there will count too.")
                 } else {
-                    Section("Crew name") { TextField("Mike & Dad", text: $name).textInputAutocapitalization(.words) }
+                    Section("Crew name") {
+                        TextField("Mike & Dad", text: $name)
+                            .textInputAutocapitalization(.words)
+                            .focused($nameFocused)
+                            .submitLabel(.done)
+                            .onSubmit { nameFocused = false }
+                    }
                     CrewPreferences(colour: $colour, sharing: $sharing)
                     Section {
-                        Text("Your walks count on My map and this crew map. Shells and levels stay yours.").font(.subheadline)
-                        Button("Start crew map", action: create).disabled(busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        Button(action: create) {
+                            Text("Start crew map").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!canCreate)
+                        .listRowBackground(Color.clear)
+                    } footer: {
+                        Text("Your walks count on My map and this crew map. Shells and levels stay yours.")
                     }
                 }
                 if busy { ProgressView() }
                 if let error { Text(error).foregroundStyle(.red) }
             }
             .disabled(busy)
+            .scrollDismissesKeyboard(.interactively)
             .scrollContentBackground(.hidden).background(Color.cream)
             .navigationTitle("Start a crew map").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(busy) } }
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(busy) }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { nameFocused = false }
+                }
+            }
         }
         .interactiveDismissDisabled(busy)
     }
 
     private func create() {
+        let crewName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !busy, !crewName.isEmpty else { return }
+        nameFocused = false
         busy = true
         error = nil
         Task {
@@ -202,7 +236,7 @@ struct StartCrewView: View {
                 let api = try await model.crewAPI()
                 // Keep the id immediately. A failed first pull must not create a second crew on retry.
                 if createdID == nil {
-                    createdID = try await api.create(name: name, colour: colour, sharing: sharing).crewId
+                    createdID = try await api.create(name: crewName, colour: colour, sharing: sharing).crewId
                     if let createdID { model.joinedCrew(createdID) }
                 }
                 if let id = createdID {
