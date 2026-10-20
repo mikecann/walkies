@@ -55,6 +55,7 @@ struct WalkiesApp: App {
                 }
             }
             // The cream-paper look is a light design, so the app stays light.
+            .onOpenURL { delegate.model.openCrewURL($0) }
             .preferredColorScheme(.light)
             .tint(Color.burnt)
             .environment(delegate.model)

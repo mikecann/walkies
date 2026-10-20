@@ -40,6 +40,7 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
     var points: [TrackPoint] = []
     var distance: Double = 0
     var newTiles = 0
+    var crewTiles: [String: Int]?
     /// Counting tiles first uncovered on this walk, by place UUID. Nil on older saves.
     var newTilesByPlace: [String: Int]?
     /// Fresh hex identities let migrations deduplicate against saved walks without GPS replay.
@@ -62,6 +63,8 @@ nonisolated struct CoverageTracer: Sendable {
     struct Step {
         var samples: [Coordinate]
         var distance: Double
+        /// Start of this accepted segment, for routes without bridging rejected fixes.
+        var origin: Coordinate? = nil
         static let none = Step(samples: [], distance: 0)
     }
 
@@ -119,7 +122,7 @@ nonisolated struct CoverageTracer: Sendable {
 
         let n = max(1, Int((d / Self.spacing).rounded(.up)))
         let samples = (1...n).map { prev.coordinate.lerp(to: point.coordinate, Double($0) / Double(n)) }
-        return Step(samples: samples, distance: d)
+        return Step(samples: samples, distance: d, origin: prev.coordinate)
     }
 
     /// How far these points really walked, by the same rules.

@@ -22,6 +22,31 @@ nonisolated struct Store {
         write(cities, to: citiesURL)
     }
 
+    private var crewsURL: URL { root.appending(path: "crews.json") }
+    private var crewsDir: URL { root.appending(path: "crews", directoryHint: .isDirectory) }
+
+    func loadCrews() -> [CrewMap] {
+        (read([String].self, from: crewsURL) ?? []).compactMap {
+            read(CrewMap.self, from: crewFile($0))
+        }
+    }
+
+    func save(crews: [CrewMap]) {
+        try? FileManager.default.createDirectory(at: crewsDir, withIntermediateDirectories: true)
+        for crew in crews { write(crew, to: crewFile(crew.id)) }
+        write(crews.map(\.id), to: crewsURL)
+        let keep = Set(crews.map { crewFile($0.id).lastPathComponent })
+        for url in (try? FileManager.default.contentsOfDirectory(at: crewsDir, includingPropertiesForKeys: nil)) ?? [] where !keep.contains(url.lastPathComponent) {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    private func crewFile(_ id: String) -> URL {
+        // Server ids are opaque; don't use one as an unchecked filesystem path.
+        let filename = Data(id.utf8).base64EncodedString().replacingOccurrences(of: "/", with: "_")
+        return crewsDir.appending(path: "\(filename).json")
+    }
+
     /// When each sticker was found, by lore id.
     func loadStickers() -> [String: Date] {
         read([String: Date].self, from: stickersURL) ?? [:]

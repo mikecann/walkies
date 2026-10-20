@@ -138,13 +138,14 @@ struct AddCityView: View {
         buildStatus = "Getting \(place.name) ready…"
         Task {
             do {
-                let city = try await CityBuilder.build(from: place, walks: model.walks, near: model.cities, client: await account.client()) { buildStatus = $0 }
-                model.add(city)
+                try await model.addPlace(place) { buildStatus = $0 }
                 buildStatus = nil
                 onAdded()
             } catch {
                 buildStatus = nil
-                errorMessage = "Couldn't load the streets for \(place.name). OpenStreetMap might be busy, so try again in a minute."
+                errorMessage = model.currentCrewID == nil
+                    ? "Couldn't load the streets for \(place.name). OpenStreetMap might be busy, so try again in a minute."
+                    : "\(error.localizedDescription) Any prepared crew place is saved and will retry when there's signal."
             }
         }
     }

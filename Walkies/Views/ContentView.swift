@@ -23,12 +23,12 @@ struct ContentView: View {
         @Bindable var model = model
 
         FogMapView(
-            cities: model.cities,
+            cities: model.mapCities,
             selectedID: model.selectedCityID,
             flyID: model.flyToSelected,
-            fresh: model.freshTiles,
+            fresh: model.mapFreshTiles,
             revision: model.tilesRevision,
-            path: model.activePath,
+            path: model.currentCrewID == nil ? model.activePath : [],
             focus: focus,
             tilted: model.tilted3D,
             handle: mapHandle,
@@ -50,7 +50,7 @@ struct ContentView: View {
         .safeAreaInset(edge: .top) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 8) {
-                    PlaceChip(city: model.selectedCity, secrets: secretsCount) { showingCities = true }
+                    PlaceChip(city: model.selectedCity, mapName: model.mapName, secrets: secretsCount) { showingCities = true }
                     ShellsChip { showingProgress = true }
                 }
                 Spacer(minLength: 12)
@@ -106,7 +106,7 @@ struct ContentView: View {
             Text(addingError ?? "")
         }
         .sheet(isPresented: $showingCities) {
-            CitiesView()
+            MapsAndPlacesView()
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
@@ -118,7 +118,7 @@ struct ContentView: View {
             StickerBookView()
         }
         .sheet(item: $openSticker) { entry in
-            LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id])
+            LoreCardView(entry: entry, foundAt: model.mapSecrets[entry.id], foundBy: model.currentCrew?.secrets[entry.id].map { model.currentCrew?.memberName($0.by) ?? "Past member" })
         }
         .overlay {
             // A separate host for the new-sticker pop-up, so it doesn't fight the other sheets.
@@ -135,6 +135,16 @@ struct ContentView: View {
                 others: model.cities.filter { city in !recap.after.contains { $0.id == city.id } },
                 tilted: model.tilted3D
             )
+        }
+        .sheet(isPresented: Binding(get: { model.pendingCrewInvite != nil }, set: { if !$0 { model.pendingCrewInvite = nil } })) {
+            JoinCrewView(initialCode: model.pendingCrewInvite ?? "")
+        }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(180)) } catch { return }
+                await sync.sync()
+            }
         }
         .sensoryFeedback(.success, trigger: model.revealCount)
         .onChange(of: scenePhase, initial: true) { _, phase in
@@ -158,10 +168,11 @@ extension ContentView {
         addingStatus = "Getting \(place.name) ready…"
         Task {
             do {
-                let city = try await CityBuilder.build(from: place, walks: model.walks, near: model.cities, client: await account.client()) { addingStatus = $0 }
-                model.add(city)
+                try await model.addPlace(place) { addingStatus = $0 }
             } catch {
-                addingError = "Couldn't load the streets for \(place.name). OpenStreetMap might be busy, so try again in a minute."
+                addingError = model.currentCrewID == nil
+                    ? "Couldn't load the streets for \(place.name). OpenStreetMap might be busy, so try again in a minute."
+                    : "\(error.localizedDescription) Any prepared crew place is saved and will retry when there's signal."
             }
             addingStatus = nil
         }
@@ -170,14 +181,14 @@ extension ContentView {
     private var secretsCount: (found: Int, total: Int)? {
         let here = model.stickersHere
         guard !here.isEmpty else { return nil }
-        return (here.filter { model.foundStickers[$0.entry.id] != nil }.count, here.count)
+        return (here.filter { model.mapSecrets[$0.entry.id] != nil }.count, here.count)
     }
 
     /// Found secrets in every place, pinned on the tile they were under. Tap one to read it again.
     private var stickerPins: [StickerPin] {
-        model.cities.flatMap { city in
+        model.mapCities.flatMap { city in
             (city.stickers ?? [:])
-                .filter { model.foundStickers[$0.key] != nil }
+                .filter { model.mapSecrets[$0.key] != nil }
                 .sorted { $0.key < $1.key }
                 .map { StickerPin(id: $0.key, coordinate: city.grid.projection.unproject(city.grid.centre(of: $0.value))) }
         }
@@ -185,7 +196,7 @@ extension ContentView {
 
     /// Tiles uncovered on this walk, for the honeycomb that shows while you drag the map.
     private var walkTiles: Set<CloudField.Tile> {
-        Set(model.cities.flatMap { city in (model.freshTiles[city.id] ?? []).map { CloudField.Tile(grid: city.grid, hex: $0) } })
+        Set(model.mapCities.flatMap { city in (model.mapFreshTiles[city.id] ?? []).map { CloudField.Tile(grid: city.grid, hex: $0) } })
     }
 
     /// The first sticker waiting to pop up. Closing it moves on to the next.
@@ -204,6 +215,7 @@ extension ContentView {
 /// details and to switch places.
 struct PlaceChip: View {
     let city: City?
+    var mapName = "My map"
     /// Found and total secrets here, when the place has any.
     let secrets: (found: Int, total: Int)?
     let onChangePlace: () -> Void
@@ -217,7 +229,7 @@ struct PlaceChip: View {
                     withAnimation(.snappy) { open.toggle() }
                 } label: {
                     HStack(spacing: 8) {
-                        Text(city.name).font(.headline).lineLimit(1).fixedSize()
+                        Text("\(mapName) · \(city.name)").font(.headline).lineLimit(1)
                         Text(city.progress.percentText)
                             .font(.headline.monospacedDigit())
                             .foregroundStyle(Color.walkiesOrange)
@@ -242,6 +254,8 @@ struct PlaceChip: View {
                             Text("\(secrets.found) of \(secrets.total) secrets found")
                                 .font(.subheadline)
                         }
+                        MapChoices()
+                            .padding(.vertical, 6)
                         Button("Change place", action: onChangePlace)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Color.burnt)
@@ -258,7 +272,7 @@ struct PlaceChip: View {
             .animation(.snappy, value: city.visited.count)
         } else {
             Button(action: onChangePlace) {
-                Label("Add a place to explore", systemImage: "plus")
+                Label("\(mapName) · Maps and places", systemImage: "plus")
                     .font(.headline)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 11)

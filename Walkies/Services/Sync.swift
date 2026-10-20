@@ -38,6 +38,7 @@ final class SyncEngine {
     @ObservationIgnored private var scheduled: Task<Void, Never>?
     @ObservationIgnored private var running = false
     @ObservationIgnored private var pending = false
+    @ObservationIgnored private var resetRevision = 0
 
     convenience init(model: AppModel, account: Account) {
         self.init(model: model, store: Store(), isSignedIn: { account.isSignedIn }, makeClient: { await account.client() })
@@ -74,6 +75,7 @@ final class SyncEngine {
             pending = true
             return
         }
+        let revision = resetRevision
         running = true
         pending = false
         status = .syncing
@@ -90,8 +92,11 @@ final class SyncEngine {
             return
         }
         do {
-            try await push(client)
-            try await pull(client)
+            // One unavailable personal endpoint must not hold the crew queue behind it.
+            var personalError: Error?
+            do { try await push(client); try await pull(client) } catch { personalError = error }
+            try await syncCrews(CrewsAPI(client: client), revision: revision)
+            if let personalError { throw personalError }
             lastSynced = .now
             status = .idle
         } catch is CancellationError {
@@ -103,6 +108,7 @@ final class SyncEngine {
 
     /// Forgets what was sent, for signing out.
     func reset() {
+        resetRevision += 1
         scheduled?.cancel()
         pending = false
         state = SyncState()
@@ -205,6 +211,71 @@ final class SyncEngine {
         save()
     }
 
+    private func syncCrews(_ api: CrewsAPI, revision: Int) async throws {
+        func checkSession() throws {
+            guard isSignedIn(), resetRevision == revision else { throw CancellationError() }
+        }
+        try checkSession()
+        await model.prepareCrewRoutes()
+        let memberships = try await api.list()
+        try checkSession()
+        model.retainCrews(Set(memberships.map(\.crewId)))
+        var failure: Error?
+        for listing in memberships {
+            let id = listing.crewId
+            do {
+                // Refresh preferences before sending any route. Snapshot replacement
+                // removes cached trails on another phone's opt-out or departure.
+                try checkSession()
+                try await model.refreshCrew(id, api: api)
+                if model.crews.first(where: { $0.id == id })?.pendingPlaces.isEmpty == false {
+                    try await model.uploadCrewPlaces(id, api: api)
+                    try checkSession()
+                    try await model.refreshCrew(id, api: api)
+                }
+                guard let crew = model.crews.first(where: { $0.id == id }) else { continue }
+                for batch in crew.pendingTiles {
+                    try await api.tiles(id, batch: batch)
+                    try checkSession()
+                    model.editCrew(id) { $0.pendingTiles.removeAll { $0.id == batch.id } }
+                }
+                for trail in crew.pendingTrails where crew.you?.sharing == .tilesAndTrail {
+                    let file: String
+                    if let uploaded = trail.file { file = uploaded }
+                    else {
+                        file = try await api.upload(JSONEncoder().encode(trail.route))
+                        model.editCrew(id) { live in
+                            if let i = live.pendingTrails.firstIndex(where: { $0.id == trail.id && $0.route == trail.route }) { live.pendingTrails[i].file = file }
+                        }
+                    }
+                    try await api.trail(id, trail: trail, file: file)
+                    try checkSession()
+                    model.editCrew(id) { $0.pendingTrails.removeAll { $0.id == trail.id && $0.route == trail.route } }
+                }
+                let entries = crew.pendingSecrets.sorted { $0.key < $1.key }
+                for start in stride(from: 0, to: entries.count, by: 400) {
+                    let batch = Dictionary(uniqueKeysWithValues: entries[start..<min(start + 400, entries.count)].map { ($0.key, $0.value) })
+                    try await api.secrets(id, secrets: batch)
+                    try checkSession()
+                    model.editCrew(id) { live in
+                        for (secret, at) in batch where live.pendingSecrets[secret] == at { live.pendingSecrets[secret] = nil }
+                    }
+                }
+                try checkSession()
+                try await model.refreshCrew(id, api: api)
+            } catch {
+                try checkSession()
+                if let error = error as? ConvexError, error.code == "NOT_A_MEMBER" {
+                    model.retainCrews(Set(model.crews.map(\.id)).subtracting([id]))
+                } else if let error = error as? ConvexError, error.code == "TRAIL_SHARING_DISABLED" {
+                    model.editCrew(id) { $0.pendingTrails = []; $0.trails = [] }
+                    try? await model.refreshCrew(id, api: api)
+                } else { failure = error }
+            }
+        }
+        if let failure { throw failure }
+    }
+
     private func progressJSON(_ ledger: Ledger) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
@@ -219,6 +290,7 @@ final class SyncEngine {
         waiting = model.walks.filter { $0.endedAt != nil && !state.uploadedWalks.contains($0.id) }.count
             + model.cities.filter { (state.uploadedPlaces[$0.id] ?? .distantPast) < $0.lastChanged }.count
             + model.foundStickers.keys.filter { !state.uploadedSecrets.contains($0) }.count
+            + model.crews.reduce(0) { $0 + $1.waiting }
             + ((try? progressJSON(model.ledger)) == state.uploadedProgress ? 0 : 1)
     }
 }

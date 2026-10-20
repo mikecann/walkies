@@ -15,7 +15,7 @@ let package = Package(name: "WalkiesModelTests", platforms: [.macOS(.v15)], targ
     .testTarget(name: "WalkiesTests", dependencies: ["Walkies"])
 ])
 ''')
-for name in ['Progression', 'Geo', 'HexGrid', 'City', 'Walk', 'Boundary', 'Lore', 'WalkRecap', 'LevelMeter']:
+for name in ['Progression', 'Geo', 'HexGrid', 'City', 'Walk', 'Boundary', 'Lore', 'WalkRecap', 'LevelMeter', 'Crew']:
     shutil.copy(f'Walkies/Model/{name}.swift', root / 'Sources/Walkies')
 shutil.copytree('Walkies/Lore', root / 'Sources/Walkies/Lore', dirs_exist_ok=True)
 # SwiftPM keeps resources in its own bundle rather than the iOS app bundle.
@@ -27,11 +27,11 @@ clouds = Path('Walkies/Views/Clouds.swift').read_text()
 (root / 'Sources/Walkies/SplitMix64.swift').write_text(clouds[clouds.index('nonisolated struct SplitMix64'):])
 # Exercise the actual app integration and sync on macOS too. Sensors and the
 # notification/account UI are stubbed; networking uses a URLProtocol test server.
-for name in ['Store', 'Sync', 'Convex', 'OSMClient', 'CachedPlaceData', 'CityBuilder']:
+for name in ['Store', 'Sync', 'Convex', 'OSMClient', 'CachedPlaceData', 'CityBuilder', 'CrewsAPI']:
     shutil.copy(f'Walkies/Services/{name}.swift', root / 'Sources/Walkies')
 shutil.copy('Walkies/AppModel.swift', root / 'Sources/Walkies')
 shutil.copy('scripts/progression-test-support/Platform.swift', root / 'Sources/Walkies')
-for name in ['ProgressionTests', 'WalkRecapTests', 'LevelMeterTests', 'ProgressionIntegrationTests']:
+for name in ['ProgressionTests', 'WalkRecapTests', 'LevelMeterTests', 'ProgressionIntegrationTests', 'CrewTests']:
     shutil.copy(f'WalkiesTests/{name}.swift', root / 'Tests/WalkiesTests')
 PY
 export WALKIES_TEST_ROOT="$PWD/build/progression-test-data"

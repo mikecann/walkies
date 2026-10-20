@@ -16,11 +16,15 @@ nonisolated enum Backend {
 
 nonisolated enum ConvexError: LocalizedError {
     case server(String)
+    case coded(String, String)
     case badResponse(Int)
+
+    var code: String? { if case .coded(let code, _) = self { code } else { nil } }
 
     var errorDescription: String? {
         switch self {
         case .server(let message): message
+        case .coded(_, let message): message
         case .badResponse(let code): "The server returned an error (\(code))."
         }
     }
@@ -94,9 +98,15 @@ nonisolated struct ConvexClient: Sendable {
             throw ConvexError.badResponse((response as? HTTPURLResponse)?.statusCode ?? 0)
         }
         guard envelope.status == "success" else {
+            if let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+               let error = json["errorData"] as? [String: Any], let code = error["code"] as? String {
+                throw ConvexError.coded(code, error["message"] as? String ?? code)
+            }
             throw ConvexError.server(Self.message(from: body) ?? envelope.errorMessage ?? "Unknown error")
         }
         if let value = envelope.value { return value }
+        // Optional query results (such as an unknown invite) legitimately return null.
+        if let null = try? JSONDecoder().decode(Result.self, from: Data("null".utf8)) { return null }
         if let nothing = Nothing() as? Result { return nothing }
         throw ConvexError.server("\(path) returned nothing")
     }

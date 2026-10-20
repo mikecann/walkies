@@ -64,13 +64,14 @@ struct StickerBookView: View {
     @State private var expandedAreas: Set<String> = []
 
     var body: some View {
-        let entries = LoreLibrary.all
+        let available = Set(model.mapCities.flatMap { $0.stickers?.keys.map { $0 } ?? [] })
+        let entries = model.currentCrewID == nil ? LoreLibrary.all : LoreLibrary.all.filter { available.contains($0.id) }
         let currentAreaName = SecretsBook.currentAreaName(entries: entries, selectedCityName: model.selectedCity?.name)
-        let found = entries.filter { model.foundStickers[$0.id] != nil }.count
+        let found = entries.filter { model.mapSecrets[$0.id] != nil }.count
         let areas = SecretsBook.sections(
-            entries: entries, found: model.foundStickers,
+            entries: entries, found: model.mapSecrets,
             location: model.lastLocation.map { Coordinate($0.coordinate) },
-            places: model.cities, selectedCity: model.selectedCity, sort: sort, filter: filter
+            places: model.mapCities, selectedCity: model.selectedCity, sort: sort, filter: filter
         )
 
         NavigationStack {
@@ -149,7 +150,7 @@ struct StickerBookView: View {
                 if let currentAreaName { expandedAreas.insert(currentAreaName) }
             }
             .sheet(item: $open) { entry in
-                LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id])
+                LoreCardView(entry: entry, foundAt: model.mapSecrets[entry.id], foundBy: model.currentCrew?.secrets[entry.id].map { model.currentCrew?.memberName($0.by) ?? "Past member" })
             }
         }
     }
@@ -206,11 +207,17 @@ struct StickerBookView: View {
             if isExpanded {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 12)], spacing: 20) {
                     ForEach(area.entries) { entry in
-                        let isFound = model.foundStickers[entry.id] != nil
+                        let isFound = model.mapSecrets[entry.id] != nil
                         Button {
                             open = entry
                         } label: {
-                            StickerTile(entry: entry, found: isFound)
+                            VStack(spacing: 5) {
+                                StickerTile(entry: entry, found: isFound)
+                                if let crew = model.currentCrew, let found = crew.secrets[entry.id] {
+                                    Text("Found by \(crew.memberName(found.by)) · \(Date(ms: found.at).formatted(.dateTime.day().month(.abbreviated)))")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }
                         }
                         .buttonStyle(.plain)
                         .disabled(!isFound)
@@ -259,6 +266,7 @@ private struct StickerTile: View {
 struct LoreCardView: View {
     let entry: LoreEntry
     let foundAt: Date?
+    var foundBy: String? = nil
     var isNew = false
     @Environment(\.dismiss) private var dismiss
 
@@ -304,7 +312,7 @@ struct LoreCardView: View {
                 }
 
                 if let foundAt {
-                    Text(foundAt == Progression.exploredSecretDate ? "Found in your explored tiles" : "Found \(foundAt.formatted(date: .abbreviated, time: .shortened))")
+                    Text(foundBy.map { "Found by \($0) · \(foundAt.formatted(.dateTime.day().month(.abbreviated)))" } ?? (foundAt == Progression.exploredSecretDate ? "Found in your explored tiles" : "Found \(foundAt.formatted(date: .abbreviated, time: .shortened))"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)

@@ -196,6 +196,17 @@ struct CloudLayer: View {
 
     static let revealTime = 1.6
 
+    private var crewTints: [CloudField.Tile: String] {
+        guard let crew = model.currentCrew else { return [:] }
+        var tints: [CloudField.Tile: String] = [:]
+        for place in crew.places {
+            for (hex, first) in place.first {
+                tints[CloudField.Tile(grid: place.city.grid, hex: hex)] = crew.colour(for: first.by)
+            }
+        }
+        return tints
+    }
+
     var body: some View {
         TimelineView(.animation(minimumInterval: handle.moving ? nil : 1.0 / 30)) { timeline in
             Canvas { context, size in
@@ -205,17 +216,30 @@ struct CloudLayer: View {
                 let reveal = min(1, now.timeIntervalSince(changedAt) / Self.revealTime)
                 let projection = Projection(map: map)
                 let bounds = CGRect(origin: .zero, size: size)
-                CosmeticTrail(points: handle.route, style: model.equipped[.trail], projection: projection, bounds: bounds, clock: clock)
-                    .draw(in: &context)
+                if model.currentCrewID == nil { CosmeticTrail(points: handle.route, style: model.equipped[.trail], projection: projection, bounds: bounds, clock: clock)
+                    .draw(in: &context) }
                 CloudPainter(
                     field: field, leaving: reveal < 1 ? leaving : [], reveal: reveal,
                     fresh: Set(leaving.map(\.tile)), projection: projection,
                     bounds: bounds, clock: clock, theme: model.equipped[.clouds]
                 )
                 .draw(in: &context)
+                if let crew = model.currentCrew {
+                    let routes = crew.trails.map { ($0.by, $0.route) }
+                        + crew.pendingTrails.map { (crew.you?.userId ?? "", $0.route) }
+                    for (by, route) in routes {
+                        var path = Path()
+                        for segment in route.segments where segment.count > 1 {
+                            path.move(to: projection.point(MKMapPoint(segment[0].cl)))
+                            for coordinate in segment.dropFirst() { path.addLine(to: projection.point(MKMapPoint(coordinate.cl))) }
+                        }
+                        context.stroke(path, with: .color(.white.opacity(0.85)), style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
+                        context.stroke(path, with: .color(Color.crew(crew.colour(for: by))), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                    }
+                }
                 let honeycomb = handle.honeycomb(at: now)
                 if honeycomb > 0 {
-                    Honeycomb(field: field, walkTiles: walkTiles, projection: projection, bounds: CGRect(origin: .zero, size: size))
+                    Honeycomb(field: field, walkTiles: walkTiles, tints: crewTints, projection: projection, bounds: CGRect(origin: .zero, size: size))
                         .draw(in: &context, opacity: honeycomb)
                 }
                 // Read inside the timeline so a ring expires even while the map is idle.
@@ -386,6 +410,7 @@ private struct Projection {
 private struct Honeycomb {
     let field: CloudField
     let walkTiles: Set<CloudField.Tile>
+    var tints: [CloudField.Tile: String] = [:]
     let projection: Projection
     let bounds: CGRect
 
@@ -398,6 +423,15 @@ private struct Honeycomb {
         for outline in field.outlines {
             let c = projection.point(outline.centre)
             guard near.contains(c), projection.isInFront(outline.centre) else { continue }
+            if let tint = tints[outline.tile], case .visited = outline.kind {
+                var path = Path()
+                path.addLines(outline.corners.map(projection.point))
+                path.closeSubpath()
+                let colour = Color.crew(tint)
+                context.fill(path, with: .color(colour.opacity(0.3 * opacity)))
+                context.stroke(path, with: .color(colour.opacity(0.9 * opacity)), lineWidth: 1.2)
+                continue
+            }
             let kind = walkTiles.contains(outline.tile) ? 4 : Self.index(outline.kind)
             var path = paths[kind] ?? Path()
             path.addLines(outline.corners.map(projection.point))
