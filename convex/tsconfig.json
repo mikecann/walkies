@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "allowJs": true,
+    "allowImportingTsExtensions": true,
     "strict": true,
     "moduleResolution": "Bundler",
     "skipLibCheck": true,

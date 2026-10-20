@@ -26,6 +26,9 @@ final class Account {
     enum Provider: String {
         case apple = "Apple"
         case google = "Google"
+        #if DEBUG && targetEnvironment(simulator)
+        case test = "Test"
+        #endif
     }
 
     private(set) var session: Session?
@@ -37,9 +40,15 @@ final class Account {
 
     @ObservationIgnored private let sheet = SignInSheet()
     @ObservationIgnored private var refreshing: Task<Session?, Never>?
+    #if DEBUG && targetEnvironment(simulator)
+    @ObservationIgnored private var automaticTestSignInRequested = false
+    #endif
 
     init() {
         session = Keychain.load()
+        #if DEBUG && targetEnvironment(simulator)
+        automaticTestSignInRequested = session == nil && ProcessInfo.processInfo.arguments.contains("-testSignIn")
+        #endif
     }
 
     // MARK: Signing in
@@ -54,6 +63,19 @@ final class Account {
     }
 
     private func performSignIn(with provider: Provider) async throws {
+        #if DEBUG && targetEnvironment(simulator)
+        if provider == .test {
+            let arguments = ProcessInfo.processInfo.arguments
+            var args: [String: String] = [:]
+            if let flag = arguments.firstIndex(of: "-testUserName"), flag + 1 < arguments.count,
+               !arguments[flag + 1].hasPrefix("-") {
+                args["name"] = arguments[flag + 1]
+            }
+            let result: CompleteResult = try await ConvexClient().mutation("auth:signInForTesting", args)
+            try await finishSignIn(result)
+            return
+        }
+        #endif
         let returnTo = Backend.site.appending(path: "app/signed-in")
         log.info("\(provider.rawValue, privacy: .public): starting on \(Backend.site.host() ?? "?", privacy: .public)")
         let start: StartResult = try await ConvexClient().mutation(
@@ -75,6 +97,19 @@ final class Account {
             "auth:completeSignInWith\(provider.rawValue)", ["code": code, "state": start.state]
         )
         log.info("\(provider.rawValue, privacy: .public): finished with \(result.status, privacy: .public)")
+        try await finishSignIn(result)
+    }
+
+    #if DEBUG && targetEnvironment(simulator)
+    /// Consume once per launch, so signing out doesn't immediately sign back in.
+    func takeAutomaticTestSignInRequest() -> Bool {
+        let requested = automaticTestSignInRequested
+        automaticTestSignInRequested = false
+        return requested && !isSignedIn
+    }
+    #endif
+
+    private func finishSignIn(_ result: CompleteResult) async throws {
         guard result.status == "complete", var tokens = result.tokens else { throw SignInError.failed }
 
         // Who this is, for Settings. Not essential, so a hiccup here doesn't stop sign-in.

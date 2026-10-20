@@ -1,8 +1,8 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { vAppleProfile } from "@convex-dev/auth/methods/apple/server";
 import { vGoogleProfile } from "@convex-dev/auth/methods/google/server";
-import { internalMutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { env, internalMutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mergeLedgers, parseLedger } from "./progression";
 import { deleteMemberTrails } from "./crews";
 import { internal } from "./_generated/api";
@@ -12,6 +12,20 @@ const vApple = v.object({ name: v.literal("apple"), accountId: v.string(), profi
 const vGoogle = v.object({ name: v.literal("google"), accountId: v.string(), profile: vGoogleProfile });
 
 type Details = { name?: string; email?: string; emailVerified: boolean };
+
+export const createUserAnonymous = internalMutation({
+  args: { provider: v.object({ name: v.literal("anonymous"), accountId: v.string(), profile: v.object({}) }) },
+  returns: v.id("users"),
+  handler: async (ctx) => {
+    // Every anonymous sign-in calls this, including direct calls that bypass the
+    // app's test wrapper. Refuse before a user or session can be created.
+    if (env.WALKIES_TEST_SIGNIN !== "1") {
+      throw new ConvexError("Test sign-in is disabled on this deployment.");
+    }
+    const suffix = crypto.randomUUID().slice(0, 4).toUpperCase();
+    return await ctx.db.insert("users", { name: `Test walker ${suffix}` });
+  },
+});
 
 /**
  * Who's signed in: the user their session belongs to, or the one that user was

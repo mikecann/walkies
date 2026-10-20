@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import core from "@convex-dev/auth/convex.config.js";
 import apple from "@convex-dev/auth/components/apple/convex.config.js";
 import google from "@convex-dev/auth/components/google/convex.config.js";
+import anonymous from "@convex-dev/auth/components/anonymous/convex.config.js";
 import feedback from "@convex-dev/feedback/convex.config.js";
 
 const app = defineApp({
@@ -18,6 +19,8 @@ const app = defineApp({
     // A Google OAuth client of the "Web application" type.
     AUTH_GOOGLE_CLIENT_ID: v.string(),
     AUTH_GOOGLE_CLIENT_SECRET: v.string(),
+    // Unset on production. Only an explicit "1" enables simulator test accounts.
+    WALKIES_TEST_SIGNIN: v.optional(v.string()),
   },
 });
 
@@ -47,6 +50,7 @@ app.use(google, {
     CLIENT_SECRET: app.env.AUTH_GOOGLE_CLIENT_SECRET,
   },
 });
+app.use(anonymous);
 
 // Chef: requests, voting and approvals.
 app.use(feedback);

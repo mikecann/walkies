@@ -38,6 +38,17 @@ struct SignInView: View {
                     }
                     .buttonStyle(StickerButtonStyle(fill: .white, foreground: .ink))
 
+                    #if DEBUG && targetEnvironment(simulator)
+                    Button { signIn(with: .test) } label: {
+                        label("Test sign-in (simulator only)", provider: .test) {
+                            Image(systemName: "person.crop.circle.badge.checkmark")
+                        }
+                        .font(.footnote)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, 4)
+                    #endif
+
                     if let errorMessage {
                         Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                             .font(.subheadline)
@@ -57,6 +68,11 @@ struct SignInView: View {
             .frame(maxWidth: .infinity)
         }
         .background(Color.cream)
+        #if DEBUG && targetEnvironment(simulator)
+        .task {
+            if account.takeAutomaticTestSignInRequest() { signIn(with: .test) }
+        }
+        #endif
     }
 
     private func label(_ title: String, provider: Account.Provider, @ViewBuilder icon: () -> some View) -> some View {

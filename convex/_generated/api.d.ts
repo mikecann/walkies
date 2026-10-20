@@ -66,5 +66,6 @@ export declare const components: {
   auth: import("@convex-dev/auth/_generated/component.js").ComponentApi<"auth">;
   authApple: import("@convex-dev/auth/components/apple/_generated/component.js").ComponentApi<"authApple">;
   authGoogle: import("@convex-dev/auth/components/google/_generated/component.js").ComponentApi<"authGoogle">;
+  authAnonymous: import("@convex-dev/auth/components/anonymous/_generated/component.js").ComponentApi<"authAnonymous">;
   feedback: import("@convex-dev/feedback/_generated/component.js").ComponentApi<"feedback">;
 };

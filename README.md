@@ -39,6 +39,19 @@ scripts/sim-walk.sh scripts/routes/navigation-way.txt
 
 To test always-on without waiting 10 minutes for a walk to end, launch with a shorter gap: `xcrun simctl launch booted com.mikecann.walkies -autoWalkGap 20`.
 
+### Simulator test accounts
+
+Debug simulator builds have a small **Test sign-in (simulator only)** button. It uses Convex Auth v2's anonymous method to create a fresh account without Apple or Google. The server refuses both the test wrapper and direct anonymous sign-in unless `WALKIES_TEST_SIGNIN` is exactly `1`. Enable that variable only on dev (`resolute-pig-177`), never production. It is optional and disabled when unset. No user schema changes are needed.
+
+For two installed Debug simulators, launch each with its device UUID and a different name:
+
+```bash
+xcrun simctl launch <simulator-A-UUID> com.mikecann.walkies -testSignIn -testUserName 'Sim A'
+xcrun simctl launch <simulator-B-UUID> com.mikecann.walkies -testSignIn -testUserName 'Sim B'
+```
+
+`-testSignIn` runs once at launch only if signed out. It saves and refreshes the session in the usual Keychain, so relaunching keeps the same user. Sign out before launching again to create a new account. `-testUserName` also applies to the button; without it the server chooses a name like `Test walker 3F7A`. Test accounts have no email and never merge by email. The button, launch arguments and test sign-in code are compiled out of Release and physical-device builds. Create a crew on one simulator and join it with its invite code on the other.
+
 ## Backend
 
 Convex, in Sydney (`aws-ap-southeast-2`), team `mikec`, project `walkies`:
