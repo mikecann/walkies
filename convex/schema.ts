@@ -113,4 +113,15 @@ export default defineSchema({
     by: v.id("users"),
     at: v.number(),
   }).index("by_crew_secret", ["crewId", "secretId"]),
+
+  // Shared OSM data. Missing files are short-lived fetching markers; osmId 0
+  // is the shared Nominatim throttle, so every server request observes its limit.
+  placeData: defineTable({
+    osmId: v.number(),
+    name: v.string(),
+    fetchedAt: v.number(),
+    version: v.number(),
+    file: v.optional(v.id("_storage")),
+    fetchingAt: v.optional(v.number()),
+  }).index("by_osm", ["osmId"]),
 });

@@ -40,6 +40,11 @@ nonisolated struct ConvexClient: Sendable {
         try await call("mutation", path, args)
     }
 
+    /// A cold place fetch can try both Overpass servers. Cached actions return quickly.
+    func action<Result: Decodable>(_ path: String, _ args: some Encodable = Empty()) async throws -> Result {
+        try await call("action", path, args, timeout: 360)
+    }
+
     /// Uploads a file to Convex storage at a URL from `generateUploadUrl`, returning its id.
     func upload(_ data: Data, to url: URL) async throws -> String {
         var request = URLRequest(url: url)
@@ -75,8 +80,8 @@ nonisolated struct ConvexClient: Sendable {
         var storageId: String
     }
 
-    private func call<Result: Decodable>(_ kind: String, _ path: String, _ args: some Encodable) async throws -> Result {
-        var request = URLRequest(url: Backend.cloud.appending(path: "api/\(kind)"), timeoutInterval: 30)
+    private func call<Result: Decodable>(_ kind: String, _ path: String, _ args: some Encodable, timeout: TimeInterval = 30) async throws -> Result {
+        var request = URLRequest(url: Backend.cloud.appending(path: "api/\(kind)"), timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token {

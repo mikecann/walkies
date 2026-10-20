@@ -19,8 +19,32 @@ nonisolated enum CityBuilder {
         from place: PlaceResult,
         walks: [Walk],
         near cities: [City] = [],
+        client: ConvexClient? = nil,
         status: @escaping @MainActor @Sendable (String) -> Void
     ) async throws -> City {
+        if let osmId = place.osmId, let client {
+            await status("Getting \(place.name) ready…")
+            do {
+                let cached = try await CachedPlaceData.fetch(osmId: osmId, client: client)
+                var cachedPlace = place
+                cachedPlace.boundary = cached.boundary
+                await status("Laying out the tiles…")
+                return build(from: cachedPlace, ways: cached.ways, walks: walks, near: cities)
+            } catch {
+                // The local-first path still works with older deployments or an
+                // unavailable cache. Cancellation should stop the add altogether.
+                try Task.checkCancellation()
+            }
+        }
+        await status("Finding the streets and paths…")
+        let b = place.boundary.bounds
+        let ways = try await OSMClient.walkableWays(south: b.south, west: b.west, north: b.north, east: b.east, session: client?.session ?? .shared)
+        await status("Laying out the tiles…")
+        return build(from: place, ways: ways, walks: walks, near: cities)
+    }
+
+    /// Both network paths use the same tile selection, road hints and walk replay.
+    static func build(from place: PlaceResult, ways: [OSMWay], walks: [Walk], near cities: [City] = []) -> City {
         let centre = place.boundary.centre
         let neighbour = cities
             .filter { $0.grid.size == tileSize && $0.grid.projection.origin.distance(to: centre) < shareGridWithin }
@@ -29,11 +53,6 @@ nonisolated enum CityBuilder {
         let shape = BoundaryShape(place.boundary, projection: grid.projection)
         let inside = City.hexes(inside: shape, grid: grid)
 
-        await status("Finding the streets and paths…")
-        let b = place.boundary.bounds
-        let ways = try await OSMClient.walkableWays(south: b.south, west: b.west, north: b.north, east: b.east)
-
-        await status("Laying out the tiles…")
         var tiles = Set<Hex>()
         // A driveway leads onto someone's property, so it doesn't make a tile count.
         for way in ways where way.tags["service"] != "driveway" {

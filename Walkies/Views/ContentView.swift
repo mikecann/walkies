@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    @Environment(Account.self) private var account
     @Environment(SyncEngine.self) private var sync
     @Environment(\.scenePhase) private var scenePhase
     @State private var showingCities = false
@@ -157,7 +158,7 @@ extension ContentView {
         addingStatus = "Getting \(place.name) ready…"
         Task {
             do {
-                let city = try await CityBuilder.build(from: place, walks: model.walks, near: model.cities) { addingStatus = $0 }
+                let city = try await CityBuilder.build(from: place, walks: model.walks, near: model.cities, client: await account.client()) { addingStatus = $0 }
                 model.add(city)
             } catch {
                 addingError = "Couldn't load the streets for \(place.name). OpenStreetMap might be busy, so try again in a minute."

@@ -9,6 +9,8 @@ nonisolated struct PlaceResult: Identifiable, Codable, Sendable {
     var boundary: Boundary
     /// Square metres.
     var area: Double
+    /// OSM relation id, distinct from Nominatim's place_id. Nil in older nearby.json files.
+    var osmId: Int? = nil
 }
 
 /// A street or path from Overpass, with its OSM tags (highway=residential etc).
@@ -60,7 +62,7 @@ nonisolated enum OSMClient {
 
     /// Lines for every street and path you could walk along inside the box.
     @concurrent
-    static func walkableWays(south: Double, west: Double, north: Double, east: Double) async throws -> [OSMWay] {
+    static func walkableWays(south: Double, west: Double, north: Double, east: Double, session: URLSession = .shared) async throws -> [OSMWay] {
         let excluded = "motorway|motorway_link|construction|proposed|raceway|bus_guideway|abandoned|razed"
         let query = """
         [out:json][timeout:120];
@@ -68,7 +70,7 @@ nonisolated enum OSMClient {
         (\(south),\(west),\(north),\(east));
         out geom;
         """
-        let decoded = try JSONDecoder().decode(OverpassResponse.self, from: await overpass(query))
+        let decoded = try JSONDecoder().decode(OverpassResponse.self, from: await overpass(query, session: session))
         return decoded.elements.compactMap { element in
             element.geometry.map { geometry in
                 OSMWay(tags: element.tags ?? [:], points: geometry.map { Coordinate(lat: $0.lat, lon: $0.lon) })
@@ -145,7 +147,7 @@ nonisolated enum OSMClient {
     }
 
     /// Runs an Overpass query, trying each server in turn.
-    private static func overpass(_ query: String, timeout: TimeInterval = 150) async throws -> Data {
+    private static func overpass(_ query: String, timeout: TimeInterval = 150, session: URLSession = .shared) async throws -> Data {
         let body = "data=" + (query.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "")
         var lastError: Error = OSMError.badResponse(0)
         for endpoint in overpassEndpoints {
@@ -155,7 +157,7 @@ nonisolated enum OSMClient {
                 request.httpBody = Data(body.utf8)
                 request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
                 request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-                let (data, response) = try await URLSession.shared.data(for: request)
+                let (data, response) = try await session.data(for: request)
                 try check(response)
                 return data
             } catch {
@@ -171,7 +173,7 @@ nonisolated enum OSMClient {
         }
     }
 
-    private static func place(_ item: [String: Any]) -> PlaceResult? {
+    static func place(_ item: [String: Any]) -> PlaceResult? {
         guard let id = item["place_id"] as? Int,
               let geojson = item["geojson"] as? [String: Any],
               let type = geojson["type"] as? String,
@@ -193,7 +195,8 @@ nonisolated enum OSMClient {
         let boundary = Boundary(polygons: polygons)
         let area = BoundaryShape(boundary, projection: LocalProjection(origin: boundary.centre)).area
         let kind = item["addresstype"] as? String ?? item["type"] as? String ?? "place"
-        return PlaceResult(id: id, name: name, detail: parts.joined(separator: ", "), kind: kind, boundary: boundary, area: area)
+        return PlaceResult(id: id, name: name, detail: parts.joined(separator: ", "), kind: kind, boundary: boundary, area: area,
+                           osmId: item["osm_type"] as? String == "relation" ? item["osm_id"] as? Int : nil)
     }
 
     /// GeoJSON polygon: rings of [lon, lat], the first is the outline and the rest are holes.

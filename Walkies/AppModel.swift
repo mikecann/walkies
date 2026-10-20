@@ -70,6 +70,10 @@ final class AppModel {
     let tracker = LocationTracker()
     let motion = MotionMonitor()
     @ObservationIgnored private let store: Store
+    /// Wired by the app with Account.client(), just like sync. Tests leave it nil.
+    @ObservationIgnored var makePlaceClient: (() async -> ConvexClient?)?
+    @ObservationIgnored private var warmedNeighbourIds: [Int]?
+    @ObservationIgnored private var warmingNeighbours = false
     @ObservationIgnored private let servicesEnabled: Bool
     @ObservationIgnored private var tracer = CoverageTracer()
     @ObservationIgnored private var shapes: [UUID: BoundaryShape] = [:]
@@ -690,6 +694,7 @@ final class AppModel {
            saved.covers(south: wanted.south, west: wanted.west, north: wanted.north, east: wanted.east),
            saved.fetchedAt.timeIntervalSinceNow > -30 * 24 * 3600 {
             nearby = saved.places
+            warmNeighbours()
             return
         }
         fetchingNearby = true
@@ -717,10 +722,36 @@ final class AppModel {
             }
             nearbyRetries = 0
             nearby = found.places
+            warmNeighbours()
             store.save(nearby: NearbyPlaces(
                 south: found.box.south, west: found.box.west, north: found.box.north, east: found.box.east,
                 fetchedAt: .now, places: found.places
             ))
+        }
+    }
+
+    /// One background warm per loaded list. Failed/offline attempts can retry on
+    /// the next refresh, and signing in can warm a list loaded before authentication.
+    private func warmNeighbours() {
+        let ids = Array(Set(nearby.compactMap(\.osmId))).sorted()
+        guard !ids.isEmpty, ids != warmedNeighbourIds, !warmingNeighbours, let makePlaceClient else { return }
+        warmingNeighbours = true
+        Task {
+            defer {
+                warmingNeighbours = false
+                // A newer list may have arrived while this request was running.
+                if warmedNeighbourIds != nil, ids != Array(Set(nearby.compactMap(\.osmId))).sorted() { warmNeighbours() }
+            }
+            guard let client = await makePlaceClient() else { return }
+            do {
+                // Keep each request bounded for larger neighbourhoods.
+                for start in stride(from: 0, to: ids.count, by: 100) {
+                    let _: Nothing = try await client.action("places:warm", ["osmIds": Array(ids[start..<min(start + 100, ids.count)])])
+                }
+                warmedNeighbourIds = ids
+            } catch {
+                Self.log.info("Couldn't warm nearby streets: \(error)")
+            }
         }
     }
 

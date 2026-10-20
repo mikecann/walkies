@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        model.makePlaceClient = { [weak account] in await account?.client() }
+        model.refreshNeighbours()
         model.requestSync = { [weak self] in self?.sync.schedule() }
         // Chef (Seth's feedback board): opened from Settings rather than floating over the map.
         ChefKit.install(client: ChefConnection(account: account))
@@ -43,6 +45,7 @@ struct WalkiesApp: App {
                 if !delegate.account.isSignedIn && !Self.skipSignIn {
                     SignInView {
                         delegate.sync.schedule()
+                        delegate.model.refreshNeighbours()
                         ChefKit.retryPending()
                     }
                 } else if !delegate.model.setupDone {

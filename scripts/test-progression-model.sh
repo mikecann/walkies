@@ -27,7 +27,7 @@ clouds = Path('Walkies/Views/Clouds.swift').read_text()
 (root / 'Sources/Walkies/SplitMix64.swift').write_text(clouds[clouds.index('nonisolated struct SplitMix64'):])
 # Exercise the actual app integration and sync on macOS too. Sensors and the
 # notification/account UI are stubbed; networking uses a URLProtocol test server.
-for name in ['Store', 'Sync', 'Convex', 'OSMClient', 'CityBuilder']:
+for name in ['Store', 'Sync', 'Convex', 'OSMClient', 'CachedPlaceData', 'CityBuilder']:
     shutil.copy(f'Walkies/Services/{name}.swift', root / 'Sources/Walkies')
 shutil.copy('Walkies/AppModel.swift', root / 'Sources/Walkies')
 shutil.copy('scripts/progression-test-support/Platform.swift', root / 'Sources/Walkies')

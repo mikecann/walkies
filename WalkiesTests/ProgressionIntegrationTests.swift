@@ -314,6 +314,47 @@ struct ProgressionIntegrationTests {
         engine.reset()
     }
 
+    @Test func nearbyStreetCacheWarmsOncePerListAfterSignIn() async throws {
+        let store = store()
+        let home = city(visited: 0)
+        store.save([home])
+        let neighbour = PlaceResult(id: 1, name: "Next suburb", detail: "Tests", kind: "suburb", boundary: home.boundary, area: 1_000_000, osmId: 123)
+        func saveList(_ places: [PlaceResult]) {
+            let c = home.boundary.centre
+            store.save(nearby: NearbyPlaces(south: c.lat - 1, west: c.lon - 1, north: c.lat + 1, east: c.lon + 1, fetchedAt: .now, places: places))
+        }
+        saveList([neighbour, neighbour])
+        let server = TestSyncServer()
+        let client = mockClient(server)
+        let model = AppModel(store: store, servicesEnabled: true, alwaysOn: false)
+        await model.waitForHistory()
+        var signedIn = false
+        model.makePlaceClient = { signedIn ? client : nil }
+        model.refreshNeighbours()
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(await server.warmedLists.isEmpty)
+        signedIn = true
+        model.refreshNeighbours()
+        for _ in 0..<100 {
+            if await server.warmedLists.count == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await Task.sleep(for: .milliseconds(30))
+        model.refreshNeighbours()
+        model.refreshNeighbours()
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(await server.warmedLists == [[123]])
+        var other = neighbour
+        other.osmId = 456
+        saveList([neighbour, other])
+        model.refreshNeighbours()
+        for _ in 0..<100 {
+            if await server.warmedLists.count == 2 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await server.warmedLists == [[123], [123, 456]])
+    }
+
     private func mockClient(_ server: TestSyncServer) -> ConvexClient {
         MockSyncProtocol.server = server
         let configuration = URLSessionConfiguration.ephemeral
@@ -343,6 +384,7 @@ private actor TestSyncServer {
     var rejectProgress: Bool
     var pauseSnapshot: Bool
     var calls: [String] = []
+    var warmedLists: [[Int]] = []
     var savedSecrets: Set<String> = []
     var dates: [String: Double] = [:]
     var snapshotStarted = false
@@ -391,6 +433,7 @@ private actor TestSyncServer {
         calls.append(path)
         var value: Any = NSNull()
         switch path {
+        case "places:warm": warmedLists.append(args["osmIds"] as! [Int])
         case "sync:generateUploadUrl": value = "https://sync.walkies.test/upload"
         case "sync:saveProgress":
             if rejectProgress { return Data(#"{"status":"error","errorMessage":"Rejected ledger"}"#.utf8) }

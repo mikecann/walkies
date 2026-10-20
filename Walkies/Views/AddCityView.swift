@@ -8,6 +8,7 @@ import SwiftUI
 /// directly.
 struct AddCityView: View {
     @Environment(AppModel.self) private var model
+    @Environment(Account.self) private var account
     let onAdded: () -> Void
 
     @State private var query = ""
@@ -137,7 +138,7 @@ struct AddCityView: View {
         buildStatus = "Getting \(place.name) ready…"
         Task {
             do {
-                let city = try await CityBuilder.build(from: place, walks: model.walks, near: model.cities) { buildStatus = $0 }
+                let city = try await CityBuilder.build(from: place, walks: model.walks, near: model.cities, client: await account.client()) { buildStatus = $0 }
                 model.add(city)
                 buildStatus = nil
                 onAdded()
