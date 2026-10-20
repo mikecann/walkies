@@ -89,5 +89,9 @@ export default defineSchema({
     version: v.number(),
     file: v.optional(v.id("_storage")),
     fetchingAt: v.optional(v.number()),
-  }).index("by_osm", ["osmId"]),
+    /** Waiting for the warm queue, which fetches one place at a time from this time on. */
+    queuedAt: v.optional(v.number()),
+    /** Failed warm attempts so far, for backing off. */
+    attempts: v.optional(v.number()),
+  }).index("by_osm", ["osmId"]).index("by_queued", ["queuedAt"]),
 });

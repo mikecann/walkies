@@ -11,6 +11,12 @@ const maxAge = 60 * 24 * 60 * 60 * 1000;
 // cannot leave a place locked forever; completion also checks ownership.
 const leaseDuration = 6 * 60 * 1000;
 const requestSpacing = 1100;
+// The warm queue's worker keeps a heartbeat on this sentinel row, so only one
+// runs at a time. Overpass turns away callers that run several queries at once.
+const workerId = -1;
+// A place that fails to warm is tried again after these waits, then left for
+// places:get to fetch when someone actually opens it.
+const retryDelays = [60_000, 5 * 60_000, 30 * 60_000];
 const userAgent = "Walkies/0.1 (iOS walking app; https://github.com/mikecann/walkies)";
 const endpoints = [
   "https://overpass-api.de/api/interpreter",
@@ -72,19 +78,96 @@ export const get = action({
   },
 });
 
-/** Schedules work transactionally, so repeated lists cannot enqueue duplicates. */
+/** Queues places to warm. One worker fetches them one at a time, so a long list
+ * never has several Overpass queries in flight at once. Repeated lists can't
+ * queue a place twice. */
 export const enqueue = internalMutation({
   args: { osmIds: v.array(v.number()) }, returns: v.null(),
   handler: async (ctx, { osmIds }) => {
     if (await currentUserId(ctx) === null) throw new ConvexError("Not signed in");
     if (osmIds.length > 100) throw new ConvexError("Too many places");
-    let delay = 0;
+    const now = Date.now();
     for (const osmId of new Set(osmIds)) {
-      const state = await claimPlace(ctx, osmId, Date.now() + delay);
-      if (state.kind !== "fetch") continue;
-      await ctx.scheduler.runAfter(delay, internal.places.fetchOwned, { osmId, lease: state.lease });
-      delay += requestSpacing;
+      validateId(osmId);
+      const row = await rowFor(ctx, osmId);
+      if (row && (fresh(row) || row.queuedAt !== undefined)) continue;
+      if (row) await ctx.db.patch("placeData", row._id, { queuedAt: now, attempts: 0 });
+      else await ctx.db.insert("placeData", { osmId, name: "", fetchedAt: 0, version, queuedAt: now, attempts: 0 });
     }
+    await startWorker(ctx);
+    return null;
+  },
+});
+
+/** Puts every place without street data back on the warm queue, such as ones
+ * that failed before the queue existed. `npx convex run places:requeueMissing --prod` */
+export const requeueMissing = internalMutation({
+  args: {}, returns: v.object({ queued: v.number() }),
+  handler: async (ctx) => {
+    const now = Date.now();
+    let queued = 0;
+    for (const row of await ctx.db.query("placeData").collect()) {
+      if (row.osmId <= 0 || row.file !== undefined || row.queuedAt !== undefined) continue;
+      await ctx.db.patch("placeData", row._id, { queuedAt: now, attempts: 0 });
+      queued++;
+    }
+    if (queued > 0) await startWorker(ctx);
+    return { queued };
+  },
+});
+
+async function startWorker(ctx: MutationCtx) {
+  const worker = await rowFor(ctx, workerId);
+  const now = Date.now();
+  if (worker?.fetchingAt !== undefined && now - worker.fetchingAt < leaseDuration) return;
+  if (worker) await ctx.db.patch("placeData", worker._id, { fetchingAt: now });
+  else await ctx.db.insert("placeData", { osmId: workerId, name: "Warm queue", fetchedAt: 0, version, fetchingAt: now });
+  await ctx.scheduler.runAfter(0, internal.places.drain, {});
+}
+
+type Next = { kind: "fetch"; osmId: number; lease: number } | { kind: "wait"; ms: number } | { kind: "skip" } | { kind: "done" };
+
+/** The worker's next step: the oldest place that's due, how long until one is, or done. */
+export const claimNext = internalMutation({
+  args: {},
+  handler: async (ctx): Promise<Next> => {
+    const now = Date.now();
+    const worker = await rowFor(ctx, workerId);
+    const row = await ctx.db.query("placeData").withIndex("by_queued", (q) => q.gte("queuedAt", 0)).first();
+    if (!row) {
+      if (worker) await ctx.db.patch("placeData", worker._id, { fetchingAt: undefined });
+      return { kind: "done" };
+    }
+    if (row.queuedAt! > now) {
+      // A heartbeat in the future keeps a second worker from starting while this one waits.
+      if (worker) await ctx.db.patch("placeData", worker._id, { fetchingAt: row.queuedAt! });
+      return { kind: "wait", ms: row.queuedAt! - now };
+    }
+    if (worker) await ctx.db.patch("placeData", worker._id, { fetchingAt: now });
+    if (fresh(row)) {
+      await ctx.db.patch("placeData", row._id, { queuedAt: undefined, attempts: undefined });
+      return { kind: "skip" };
+    }
+    if (row.fetchingAt !== undefined && now - row.fetchingAt < leaseDuration) {
+      // Someone opening this place is fetching it right now. Look again shortly.
+      await ctx.db.patch("placeData", row._id, { queuedAt: now + 30_000 });
+      return { kind: "skip" };
+    }
+    await ctx.db.patch("placeData", row._id, { queuedAt: undefined, fetchingAt: now });
+    return { kind: "fetch", osmId: row.osmId, lease: now };
+  },
+});
+
+export const drain = internalAction({
+  args: {}, returns: v.null(),
+  handler: async (ctx): Promise<null> => {
+    const next = await ctx.runMutation(internal.places.claimNext, {});
+    if (next.kind === "done") return null;
+    if (next.kind === "fetch") {
+      // finish() records a failure and queues the retry, so carry on to the next place.
+      try { await fetchPlace(ctx, next.osmId, next.lease); } catch { /* retried later */ }
+    }
+    await ctx.scheduler.runAfter(next.kind === "wait" ? next.ms : requestSpacing, internal.places.drain, {});
     return null;
   },
 });
@@ -119,11 +202,21 @@ export const finish = internalMutation({
       return false;
     }
     if (file) {
-      await ctx.db.patch("placeData", row._id, { name: name ?? row.name, file, fetchedAt: fetchedAt ?? Date.now(), version, fetchingAt: undefined });
+      await ctx.db.patch("placeData", row._id, {
+        name: name ?? row.name, file, fetchedAt: fetchedAt ?? Date.now(), version,
+        fetchingAt: undefined, queuedAt: undefined, attempts: undefined,
+      });
       if (row.file) await ctx.storage.delete(row.file);
     } else {
       // Keep an older file on refresh failure, but allow the next call to retry.
-      await ctx.db.patch("placeData", row._id, { fetchingAt: undefined });
+      // Places the warm queue asked for go back on it after a wait, a few times.
+      const attempts = row.attempts;
+      const retry = attempts !== undefined && attempts < retryDelays.length;
+      await ctx.db.patch("placeData", row._id, {
+        fetchingAt: undefined,
+        queuedAt: retry ? Date.now() + retryDelays[attempts] : undefined,
+        attempts: retry ? attempts + 1 : undefined,
+      });
     }
     return true;
   },
@@ -174,22 +267,3 @@ async function fetchPlace(ctx: ActionCtx, osmId: number, lease: number): Promise
     throw error;
   }
 }
-
-export const ownsLease = internalQuery({
-  args: { osmId: v.number(), lease: v.number() }, returns: v.boolean(),
-  handler: async (ctx, { osmId, lease }) => {
-    const row = await ctx.db.query("placeData").withIndex("by_osm", (q) => q.eq("osmId", osmId)).unique();
-    return row?.fetchingAt === lease && Date.now() - lease < leaseDuration;
-  },
-});
-
-export const fetchOwned = internalAction({
-  args: { osmId: v.number(), lease: v.number() }, returns: v.null(),
-  handler: async (ctx, { osmId, lease }) => {
-    // A heavily delayed scheduler job may have lost its lease to a new caller.
-    if (await ctx.runQuery(internal.places.ownsLease, { osmId, lease })) {
-      await fetchPlace(ctx, osmId, lease);
-    }
-    return null;
-  },
-});
