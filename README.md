@@ -55,6 +55,8 @@ Deploy with `npx convex deploy`. The auth signing keys were set with `npx @conve
 
 How sync works: walks never change once finished, tiles only get uncovered and secrets only get found, so syncing is just adding. The phone uploads anything the server hasn't got (walk and city files go to Convex file storage), downloads anything it hasn't got, and merges cities by keeping every tile either copy uncovered. See `convex/sync.ts` and `Walkies/Services/Sync.swift`.
 
+Crew maps have a separate backend in `convex/crews.ts`. The [crew API contract](design/crews-api.md) documents uploads, membership, invite links and incremental tile sync for the upcoming phone integration. Run its backend tests with `npm test`, and check types with `npx tsc -p convex --noEmit`.
+
 Sign-in runs Apple's or Google's page in an `ASWebAuthenticationSession`. Convex Auth's callback (`/oauth/apple/callback`, `/oauth/google/callback`) sends the browser on to `/app/signed-in?convexAuthCode=…` on the same deployment, which the sheet catches (the app is linked to that domain through `/.well-known/apple-app-site-association` in `convex/http.ts` and `Config/Walkies.entitlements`). The app then calls `completeSignInWith…` with the code.
 
 ### Setting up Apple and Google sign-in

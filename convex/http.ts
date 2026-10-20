@@ -1,5 +1,6 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
+import { internal } from "./_generated/api";
 
 const http = httpRouter();
 
@@ -26,6 +27,34 @@ http.route({
   handler: httpAction(async (_ctx, request) => {
     const { search } = new URL(request.url);
     return new Response(null, { status: 302, headers: { Location: `walkies://signed-in${search}` } });
+  }),
+});
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+}
+
+http.route({
+  pathPrefix: "/join/",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const code = new URL(request.url).pathname.slice("/join/".length);
+    const invite = await ctx.runQuery(internal.crews.inviteForPage, { code });
+    const deepLink = invite === null ? null : `walkies://join/${invite.code}`;
+    const heading = invite === null ? "This invite wasn't found" : `Open Walkies to join ${escapeHtml(invite.name)}`;
+    return new Response(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Join a Walkies crew</title><style>
+body { margin: 0; min-height: 100svh; display: grid; place-items: center; background: #faf3e5; color: #343b30; font: 18px/1.5 system-ui, sans-serif; }
+main { max-width: 30rem; padding: 2rem; text-align: center; } h1 { font-size: 2rem; line-height: 1.2; }
+a { display: inline-block; padding: .8rem 1.4rem; border-radius: 1rem; background: #3c6549; color: white; text-decoration: none; }
+</style></head><body><main><h1>${heading}</h1>
+${deepLink === null ? "<p>Ask someone in the crew for a fresh link or check the six-character code in Walkies.</p>" :
+  `<p>Your next walk can help fill in the map together.</p><a href="${deepLink}">Open Walkies</a><p>If nothing opens, install Walkies and enter <strong>${invite!.code}</strong> in Join a crew map.</p>`}
+</main>${deepLink === null ? "" : `<script>window.location.href = ${JSON.stringify(deepLink)};</script>`}</body></html>`, {
+      status: invite === null ? 404 : 200,
+      headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
+    });
   }),
 });
 

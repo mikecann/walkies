@@ -54,4 +54,63 @@ export default defineSchema({
     secretId: v.string(),
     foundAt: v.number(),
   }).index("by_user_secret", ["userId", "secretId"]),
+
+  crews: defineTable({
+    name: v.string(),
+    createdBy: v.id("users"),
+    inviteCode: v.string(),
+    createdAt: v.number(),
+    /** Monotonic server time for tile uploads, also used as the snapshot cursor. */
+    tilesUpdatedAt: v.number(),
+  }).index("by_invite", ["inviteCode"]),
+
+  crewMembers: defineTable({
+    crewId: v.id("crews"),
+    userId: v.id("users"),
+    name: v.string(),
+    colour: v.string(),
+    sharing: v.union(v.literal("tiles"), v.literal("tilesAndTrail")),
+    walksCount: v.boolean(),
+    joinedAt: v.number(),
+  }).index("by_crew_user", ["crewId", "userId"])
+    .index("by_user", ["userId"]),
+
+  crewPlaces: defineTable({
+    crewId: v.id("crews"),
+    clientId: v.string(),
+    name: v.string(),
+    /** Dedicated crew JSON: shared grid, boundary and streets, no personal progress. */
+    file: v.id("_storage"),
+    addedBy: v.id("users"),
+    updatedAt: v.number(),
+  }).index("by_crew_client", ["crewId", "clientId"]),
+
+  crewTiles: defineTable({
+    crewId: v.id("crews"),
+    placeId: v.id("crewPlaces"),
+    q: v.number(),
+    r: v.number(),
+    by: v.id("users"),
+    /** Phone's discovery time, including walks replayed from before joining. */
+    at: v.number(),
+    /** Server ingestion time; an old walk must still appear in the next delta. */
+    receivedAt: v.number(),
+  }).index("by_crew_place_hex", ["crewId", "placeId", "q", "r"])
+    .index("by_crew_received", ["crewId", "receivedAt"]),
+
+  crewTrails: defineTable({
+    crewId: v.id("crews"),
+    userId: v.id("users"),
+    walkClientId: v.string(),
+    /** Dedicated upload, already clipped by the phone to this crew's places. */
+    file: v.id("_storage"),
+    at: v.number(),
+  }).index("by_crew_user_walk", ["crewId", "userId", "walkClientId"]),
+
+  crewSecrets: defineTable({
+    crewId: v.id("crews"),
+    secretId: v.string(),
+    by: v.id("users"),
+    at: v.number(),
+  }).index("by_crew_secret", ["crewId", "secretId"]),
 });
