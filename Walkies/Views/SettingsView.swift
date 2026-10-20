@@ -48,8 +48,6 @@ struct SettingsView: View {
                     Button("Sign out", role: .destructive, action: signOut)
                 } header: {
                     Text("Account")
-                } footer: {
-                    Text("Walks are kept on this phone and copied to your account whenever there's signal, so nothing's lost if you're out of range.")
                 }
 
                 Section("History") {
@@ -63,27 +61,19 @@ struct SettingsView: View {
                 Section {
                     Toggle("Always on", isOn: $model.alwaysOn)
                 } footer: {
-                    Text("Walkies records in the background, so there's no Start walk to remember. Just head out. A walk only starts counting once you're \(Int(AppModel.autoWalkConfirmDistance)) m from where it began, so GPS wandering about indoors doesn't uncover anything; until then a little shoe shows how far you've got. GPS pauses while you're sitting still, but it will still use more battery than starting walks yourself.")
+                    Text("Records walks in the background. Walking and jogging count; bikes and cars don't.")
                 }
 
                 if model.alwaysOn && !model.tracker.hasAlwaysPermission {
                     Section {
-                        Label("Location is set to While Using the App, so tracking stops once the app's been closed.", systemImage: "exclamationmark.triangle.fill")
+                        Label("Set Location to Always so walks record when the app's closed.", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                         Button("Open Settings") {
                             if let url = URL(string: UIApplication.openSettingsURLString) {
                                 UIApplication.shared.open(url)
                             }
                         }
-                    } footer: {
-                        Text("In Settings, tap Location and choose Always.")
                     }
-                }
-
-                Section {
-                    Toggle("3D view", isOn: $model.tilted3D)
-                } footer: {
-                    Text("Tilts the map to a game-like angle and shows Apple's 3D buildings and trees, where it has them.")
                 }
 
                 Section {
@@ -92,15 +82,6 @@ struct SettingsView: View {
                     } label: {
                         Label("Suggest a feature", systemImage: "lightbulb")
                     }
-                } footer: {
-                    Text("Ideas for Walkies, or something that's not working right. Type it, or send a screenshot with a voice note. You can follow what happens to it here too.")
-                }
-
-                Section {
-                    LabeledContent("Counts", value: "Walking and jogging")
-                    LabeledContent("Doesn't count", value: "Bikes and cars")
-                } footer: {
-                    Text("Anything faster than about 12 km/h, or that your phone thinks is cycling or driving, doesn't uncover tiles.")
                 }
             }
             .confirmationDialog("Sign out of Walkies?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
