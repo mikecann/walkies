@@ -289,17 +289,42 @@ final class AppModel {
     var selectedCity: City? { cities.first { $0.id == selectedCityID } }
 
     /// What the cloud layer draws: every place at once. Working out which tiles are
-    /// clouded takes a moment on a big place, so it's only redone when the tiles change.
-    @ObservationIgnored private var cachedField: (key: String, field: CloudField)?
+    /// clouded takes a moment on a big place, so after the first time it's redone off
+    /// the main thread when the tiles change, with the last one showing until it's ready.
+    @ObservationIgnored private var clouds: (key: String, field: CloudField)?
+    @ObservationIgnored private var buildingClouds = false
+    private var cloudsBuilt = 0
 
-    var cloudKey: String { "\(tilesRevision)-\(cities.count)" }
+    var cloudKey: String { currentClouds.key }
+    var cloudField: CloudField { currentClouds.field }
 
-    var cloudField: CloudField {
-        let key = cloudKey
-        if let cachedField, cachedField.key == key { return cachedField.field }
-        let field = CloudField(cities: cities)
-        cachedField = (key, field)
-        return field
+    private var wantedCloudKey: String { "\(tilesRevision)-\(cities.count)" }
+
+    private var currentClouds: (key: String, field: CloudField) {
+        _ = cloudsBuilt
+        let key = wantedCloudKey
+        guard let clouds else {
+            let first = (key, CloudField(cities: cities))
+            clouds = first
+            return first
+        }
+        if clouds.key != key { buildClouds(key) }
+        return clouds
+    }
+
+    /// One at a time. When it's done, the map reads the clouds again and starts the
+    /// next if the tiles have changed since.
+    private func buildClouds(_ key: String) {
+        guard !buildingClouds else { return }
+        buildingClouds = true
+        let cities = cities
+        let generation = dataGeneration
+        Task {
+            let field = await Task.detached(priority: .userInitiated) { CloudField(cities: cities) }.value
+            buildingClouds = false
+            if generation == dataGeneration { clouds = (key, field) }
+            cloudsBuilt += 1
+        }
     }
 
     // MARK: Walks
@@ -404,7 +429,8 @@ final class AppModel {
         walk.addedTilesByPlace = Dictionary(uniqueKeysWithValues: addedTiles.map { ($0.key.uuidString, $0.value) })
     }
 
-    func saveNow() {
+    /// - Parameter waiting: finish writing before returning, for when the app is about to be suspended.
+    func saveNow(waiting: Bool = false) {
         if var walk = activeWalk {
             finishCoverage(of: &walk)
             activeWalk = walk
@@ -413,6 +439,7 @@ final class AppModel {
         store.save(cities)
         saveTeams()
         lastSave = .now
+        if waiting { store.flush() }
     }
 
     private func record(_ location: CLLocation) {
@@ -1113,6 +1140,7 @@ final class AppModel {
         nearby = []
         selectedCityID = nil
         tilesRevision += 1
+        clouds = nil
         store.wipe()
     }
 

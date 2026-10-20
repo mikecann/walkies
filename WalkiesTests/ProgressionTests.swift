@@ -394,6 +394,34 @@ struct ProgressionTests {
         #expect(Progression.questProgress(.metres5000, week: previous, inputs: input) == 3000)
     }
 
+    @Test func weeklyDistanceMatchesDeduplicatingEveryWalk() {
+        var rng = SplitMix64(seed: 7)
+        var walks: [Walk] = []
+        let first = Progression.week(containing: monday, calendar: calendar).start.addingTimeInterval(-21 * 24 * 3600)
+        for _ in 0..<160 {
+            // Clustered around midnights, with second phones recording the same outing.
+            let day = Double(rng.next() % 42)
+            let start = first.addingTimeInterval(day * 24 * 3600 + (rng.unit() - 0.5) * 4 * 3600)
+            let length = 300 + rng.unit() * 5400
+            let walk = Walk(startedAt: start, endedAt: start.addingTimeInterval(length), distance: 200 + rng.unit() * 4000)
+            walks.append(walk)
+            if rng.unit() < 0.4 {
+                let shift = (rng.unit() - 0.5) * length
+                walks.append(Walk(startedAt: start.addingTimeInterval(shift), endedAt: start.addingTimeInterval(shift + length * (0.5 + rng.unit())),
+                                  distance: 200 + rng.unit() * 4000))
+            }
+        }
+        walks.append(Walk(startedAt: first.addingTimeInterval(20 * 24 * 3600), distance: 9000))
+        let now = first.addingTimeInterval(38 * 24 * 3600)
+        for offset in -1..<7 {
+            let week = Progression.week(containing: first.addingTimeInterval(Double(offset) * 7 * 24 * 3600 + 3600), calendar: calendar)
+            let everything = Progression.distinctOutings(walks.filter { $0.endedAt != nil && $0.startedAt <= now })
+                .filter { $0.startedAt >= week.start && $0.startedAt < week.end }
+                .reduce(0) { $0 + $1.distance }
+            #expect(Progression.weeklyDistance(week: week, walks: walks.shuffled(), now: now) == everything)
+        }
+    }
+
     @Test func discardedCoverageKeepsWeekStartFavouriteAndWeeklyTileCredit() throws {
         let favourite = city(visited: 100, total: 200)
         var other = city(visited: 110, total: 200)

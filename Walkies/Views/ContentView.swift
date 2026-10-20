@@ -152,7 +152,7 @@ struct ContentView: View {
         }
         .sensoryFeedback(.success, trigger: model.revealCount)
         .onChange(of: scenePhase, initial: true) { _, phase in
-            if phase == .background { model.saveNow() }
+            if phase == .background { model.saveNow(waiting: true) }
             if phase == .active {
                 // Open on where you are, in whichever of your places that is.
                 focus.send(.arrive)

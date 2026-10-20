@@ -56,6 +56,7 @@ struct SyncSafetyTests {
         #expect(engine.status == .idle)
         #expect(await server.places.count == 1)
 
+        store.flush()
         try Data("not json".utf8).write(to: root.appending(path: "cities.json"))
         let relaunched = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         #expect(relaunched.cities.isEmpty)

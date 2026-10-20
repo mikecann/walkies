@@ -1,6 +1,6 @@
 import Foundation
 
-nonisolated struct City: Codable, Identifiable, Sendable {
+nonisolated struct City: Codable, Equatable, Identifiable, Sendable {
     var id = UUID()
     var name: String
     /// The rest of the place name, e.g. "Busselton, Western Australia, Australia".
@@ -26,7 +26,7 @@ nonisolated struct City: Codable, Identifiable, Sendable {
     /// These records travel with the place so tile quests retain their date and identity.
     var tileCredits: [TileCredit]?
 
-    struct TileCredit: Codable, Sendable {
+    struct TileCredit: Codable, Equatable, Sendable {
         var id: UUID
         var at: Date
         var hexes: Set<Hex>
@@ -66,8 +66,7 @@ nonisolated struct City: Codable, Identifiable, Sendable {
     /// tile beside it, spreading through every no-path tile it touches.
     /// `blocked` is the no-path tiles still under cloud.
     func cloudCover() -> (clouded: Set<Hex>, clear: Set<Hex>, blocked: Set<Hex>) {
-        let shape = shape()
-        let inside = Set(grid.hexes(from: shape.lo, to: shape.hi).filter { shape.contains(grid.centre(of: $0)) })
+        let inside = InsideTiles.shared.hexes(in: self)
         let noPath = inside.subtracting(tiles)
         var clear = visited
         var queue = Array(visited)
@@ -92,6 +91,26 @@ nonisolated struct City: Codable, Identifiable, Sendable {
         visited.formUnion(fresh)
         tiles.formUnion(fresh)
         return fresh
+    }
+}
+
+/// Every tile inside each place's boundary. Testing each one against the outline is
+/// the slow part of working out the clouds, and it only changes with the boundary.
+nonisolated final class InsideTiles: @unchecked Sendable {
+    static let shared = InsideTiles()
+    private let lock = NSLock()
+    private var places: [UUID: (boundary: Boundary, hexes: Set<Hex>)] = [:]
+
+    func hexes(in city: City) -> Set<Hex> {
+        lock.lock()
+        let saved = places[city.id]
+        lock.unlock()
+        if let saved, saved.boundary == city.boundary { return saved.hexes }
+        let hexes = City.hexes(inside: city.shape(), grid: city.grid)
+        lock.lock()
+        places[city.id] = (city.boundary, hexes)
+        lock.unlock()
+        return hexes
     }
 }
 

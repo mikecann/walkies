@@ -240,11 +240,7 @@ nonisolated enum Progression {
         case .days3:
             return Double(Set(walks.map { inputs.calendar.startOfDay(for: $0.startedAt) }).count)
         case .metres5000:
-            // Deduplicate before filtering the week, including an outing recorded
-            // on either side of midnight on Monday by two phones.
-            return distinctOutings(inputs.walks.filter { $0.endedAt != nil && $0.startedAt <= inputs.now })
-                .filter { $0.startedAt >= week.start && $0.startedAt < week.end }
-                .reduce(0) { $0 + $1.distance }
+            return weeklyDistance(week: week, walks: inputs.walks, now: inputs.now)
         case .anotherPlace:
             // Freeze the favourite at the start of the week. Otherwise finding tiles
             // elsewhere could change the favourite and undo a completed quest.
@@ -261,6 +257,20 @@ nonisolated enum Progression {
                 (counts[walk.id] ?? [:]).contains { $0.key != favourite && $0.value > 0 }
             } ? 1 : 0
         }
+    }
+
+    /// Deduplicate before filtering the week, including an outing recorded on either
+    /// side of midnight on Monday by two phones. Only walks within a day of the week
+    /// can overlap one in it, so the rest are left out of the (quadratic) deduplication.
+    static func weeklyDistance(week: Week, walks: [Walk], now: Date) -> Double {
+        let from = week.start.addingTimeInterval(-24 * 3600), to = week.end.addingTimeInterval(24 * 3600)
+        let nearby = walks.filter { walk in
+            guard let end = walk.endedAt else { return false }
+            return walk.startedAt <= now && end >= from && walk.startedAt < to
+        }
+        return distinctOutings(nearby)
+            .filter { $0.startedAt >= week.start && $0.startedAt < week.end }
+            .reduce(0) { $0 + $1.distance }
     }
 
     /// When two devices record most of the same outing, use the longer distance.

@@ -632,27 +632,34 @@ private struct CloudPainter {
         }
         guard !placed.isEmpty else { return }
 
-        let bases = sprites.bases.map { context.resolve(Image(decorative: $0, scale: 1)) }
+        // Zoomed out, a puff is only a few points across and its shadow and underside
+        // barely show, so they fade away and only the tops are drawn.
+        let detail = min(1, max(0, (puffSize - Self.simplePuff) / Self.simplePuff))
         let tops = sprites.tops.map { context.resolve(Image(decorative: $0, scale: 1)) }
-        let shadows = sprites.shadows.map { context.resolve(Image(decorative: $0, scale: 1)) }
         let eraser = context.resolve(Image(decorative: sprites.eraser, scale: 1))
 
         // Shadows on the ground, with the sun to the north-west. Straight onto the
         // map rather than through a layer of their own: a layer costs a whole extra
         // screen of drawing every frame, which the phone feels when zoomed in.
-        for p in placed {
-            context.opacity = 0.35 * p.fade
-            let r = p.rect
-            context.draw(shadows[p.puff.variant], in: r.offsetBy(dx: r.width * 0.15, dy: r.height * 0.18))
+        if detail > 0 {
+            let shadows = sprites.shadows.map { context.resolve(Image(decorative: $0, scale: 1)) }
+            for p in placed {
+                context.opacity = 0.35 * p.fade * detail
+                let r = p.rect
+                context.draw(shadows[p.puff.variant], in: r.offsetBy(dx: r.width * 0.15, dy: r.height * 0.18))
+            }
+            context.opacity = 1
         }
-        context.opacity = 1
 
         context.drawLayer { layer in
             // Every shaded underside first, then every sunlit top, so the middle of the
             // blanket is one continuous white and the grey only shows round its edges.
-            for p in placed {
-                layer.opacity = p.fade
-                layer.draw(bases[p.puff.variant], in: p.rect)
+            if detail > 0 {
+                let bases = sprites.bases.map { layer.resolve(Image(decorative: $0, scale: 1)) }
+                for p in placed {
+                    layer.opacity = p.fade * detail
+                    layer.draw(bases[p.puff.variant], in: p.rect)
+                }
             }
             for p in placed {
                 layer.opacity = p.fade
@@ -704,6 +711,15 @@ private struct CloudPainter {
         guard limit > 0, biggest > limit else { return rect }
         let f = limit / biggest
         return CGRect(x: rect.midX - rect.width * f / 2, y: rect.midY - rect.height * f / 2, width: rect.width * f, height: rect.height * f)
+    }
+
+    /// Below this many points across, a puff is drawn as just its top. Its shadow
+    /// and underside fade in up to twice this.
+    private static let simplePuff = 8.0
+
+    /// How many points across a typical puff is mid-screen.
+    private var puffSize: Double {
+        ((field.puffs.first ?? leaving.first)?.radius ?? 0) * 2 * centreScale
     }
 
     /// Screen points per map point mid-screen, to decide what's worth drawing at this zoom.
