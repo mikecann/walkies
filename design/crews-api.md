@@ -1,117 +1,151 @@
 # Crew backend API
 
 Implemented in `convex/crews.ts`; product decisions are in [coop.md](coop.md).
-This is the backend contract for the next iPhone implementation. These functions
-never write personal walks, places, secrets or the progression ledger.
+Crew contributions are separate from personal walking and progression records.
 
 ## Calling conventions
 
-- Call public functions as `crews:<function>` with a signed-in Convex Auth session.
-  Identity comes from `currentUserId`, including its canonical merged account.
-- IDs are opaque Convex IDs. `crewId`, `placeId` and member `userId` are server
-  IDs, not phone UUIDs. Keep a place's `clientId` to correlate it with the phone.
-- All timestamps are milliseconds since the Unix epoch. `at` on tiles/secrets
-  is the phone's discovery time; `at` on trails is the server upload time because
-  the trail API has no discovery-time argument.
-- `sharing` is `"tiles" | "tilesAndTrail"`. `walksCount` is a **boolean**, initially
-  true. It tells the phone whether to queue contributions for this crew. Changing
-  it does not erase history or reject uploads already queued offline.
-- Names are trimmed, nonempty and at most 100 characters. Colours are opaque,
-  nonempty strings up to 64 characters (the phone should use its colour format).
-  Client IDs and secret IDs are trimmed, nonempty and at most 200 characters.
-- Failures throw `ConvexError({ code, message })`. Codes are `UNAUTHENTICATED`,
-  `NOT_A_MEMBER`, `CREW_NOT_FOUND`, `CREATOR_ONLY`, `INVALID_INVITE`,
-  `INVITE_CODE_EXHAUSTED`, `INVALID_ARGUMENT`, `PLACE_NOT_FOUND`,
-  `FILE_NOT_FOUND`, and `TRAIL_SHARING_DISABLED`. Non-members get `NOT_A_MEMBER`
-  for either missing or inaccessible crews. An unknown invite preview returns null.
+All public functions require a signed-in Convex Auth session. Identity follows
+`currentUserId`, including merged accounts. IDs are opaque Convex IDs, not phone
+UUIDs. Timestamps are milliseconds since the Unix epoch. `sharing` is `"tiles" |
+"tilesAndTrail"`; `walksCount` is a boolean, initially true. Turning walksCount off
+instructs the phone to stop queuing contributions, but does not reject offline
+uploads or erase existing credits.
 
-## Functions
+Names are trimmed, nonempty and at most 100 characters; colours are nonempty
+strings up to 64 characters. Client IDs and secret IDs are at most 200 characters.
+Failures throw `ConvexError({ code, message })`.
 
-| Function | Args | Returns |
-| --- | --- | --- |
-| `createCrew` | `{ name, colour, sharing }` | `{ crewId, inviteCode }` |
-| `crewForInvite` | `{ code }` | `{ name, memberNames: string[] }` or `null` |
-| `joinCrew` | `{ code, colour, sharing, name?: string }` | `crewId` |
-| `updateMembership` | `{ crewId, colour?: string, sharing?: Sharing, walksCount?: boolean }` | `null` |
-| `leaveCrew` | `{ crewId }` | `null` |
-| `renameCrew` | `{ crewId, name }` | `null` |
-| `removeMember` | `{ crewId, userId }` | `null` |
-| `addCrewPlace` | `{ crewId, clientId, name, file: Id<"_storage"> }` | `placeId: Id<"crewPlaces">` |
-| `uploadCrewTiles` | `{ crewId, placeId, hexes: [q, r][], at }` | Number of newly inserted tiles |
-| `uploadCrewTrail` | `{ crewId, walkClientId, file: Id<"_storage"> }` | `null` |
-| `recordCrewSecrets` | `{ crewId, secrets: { secretId, at }[] }` | `null` |
-| `crewSnapshot` | `{ crewId, since?: number }` | Snapshot below |
-| `myCrews` | `{}` | `{ crewId, name, memberCount, membership: Member }[]` |
+**Function kinds matter:** use the client's action, mutation or query method as
+listed below. Actions wrap transactional writes where crypto randomness or cleanup
+after a rejected write is needed. Failed joins commit their attempt counter before
+throwing, so transaction rollback cannot bypass the limit. Convex documents these
+[runtime boundaries](https://docs.convex.dev/functions/runtimes).
 
-`createCrew` uses the account name for the first membership; `joinCrew` uses its
-optional name override, then the account name, then `"Explorer"`. Repeated joins
-return the same crew without changing any existing preferences. Invite codes are
-six characters from `ABCDEFGHJKMNPQRSTUVWXYZ23456789`, unique by indexed
-transactional lookup, and accepted case-insensitively with surrounding whitespace.
+| Function | Kind | Args | Returns |
+| --- | --- | --- | --- |
+| `createCrew` | action | `{ name, colour, sharing }` | `{ crewId, inviteCode }` |
+| `crewForInvite` | mutation | `{ code }` | `{ name, memberNames: [] }` or `null` |
+| `joinCrew` | action | `{ code, colour, sharing, name?: string }` | `crewId` |
+| `newInviteCode` | action | `{ crewId }` | New invite code string |
+| `updateMembership` | mutation | `{ crewId, colour?: string, sharing?: Sharing, walksCount?: boolean }` | `null` |
+| `leaveCrew` | mutation | `{ crewId }` | `null` |
+| `renameCrew` | mutation | `{ crewId, name }` | `null` |
+| `removeMember` | action | `{ crewId, userId }` | `null` |
+| `uploadFile` | action | `{ json: string }` | `Id<"_storage">` |
+| `addCrewPlace` | action | `{ crewId, clientId, name, file, bounds: { minQ, maxQ, minR, maxR } }` | `Id<"crewPlaces">` |
+| `uploadCrewTiles` | mutation | `{ crewId, placeId, hexes: [q, r][], at }` | Number of new tiles |
+| `uploadCrewTrail` | action | `{ crewId, walkClientId, file, updatedAt }` | `null` |
+| `recordCrewSecrets` | mutation | `{ crewId, secrets: { secretId, at }[] }` | `null` |
+| `crewSnapshot` | query | `{ crewId, since?: number, cursor?: TileCursor }` | Snapshot below |
+| `myCrews` | query | `{}` | `{ crewId, name, memberCount, membership: Member }[]` |
 
-`renameCrew` and `removeMember` require the original creator to still be a member.
-Removing a missing member is harmless; removing yourself is leaving. Creator
-ownership does not transfer when they leave. They can rejoin using the invite to
-manage the crew again. There is no ownership transfer API in this stage.
+## Invites and memberships
 
-Leaving or removal deletes the membership, route rows and their stored files.
-Switching to `tiles` does the same for routes. Re-enabling trail sharing does not
-restore them; the phone must replay them. Tile and secret credits survive departed
-members. The snapshot returns historical credits as user IDs even if that user is
-no longer in its members list; the phone needs a fallback label/colour for those.
-The last departure deletes the crew and invalidates the invite immediately. It
-also deletes places, tiles, trails and secrets, including its place/route files.
-Large maps continue deleting inaccessible rows through the internal
-`cleanupEmptyCrew({ crewId }) -> null` scheduled mutation in batches of 500 per
-table. Small crews are cleaned up in the departure transaction. Other crews and
-personal records remain separate.
+Codes contain eight characters from `ABCDEFGHJKMNPQRSTUVWXYZ23456789`, sampled
+with `crypto.getRandomValues` and rejection sampling. An indexed transactional
+lookup guarantees uniqueness. Input accepts lowercase and surrounding whitespace.
+
+Each canonical user has a shared hourly allowance of 30 failed invite previews
+and join attempts (all joins count). The window begins with the first counted
+attempt. Once exhausted, previews and joins return `RATE_LIMITED` until it expires.
+Preview results keep the `memberNames` field for compatibility but always return
+an empty array. Names of members are available only after joining.
+
+A crew holds at most **eight members, including its creator**. A repeated join
+returns the crew without changing preferences, even when the crew is full.
+`createCrew` uses the account name; `joinCrew` uses its optional override, then the
+account name, then `"Explorer"`.
+
+The original creator must still be a member to rename, remove members or issue an
+invite. Removing another member rotates the invite immediately and records their
+removal against the current invite epoch. They cannot join using either the old
+code or the automatically rotated one. Removing additional members does not
+unblock earlier removals. Creator-only `newInviteCode` rotates the code and advances
+the epoch, allowing previously removed members to join **with this fresh code**.
+It invalidates all earlier codes. Removing a missing member is harmless; removing
+yourself is leaving. Ownership does not transfer on departure, but follows an
+account merge. A creator who leaves can rejoin if they have a current invite.
+
+Leaving/removal erases route rows and their exclusively owned files. Switching to
+`tiles` does the same. New data is capped at 64 trails per member per crew, so normal
+opt-out/departure cleanup fits in one transaction. Legacy excess drains in batches
+of at most 500 rows. Membership identity and a sharing epoch prevent old cleanup
+jobs from deleting newly shared routes or old routes from becoming visible after
+rejoining/re-enabling. Re-enabling requires a phone replay. Tile/secret credits
+survive departure; use fallback labels/colours for departed contributors.
+
+The last departure deletes the crew immediately, disabling access and invites.
+Place, tile, trail, secret and removal rows then drain in batches of 500 per table.
+No other crew or personal rows are deleted. Account merges keep one membership per
+crew. Overlapping memberships retain the canonical user's preferences and discard
+the duplicate's routes; other memberships and their routes move to the canonical
+user. Attribution moves too, in scheduled batches for large tile histories. Tile
+attribution updates advance the ingestion clock so previously synced phones receive
+the corrected user IDs in their next delta.
 
 ## Files and place grids
 
-1. Call the existing `sync:generateUploadUrl({})` mutation.
-2. POST the prepared JSON to that URL and keep the returned `storageId`.
-3. Pass that ID as `file` to `addCrewPlace` or `uploadCrewTrail`.
+1. Prepare dedicated crew JSON. Place JSON contains the boundary, streets and grid
+   without personal progress. Trail JSON contains only the route inside crew places.
+2. Call the **`crews:uploadFile({ json })` action**, which accepts valid JSON up to
+   2 MiB and returns a storage ID already claimed by the authenticated account.
+3. Pass that ID to `addCrewPlace` or `uploadCrewTrail`.
 
-Upload a **dedicated file for each crew place or crew walk**, rather than reusing
-a personal sync file or another row's storage ID. The backend deletes owned
-route/place files when replacing or removing their rows. Retrying the same trail
-with the same file ID is harmless and does not delete that file.
+Do not use `sync:generateUploadUrl` for crew files. There is no public API to claim
+an existing storage ID: only the server's upload action can establish ownership.
+Each upload can be consumed by one crew row, once. Personal sync rejects claimed
+crew files as well, so personal and crew cleanup cannot delete one another's files.
+Unclaimed personal uploads, other users' uploads and already-consumed files are
+rejected with `INVALID_UPLOAD` when a write would adopt them.
 
-The phone prepares and validates JSON contents. A crew place contains its boundary,
-streets and hex grid, without personal visited tiles. All places in a crew must
-use the **first crew place's grid**, including origin and scale. Fetch the snapshot
-before building another place; do not use a nearby personal grid independently.
-The backend checks that the uploaded storage object exists, but does not parse its
-JSON or verify geographic clipping/grid compatibility.
+A retry using the same adopted file is harmless. A fresh unused duplicate is
+deleted on an idempotent place retry or an obsolete trail retry. Rejected place or
+trail saves discard only the caller's unused claimed file, never a foreign/used
+file. Abandoned unused uploads expire after 24 hours. Re-upload if one expires.
 
-A place is immutable in this version. Adding the same `(crewId, clientId)` again
-returns its original `placeId`, preserving the first file and metadata. Save that
-result and then replay past walks onto it. Prefer retrying the same uploaded file;
-a newly uploaded unused duplicate is not adopted or deleted by this function.
-There is no place editing/removal API in this stage.
+All crew places must use the first place's grid, including origin and scale. The
+phone checks geographic clipping and grid compatibility; the server validates
+JSON syntax but does not interpret its geographic contents. `bounds` supplies the
+inclusive axial extent of the prepared place grid. All four bounds must be safe
+integers with absolute value at most 1,000,000, minima no greater than maxima, and
+at most 10,000 coordinate steps along either axis. Every uploaded tile must lie
+inside those stored bounds. A crew can have at most 16 immutable places and each
+place at most 50,000 tiles. These caps also apply if a faulty client supplies
+misleading bounds.
 
-Trail JSON must contain **only the route portions inside the crew's places**.
-Never submit the personal walk file or raw journey to/from the place. The server
-requires `tilesAndTrail`, stores one file per `(crewId, caller, walkClientId)`, and
-replaces/deletes its previous file on a new upload. Trails are not live locations.
+Adding the same `(crewId, clientId)` returns its original place ID and preserves
+its first file, bounds and metadata. There is no place editing/removal API.
 
-## Uploads and first discovery
+Trail `updatedAt` is a required, finite client version for that logical walk. Persist
+it with the queued payload and increase it whenever the clipped route changes.
+A different file replaces the current route only when its version is strictly
+newer. Older/equal versions are ignored and their unused upload discarded. Trail
+`at` in snapshots remains server upload time. The 64-trail cap rejects new walk
+IDs with `TRAIL_LIMIT`; replacements and retries are allowed. Queue only the walks
+the phone intends to share within that cap.
 
-`uploadCrewTiles` accepts up to 1,000 hex pairs per call; batches of a few hundred
-fit comfortably. Coordinates must be safe integers. Empty batches return zero.
-`placeId` must belong to this crew. Duplicate pairs, including signed zero, are
-ignored. Tiles are unique per crew + place + q + r, so overlapping place coverage
-still has separate place records, using the common grid.
+## Contributions and limits
 
-`recordCrewSecrets` accepts up to 1,000 entries per call. Both tiles and secrets use
-**first committed upload wins**, not the oldest `at`. An earlier offline walk
-uploaded later cannot overwrite another member's existing credit. These mutations
-are safe to retry. Upload retry queues should stop retrying revoked memberships
-or disabled trail sharing until the phone has refreshed the user's settings.
+Tile batches accept at most 1,000 safe integer `[q, r]` pairs, including signed
+zero (normalized to zero). Duplicates are ignored, even at the place tile cap.
+Secrets accept at most 1,000 entries per request, with at most 1,000 stored secrets
+per crew. Tiles and secrets use **first committed upload wins**, not oldest `at`.
+An earlier offline discovery cannot replace another member's existing credit.
+Limits and uniqueness are checked transactionally, including concurrent uploads.
+
+Besides the errors above, codes include `UNAUTHENTICATED`, `NOT_A_MEMBER`,
+`CREW_NOT_FOUND`, `CREATOR_ONLY`, `INVALID_INVITE`, `INVITE_CODE_EXHAUSTED`,
+`MEMBER_REMOVED`, `CREW_FULL`, `INVALID_ARGUMENT`, `PLACE_NOT_FOUND`, `PLACE_LIMIT`,
+`PLACE_BOUNDS_REQUIRED`, `TILE_LIMIT`, `TRAIL_LIMIT`, `SECRET_LIMIT`, `FILE_NOT_FOUND`
+and `TRAIL_SHARING_DISABLED`. Non-members get `NOT_A_MEMBER` for either missing or
+inaccessible crews. Unknown invite previews return null. Refresh membership before
+retrying revoked/disabled contributions; do not keep retrying permanent limit errors.
 
 ## Snapshot and polling
 
 ```ts
+type TileCursor = { position: string; until: number; since: number | null };
 {
   crew: { crewId, name, createdBy, inviteCode, createdAt },
   members: [{ userId, name, colour, sharing, walksCount, joinedAt, isYou }],
@@ -119,52 +153,63 @@ or disabled trail sharing until the phone has refreshed the user's settings.
   tiles: [{ placeId, q, r, by: userId, at }],
   trails: [{ walkClientId, url: string | null, by: userId, at }],
   secrets: [{ secretId, by: userId, at }],
-  serverTime: number
+  serverTime: number,
+  cursor: TileCursor | null,
+  more: boolean
 }
 ```
 
-1. Fetch `myCrews` on app open and periodically while open to refresh memberships.
-2. Fetch each `crewSnapshot({ crewId })` without `since` on first sync or cache reset.
-3. Persist its `serverTime` **with the applied tile changes**, per crew.
-4. Next time, pass that saved value as `since` and merge the returned tiles.
-5. **Replace** crew info, members, places, trails and secrets on every response.
-   Only the tiles array is incremental. Replacing routes is necessary to honour
-   opt-outs, replacements and departures. Remove local crew data after losing
-   membership; stop displaying routes when a member disappears or stops sharing.
+1. Refresh `myCrews` on app open and periodically while open.
+2. Start `crewSnapshot({ crewId })` without since for first sync/cache reset, or
+   with the last fully applied `serverTime` as `since` for subsequent syncs.
+3. Merge each response's tiles. While `more` is true, pass its exact `cursor` and
+   the same `since` to the next request. There are at most 1,000 tiles per page.
+4. Only after **every page** has been applied, persist the response's `serverTime`
+   atomically with the applied changes. Do not advance it after a partial sync.
+5. Replace crew info, members, places, trails and secrets on each response. Only
+   tiles are incremental. Remove crew data after losing membership, and hide
+   routes when a member disappears or disables sharing.
 
-`serverTime` is a persisted, server-assigned **tile cursor**, initialized to crew
-creation time. It advances only when new tiles are committed, to at least the
-current wall time and strictly above its previous value. It may be slightly ahead
-of wall time for uploads in the same millisecond, and may stay unchanged during
-idle polls. Treat it as opaque: never substitute the phone's clock or request time.
-`since` filters by a tile's server ingestion cursor (`receivedAt > since`), not its
-old discovery time. This makes historical walk replays and same-millisecond polls
-safe without dropping tiles. Metadata, secrets and routes always remain complete.
-URLs may be null if a stored object is unavailable; don't treat null as a URL.
+The first page freezes an upper ingestion watermark for the entire traversal.
+The native Convex pagination cursor includes index tie breakers, so a single
+`receivedAt` group can span pages without dropping tiles. New uploads made while
+paging appear in the next delta. `receivedAt` is a monotonic server clock persisted
+in the crew, advancing strictly on new tiles; phone discovery times do not affect
+pagination. Treat `serverTime` and the cursor as opaque. Complete metadata is
+bounded by the caps above; tiles retain the existing object format, with pages
+small enough to avoid a packed-array API change. URLs can be null.
 
-## Invite landing page
+## Public invite page
 
-`GET https://<deployment>.convex.site/join/<code>` returns a small cream HTML page
-with the crew name, an `Open Walkies` button to `walkies://join/<CODE>` and an
-immediate attempt to open that URL. Names are HTML-escaped. Unknown/malformed
-codes return a friendly 404 page. Pages use `Cache-Control: no-store`.
+`GET https://<deployment>.convex.site/join/<code>` always returns HTTP 200, with
+`Cache-Control: no-store`. It never looks up a crew or reveals crew/member names.
+Every well-formed code, real or unknown, gets the same generic page with its
+`walkies://join/<CODE>` button and automatic open attempt. Malformed links get
+generic guidance. Public requests cannot test invite existence; authenticated,
+rate-limited calls resolve the invite inside the app.
 
-The landing page is deliberately public and resolves only the crew name and code
-through the internal `inviteForPage` query. The app's richer `crewForInvite` query
-requires sign-in and returns member names for the join screen. The iOS deep-link
-handler and phone sync are the next stage, not part of this backend change.
+## Existing data and deployment
+
+This change does not deploy or migrate a live database. New schema fields are
+optional so existing records remain readable. Before deploying against existing
+crew data, rotate any six-character codes, backfill verified place bounds and
+accurate tile counts, and audit file ownership. Places without bounds/counts
+reject new tile writes with `PLACE_BOUNDS_REQUIRED`. Unclaimed legacy crew files
+are deliberately retained during row deletion because their exclusive ownership
+cannot be established safely; an audited migration must clean them up. Existing
+rows beyond the new metadata caps also need an audit before rollout.
 
 ## Local verification
 
-Following the [Convex testing workflow](https://docs.convex.dev/testing/convex-test),
-`convex/crews.test.ts` uses `convex-test` with real user rows and `withIdentity`.
-OAuth components do not need registration for these tests: Convex Auth v2's user
-helper reads the identity subject and `currentUserId` resolves the merged user.
+`convex/crews.test.ts` uses `convex-test`, real users, identities and storage in the
+edge runtime. It covers each review finding, paging across equal ingestion times,
+merges, cleanup and retries.
 
 ```sh
-npm install
-npx tsc -p convex --noEmit
 npm test
+npx tsc -p convex --noEmit
 ```
 
-Vitest runs in the edge runtime. Tests are never deployed or imported by the app.
+In a restricted checkout with `node_modules` symlinked outside the writable tree,
+use `npm test -- --configLoader runner` to avoid Vite's temporary config write in
+that shared directory. Tests and typechecking do not deploy anything.

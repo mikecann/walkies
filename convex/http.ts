@@ -1,6 +1,5 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
-import { internal } from "./_generated/api";
 
 const http = httpRouter();
 
@@ -37,11 +36,14 @@ function escapeHtml(value: string) {
 http.route({
   pathPrefix: "/join/",
   method: "GET",
-  handler: httpAction(async (ctx, request) => {
+  handler: httpAction(async (_ctx, request) => {
     const code = new URL(request.url).pathname.slice("/join/".length);
-    const invite = await ctx.runQuery(internal.crews.inviteForPage, { code });
-    const deepLink = invite === null ? null : `walkies://join/${invite.code}`;
-    const heading = invite === null ? "This invite wasn't found" : `Open Walkies to join ${escapeHtml(invite.name)}`;
+    // Never look up the code here. Real and nonexistent invites have the same
+    // public response, so this endpoint cannot be used as an invite oracle.
+    const normalized = code.trim().toUpperCase();
+    const valid = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$/.test(normalized);
+    const deepLink = valid ? `walkies://join/${normalized}` : null;
+    const heading = "Open Walkies to join a crew";
     return new Response(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Join a Walkies crew</title><style>
@@ -49,10 +51,10 @@ body { margin: 0; min-height: 100svh; display: grid; place-items: center; backgr
 main { max-width: 30rem; padding: 2rem; text-align: center; } h1 { font-size: 2rem; line-height: 1.2; }
 a { display: inline-block; padding: .8rem 1.4rem; border-radius: 1rem; background: #3c6549; color: white; text-decoration: none; }
 </style></head><body><main><h1>${heading}</h1>
-${deepLink === null ? "<p>Ask someone in the crew for a fresh link or check the six-character code in Walkies.</p>" :
-  `<p>Your next walk can help fill in the map together.</p><a href="${deepLink}">Open Walkies</a><p>If nothing opens, install Walkies and enter <strong>${invite!.code}</strong> in Join a crew map.</p>`}
+${deepLink === null ? "<p>Ask someone in the crew for a fresh link or check the eight-character code in Walkies.</p>" :
+  `<p>Your next walk can help fill in the map together.</p><a href="${deepLink}">Open Walkies</a><p>If nothing opens, install Walkies and enter <strong>${escapeHtml(normalized)}</strong> in Join a crew map.</p>`}
 </main>${deepLink === null ? "" : `<script>window.location.href = ${JSON.stringify(deepLink)};</script>`}</body></html>`, {
-      status: invite === null ? 404 : 200,
+      status: 200,
       headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
     });
   }),

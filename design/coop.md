@@ -11,12 +11,12 @@ Mike wants a shared map he and his dad fill in together by walking, alongside hi
 
 ## Joining and sharing
 
-- Anyone signed in can **start a crew map**: name it ("Mike & Dad"), pick a colour for themselves, and share an invite link (`https://<site>/join/<code>`, which opens Walkies at `walkies://join/<code>`; a six-character code can be typed in too).
+- Anyone signed in can **start a crew map**: name it ("Mike & Dad"), pick a colour for themselves, and share an invite link (`https://<site>/join/<code>`, which opens Walkies at `walkies://join/<code>`; an eight-character code can be typed in too).
 - Joining asks what to share, and you can change it any time in that crew map's settings:
   - **Tiles only**: the crew sees which tiles you've uncovered, never where you walked.
   - **Tiles and trail**: the crew also sees your routes, but only the parts inside the crew map's places, so the route to and from your house outside them is never shared.
 - **Your past walks count** when you join, or when a place is added to the crew map: your phone replays the walks you've already done in that place onto the crew map. Only the resulting tiles (and trail, if you share it) are sent.
-- Members can leave. A crew map with nobody left is deleted. The person who started it can remove members and rename it.
+- Crews hold up to eight members. Members can leave. A crew map with nobody left is deleted. The person who started it can remove members, rename it and issue a fresh invite. Removing someone rotates the code and keeps them out until the creator explicitly issues a fresh invite.
 
 ## What the crew map shows
 

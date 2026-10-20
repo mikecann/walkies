@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { currentUserId } from "./users";
 import { mergeLedgers, parseLedger } from "./progression";
 
@@ -7,6 +8,13 @@ async function requireUser(ctx: QueryCtx | MutationCtx) {
   const userId = await currentUserId(ctx);
   if (userId === null) throw new ConvexError("Not signed in");
   return userId;
+}
+
+async function requirePersonalFile(ctx: MutationCtx, file: Id<"_storage">) {
+  // Crew uploads are exclusively owned by a crew row. Personal sync must never
+  // adopt or delete one, even when the caller supplies another person's ID.
+  const claim = await ctx.db.query("crewUploads").withIndex("by_file", (q) => q.eq("file", file)).unique();
+  if (claim !== null) throw new ConvexError("Crew files cannot be used for personal sync");
 }
 
 /** Where to upload a walk or city file before saving it. */
@@ -32,6 +40,7 @@ export const saveWalk = mutation({
   returns: v.null(),
   handler: async (ctx, walk) => {
     const userId = await requireUser(ctx);
+    await requirePersonalFile(ctx, walk.file);
     const existing = await ctx.db
       .query("walks")
       .withIndex("by_user_client", (q) => q.eq("userId", userId).eq("clientId", walk.clientId))
@@ -57,6 +66,7 @@ export const savePlace = mutation({
   returns: v.null(),
   handler: async (ctx, place) => {
     const userId = await requireUser(ctx);
+    await requirePersonalFile(ctx, place.file);
     const existing = await ctx.db
       .query("places")
       .withIndex("by_user_client", (q) => q.eq("userId", userId).eq("clientId", place.clientId))

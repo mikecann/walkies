@@ -4,6 +4,8 @@ import { vAppleProfile } from "@convex-dev/auth/methods/apple/server";
 import { vGoogleProfile } from "@convex-dev/auth/methods/google/server";
 import { internalMutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mergeLedgers, parseLedger } from "./progression";
+import { deleteMemberTrails } from "./crews";
+import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
 const vApple = v.object({ name: v.literal("apple"), accountId: v.string(), profile: vAppleProfile });
@@ -139,8 +141,73 @@ export const mergeDuplicateUsers = internalMutation({
   },
 });
 
+// Large city grids can exceed a mutation's read limit. Resolve membership and
+// privacy in the merge transaction, then drain attribution in bounded batches.
+async function moveCrewCreditsBatch(ctx: MutationCtx, from: Id<"users">, to: Id<"users">) {
+  const tiles = await ctx.db.query("crewTiles").withIndex("by_user", (q) => q.eq("by", from)).take(500);
+  const secrets = await ctx.db.query("crewSecrets").withIndex("by_user", (q) => q.eq("by", from)).take(500);
+  const clocks = new Map<Id<"crews">, number>();
+  for (const tile of tiles) {
+    let receivedAt = clocks.get(tile.crewId);
+    if (receivedAt === undefined) {
+      const crew = await ctx.db.get("crews", tile.crewId);
+      if (crew !== null) { receivedAt = Math.max(Date.now(), crew.tilesUpdatedAt + 1); clocks.set(tile.crewId, receivedAt); }
+    }
+    // Attribution changes must reach phones that already cached the tile too.
+    await ctx.db.patch("crewTiles", tile._id, { by: to, ...(receivedAt === undefined ? {} : { receivedAt }) });
+  }
+  for (const [crewId, tilesUpdatedAt] of clocks) await ctx.db.patch("crews", crewId, { tilesUpdatedAt });
+  for (const secret of secrets) await ctx.db.patch("crewSecrets", secret._id, { by: to });
+  if (tiles.length === 500 || secrets.length === 500) await ctx.scheduler.runAfter(0, internal.users.moveCrewCredits, { from, to });
+}
+export const moveCrewCredits = internalMutation({
+  args: { from: v.id("users"), to: v.id("users") }, returns: v.null(),
+  handler: async (ctx, { from, to }) => { await moveCrewCreditsBatch(ctx, from, to); return null; },
+});
+
 /** Hands one user's walks, places and secrets to another, skipping any they already have. */
 async function moveData(ctx: MutationCtx, from: Id<"users">, to: Id<"users">) {
+  // Preserve the canonical membership's privacy choices. If both accounts were
+  // members, discard the duplicate's routes instead of broadening consent.
+  for (const member of await ctx.db.query("crewMembers").withIndex("by_user", (q) => q.eq("userId", from)).collect()) {
+    const keep = await ctx.db.query("crewMembers").withIndex("by_crew_user", (q) => q.eq("crewId", member.crewId).eq("userId", to)).unique();
+    if (keep !== null) {
+      await deleteMemberTrails(ctx, { crewId: member.crewId, userId: from, memberId: member._id, epoch: member.trailEpoch ?? 0 });
+      await ctx.db.delete("crewMembers", member._id);
+    } else {
+      await ctx.db.patch("crewMembers", member._id, { userId: to });
+      if (member.sharing === "tilesAndTrail") {
+        const epoch = member.trailEpoch ?? 0;
+        const tagged = await ctx.db.query("crewTrails").withIndex("by_cleanup", (q) => q.eq("crewId", member.crewId).eq("userId", from).eq("memberId", member._id).eq("epoch", epoch)).take(64);
+        const legacy = epoch === 0 ? await ctx.db.query("crewTrails").withIndex("by_cleanup", (q) => q.eq("crewId", member.crewId).eq("userId", from).eq("memberId", undefined)).take(64) : [];
+        const trails = [...tagged, ...legacy.filter((trail) => trail._creationTime >= member._creationTime)].slice(0, 64);
+        for (const trail of trails) await ctx.db.patch("crewTrails", trail._id, { userId: to, memberId: member._id, epoch });
+      }
+      // Also drain any pre-cap legacy excess in bounded transactions.
+      await deleteMemberTrails(ctx, { crewId: member.crewId, userId: from, memberId: member._id, epoch: member.trailEpoch ?? 0 });
+    }
+  }
+  for (const crew of await ctx.db.query("crews").withIndex("by_creator", (q) => q.eq("createdBy", from)).collect()) await ctx.db.patch("crews", crew._id, { createdBy: to });
+  for (const place of await ctx.db.query("crewPlaces").withIndex("by_added", (q) => q.eq("addedBy", from)).collect()) await ctx.db.patch("crewPlaces", place._id, { addedBy: to });
+  await moveCrewCreditsBatch(ctx, from, to);
+  for (const upload of await ctx.db.query("crewUploads").withIndex("by_user", (q) => q.eq("userId", from)).collect()) await ctx.db.patch("crewUploads", upload._id, { userId: to });
+  for (const removal of await ctx.db.query("crewRemovals").withIndex("by_user", (q) => q.eq("userId", from)).collect()) {
+    const keep = await ctx.db.query("crewRemovals").withIndex("by_crew_user", (q) => q.eq("crewId", removal.crewId).eq("userId", to)).unique();
+    if (keep === null) await ctx.db.patch("crewRemovals", removal._id, { userId: to });
+    else { await ctx.db.patch("crewRemovals", keep._id, { epoch: Math.max(keep.epoch, removal.epoch) }); await ctx.db.delete("crewRemovals", removal._id); }
+  }
+
+  const attempts = await ctx.db.query("crewInviteAttempts").withIndex("by_user", (q) => q.eq("userId", from)).unique();
+  if (attempts !== null) {
+    const keep = await ctx.db.query("crewInviteAttempts").withIndex("by_user", (q) => q.eq("userId", to)).unique();
+    if (keep === null) await ctx.db.patch("crewInviteAttempts", attempts._id, { userId: to });
+    else {
+      const hour = 60 * 60 * 1000, now = Date.now();
+      const active = [attempts, keep].filter((row) => now < row.windowStart + hour);
+      await ctx.db.patch("crewInviteAttempts", keep._id, { windowStart: Math.max(0, ...active.map((row) => row.windowStart)), count: Math.min(30, active.reduce((sum, row) => sum + row.count, 0)) });
+      await ctx.db.delete("crewInviteAttempts", attempts._id);
+    }
+  }
   const progress = await ctx.db.query("progress").withIndex("by_user", (q) => q.eq("userId", from)).unique();
   if (progress !== null) {
     const keep = await ctx.db.query("progress").withIndex("by_user", (q) => q.eq("userId", to)).unique();

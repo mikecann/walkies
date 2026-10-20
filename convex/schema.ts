@@ -59,10 +59,11 @@ export default defineSchema({
     name: v.string(),
     createdBy: v.id("users"),
     inviteCode: v.string(),
+    inviteEpoch: v.optional(v.number()),
     createdAt: v.number(),
     /** Monotonic server time for tile uploads, also used as the snapshot cursor. */
     tilesUpdatedAt: v.number(),
-  }).index("by_invite", ["inviteCode"]),
+  }).index("by_invite", ["inviteCode"]).index("by_creator", ["createdBy"]),
 
   crewMembers: defineTable({
     crewId: v.id("crews"),
@@ -72,6 +73,7 @@ export default defineSchema({
     sharing: v.union(v.literal("tiles"), v.literal("tilesAndTrail")),
     walksCount: v.boolean(),
     joinedAt: v.number(),
+    trailEpoch: v.optional(v.number()),
   }).index("by_crew_user", ["crewId", "userId"])
     .index("by_user", ["userId"]),
 
@@ -83,7 +85,9 @@ export default defineSchema({
     file: v.id("_storage"),
     addedBy: v.id("users"),
     updatedAt: v.number(),
-  }).index("by_crew_client", ["crewId", "clientId"]),
+    bounds: v.optional(v.object({ minQ: v.number(), maxQ: v.number(), minR: v.number(), maxR: v.number() })),
+    tileCount: v.optional(v.number()),
+  }).index("by_crew_client", ["crewId", "clientId"]).index("by_added", ["addedBy"]),
 
   crewTiles: defineTable({
     crewId: v.id("crews"),
@@ -96,7 +100,7 @@ export default defineSchema({
     /** Server ingestion time; an old walk must still appear in the next delta. */
     receivedAt: v.number(),
   }).index("by_crew_place_hex", ["crewId", "placeId", "q", "r"])
-    .index("by_crew_received", ["crewId", "receivedAt"]),
+    .index("by_crew_received", ["crewId", "receivedAt"]).index("by_user", ["by"]),
 
   crewTrails: defineTable({
     crewId: v.id("crews"),
@@ -105,14 +109,32 @@ export default defineSchema({
     /** Dedicated upload, already clipped by the phone to this crew's places. */
     file: v.id("_storage"),
     at: v.number(),
-  }).index("by_crew_user_walk", ["crewId", "userId", "walkClientId"]),
+    updatedAt: v.optional(v.number()),
+    memberId: v.optional(v.id("crewMembers")),
+    epoch: v.optional(v.number()),
+  }).index("by_crew_user_walk", ["crewId", "userId", "walkClientId"])
+    .index("by_user", ["userId"])
+    .index("by_cleanup", ["crewId", "userId", "memberId", "epoch"]),
 
   crewSecrets: defineTable({
     crewId: v.id("crews"),
     secretId: v.string(),
     by: v.id("users"),
     at: v.number(),
-  }).index("by_crew_secret", ["crewId", "secretId"]),
+  }).index("by_crew_secret", ["crewId", "secretId"]).index("by_user", ["by"]),
+
+  // Removal records survive automatic rotations. Only an explicit fresh invite
+  // invalidates them, so removing a second person cannot unblock the first.
+  crewRemovals: defineTable({ crewId: v.id("crews"), userId: v.id("users"), epoch: v.number() })
+    .index("by_crew_user", ["crewId", "userId"]).index("by_user", ["userId"]),
+
+  crewInviteAttempts: defineTable({ userId: v.id("users"), windowStart: v.number(), count: v.number() })
+    .index("by_user", ["userId"]),
+
+  // Only the server's upload action can register ownership, never a client
+  // claiming an arbitrary storage ID. Each file can be consumed once.
+  crewUploads: defineTable({ file: v.id("_storage"), userId: v.id("users"), used: v.boolean() })
+    .index("by_file", ["file"]).index("by_user", ["userId"]),
 
   // Shared OSM data. Missing files are short-lived fetching markers; osmId 0
   // is the shared Nominatim throttle, so every server request observes its limit.
