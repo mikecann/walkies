@@ -20,7 +20,7 @@ nonisolated struct CrewsAPI: Sendable {
             try c.encode(gridPlaceId, forKey: .gridPlaceId)
         }
     }
-    private struct Tiles: Encodable { var crewId: String; var placeId: String; var hexes: [Hex]; var at: Double }
+    private struct Tiles: Encodable { var crewId: String; var placeId: String; var hexes: [Hex]; var at: Double; var discoveredAt: [Double]? }
     private struct Trail: Encodable { var crewId: String; var walkClientId: String; var file: String; var updatedAt: Double }
     private struct Secret: Encodable { var secretId: String; var at: Double }
     private struct Secrets: Encodable { var crewId: String; var secrets: [Secret] }
@@ -53,7 +53,7 @@ nonisolated struct CrewsAPI: Sendable {
         try await client.action("crews:addCrewPlace", Place(crewId: id, clientId: city.id.uuidString, name: city.name, file: file, bounds: try CrewPlaceBounds(city: city), gridPlaceId: gridPlaceId))
     }
     func tiles(_ id: String, batch: CrewTileBatch) async throws {
-        let _: Int = try await client.mutation("crews:uploadCrewTiles", Tiles(crewId: id, placeId: batch.placeId, hexes: batch.hexes, at: batch.at))
+        let _: Int = try await client.mutation("crews:uploadCrewTiles", Tiles(crewId: id, placeId: batch.placeId, hexes: batch.hexes, at: batch.at, discoveredAt: batch.discoveredAt))
     }
     func trail(_ id: String, trail: CrewPendingTrail, file: String) async throws {
         let _: Nothing = try await client.action("crews:uploadCrewTrail", Trail(crewId: id, walkClientId: trail.walkClientId, file: file, updatedAt: trail.updatedAt))
@@ -76,6 +76,10 @@ nonisolated struct CrewsAPI: Sendable {
         snapshot.isFull = since == nil
         return snapshot
     }
+    func upload<T: Encodable & Sendable>(_ value: T) async throws -> String {
+        let data = try await Task.detached(priority: .utility) { try JSONEncoder().encode(value) }.value
+        return try await upload(data)
+    }
     func upload(_ data: Data) async throws -> String {
         guard data.count <= 2 * 1024 * 1024, let json = String(data: data, encoding: .utf8) else {
             throw ConvexError.coded("INVALID_ARGUMENT", "Crew files must be valid JSON under 2 MiB.")
@@ -90,7 +94,10 @@ nonisolated struct CrewSnapshot: Decodable, Sendable {
     struct Info: Decodable, Sendable { var crewId: String; var name: String; var createdBy: String; var inviteCode: String; var createdAt: Double }
     struct Place: Decodable, Sendable { var placeId: String; var clientId: String; var name: String; var updatedAt: Double; var url: String? }
     struct Tile: Decodable, Sendable { var placeId: String; var q: Int32; var r: Int32; var by: String; var at: Double }
-    struct Trail: Decodable, Sendable { var walkClientId: String; var url: String?; var by: String; var at: Double }
+    struct Trail: Decodable, Sendable {
+        var walkClientId: String; var url: String?; var by: String; var at: Double
+        var version: CrewTrail.Version { .init(by: by, walkClientId: walkClientId, at: at) }
+    }
     struct Secret: Decodable, Sendable { var secretId: String; var by: String; var at: Double }
     var crew: Info
     var members: [CrewMember]

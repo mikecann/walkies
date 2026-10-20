@@ -31,9 +31,9 @@ nonisolated struct Store {
         }
     }
 
-    func save(crews: [CrewMap]) {
+    func save(crews: [CrewMap], changedIDs: Set<String>? = nil) {
         try? FileManager.default.createDirectory(at: crewsDir, withIntermediateDirectories: true)
-        for crew in crews { write(crew, to: crewFile(crew.id)) }
+        for crew in crews where changedIDs?.contains(crew.id) != false { write(crew, to: crewFile(crew.id)) }
         write(crews.map(\.id), to: crewsURL)
         let keep = Set(crews.map { crewFile($0.id).lastPathComponent })
         for url in (try? FileManager.default.contentsOfDirectory(at: crewsDir, includingPropertiesForKeys: nil)) ?? [] where !keep.contains(url.lastPathComponent) {

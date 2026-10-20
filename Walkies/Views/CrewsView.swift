@@ -201,7 +201,10 @@ struct StartCrewView: View {
             do {
                 let api = try await model.crewAPI()
                 // Keep the id immediately. A failed first pull must not create a second crew on retry.
-                if createdID == nil { createdID = try await api.create(name: name, colour: colour, sharing: sharing).crewId }
+                if createdID == nil {
+                    createdID = try await api.create(name: name, colour: colour, sharing: sharing).crewId
+                    if let createdID { model.joinedCrew(createdID) }
+                }
                 if let id = createdID {
                     try await model.refreshCrew(id, api: api)
                     model.currentCrewID = id
@@ -217,23 +220,22 @@ struct JoinCrewView: View {
     @Environment(AppModel.self) private var model
     @Environment(SyncEngine.self) private var sync
     @Environment(\.dismiss) private var dismiss
-    @State private var code = ""
-    @State private var preview: CrewsAPI.Invite?
-    @State private var checkedCode = ""
+    @State private var draft = CrewInviteDraft()
+    @State private var checkTask: Task<Void, Never>?
     @State private var colour = CrewColour.blue.rawValue
     @State private var sharing = CrewSharing.tiles
     @State private var busy = false
     @State private var error: String?
-    private var normalisedCode: String { CrewInviteCode.normalise(code) }
+    private var normalisedCode: String { draft.normalisedCode }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Invite code") {
-                    TextField("ABCD2345", text: $code).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                    TextField("ABCD2345", text: $draft.code).textInputAutocapitalization(.characters).autocorrectionDisabled()
                     Button("Check code", action: check).disabled(!CrewInviteCode.isValid(normalisedCode) || busy)
                 }
-                if let preview, checkedCode == normalisedCode {
+                if let preview = draft.preview, draft.checkedCode == normalisedCode {
                     Section(preview.name) {
                         Text("Past walks in the crew's places count too.").font(.subheadline)
                     }
@@ -247,7 +249,12 @@ struct JoinCrewView: View {
             .scrollContentBackground(.hidden).background(Color.cream)
             .navigationTitle("Join a crew map").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(busy) } }
-            .onAppear { if code.isEmpty { code = initialCode }; if CrewInviteCode.isValid(normalisedCode) { check() } }
+            .onAppear { if draft.code.isEmpty { draft.replace(with: initialCode) }; if CrewInviteCode.isValid(normalisedCode) { check() } }
+            .onChange(of: initialCode) {
+                checkTask?.cancel()
+                draft.replace(with: initialCode)
+                if CrewInviteCode.isValid(normalisedCode) { check() }
+            }
         }
         .interactiveDismissDisabled(busy)
     }
@@ -256,16 +263,17 @@ struct JoinCrewView: View {
         busy = true
         error = nil
         let input = normalisedCode
-        preview = nil
-        checkedCode = ""
-        Task {
-            defer { busy = false }
+        draft.preview = nil
+        draft.checkedCode = ""
+        checkTask?.cancel()
+        checkTask = Task {
+            defer { if !Task.isCancelled { busy = false } }
             do {
                 let api = try await model.crewAPI()
-                preview = try await api.preview(input)
-                checkedCode = input
-                if preview == nil { error = "That code doesn't match a crew map." }
-            } catch { self.error = error.localizedDescription }
+                let result = try await api.preview(input)
+                guard !Task.isCancelled, draft.receive(result, for: input) else { return }
+                if result == nil { error = "That code doesn't match a crew map." }
+            } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         }
     }
 
@@ -277,6 +285,7 @@ struct JoinCrewView: View {
             do {
                 let api = try await model.crewAPI()
                 let id = try await api.join(code: normalisedCode, colour: colour, sharing: sharing)
+                model.joinedCrew(id)
                 try await model.refreshCrew(id, api: api)
                 model.currentCrewID = id
                 sync.schedule()
@@ -327,7 +336,7 @@ struct CrewSettingsView: View {
                             run { api in
                                 let replay = crew.you?.sharing != .tilesAndTrail && sharing == .tilesAndTrail
                                 try await api.update(.init(crewId: crewID, colour: colour, sharing: sharing, walksCount: walksCount))
-                                try await model.refreshCrew(crewID, api: api)
+                                model.setCrewPreferences(crewID, colour: colour, sharing: sharing, walksCount: walksCount)
                                 if replay { await model.replayCrewHistory(crewID, forceTrails: true) }
                             }
                         }

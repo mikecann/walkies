@@ -75,6 +75,32 @@ describe("crew maps", () => {
     expect((await alice.query(api.crews.crewSnapshot, { crewId })).places).toHaveLength(2);
   });
 
+  test("packed history batches retain per-tile discovery dates and validate their lengths", async () => {
+    const { alice, crewId, addPlace } = await setup();
+    const placeId = await addPlace();
+    await alice.mutation(api.crews.uploadCrewTiles, { crewId, placeId, hexes: [[0, 0], [1, 0]], at: 10, discoveredAt: [10, 20] });
+    expect((await alice.query(api.crews.crewSnapshot, { crewId })).tiles.map(({ q, at }) => ({ q, at }))).toEqual([{ q: 0, at: 10 }, { q: 1, at: 20 }]);
+    await expect(alice.mutation(api.crews.uploadCrewTiles, { crewId, placeId, hexes: [[2, 0]], at: 1, discoveredAt: [] })).rejects.toThrow("INVALID_ARGUMENT");
+    await expect(alice.mutation(api.crews.uploadCrewTiles, { crewId, placeId, hexes: [[2, 0]], at: 1, discoveredAt: [Infinity] })).rejects.toThrow("INVALID_ARGUMENT");
+  });
+
+  test("paused members cannot contribute tiles, secrets or trails, including queued retries", async () => {
+    const { alice, crewId, addPlace, file } = await setup();
+    const placeId = await addPlace();
+    const queued = await file();
+    await alice.mutation(api.crews.updateMembership, { crewId, walksCount: false });
+    await expect(alice.mutation(api.crews.uploadCrewTiles, { crewId, placeId, hexes: [[0, 0]], at: 1 })).rejects.toThrow("CONTRIBUTIONS_PAUSED");
+    await expect(alice.mutation(api.crews.recordCrewSecrets, { crewId, secrets: [{ secretId: "secret", at: 1 }] })).rejects.toThrow("CONTRIBUTIONS_PAUSED");
+    await expect(alice.action(api.crews.uploadCrewTrail, { crewId, walkClientId: "queued", updatedAt: 1, file: queued })).rejects.toThrow("CONTRIBUTIONS_PAUSED");
+    const snapshot = await alice.query(api.crews.crewSnapshot, { crewId });
+    expect(snapshot.tiles).toEqual([]);
+    expect(snapshot.secrets).toEqual([]);
+    expect(snapshot.trails).toEqual([]);
+    expect(await alice.run((ctx) => ctx.storage.getUrl(queued))).toBeNull();
+    await alice.mutation(api.crews.updateMembership, { crewId, walksCount: true });
+    expect(await alice.mutation(api.crews.uploadCrewTiles, { crewId, placeId, hexes: [[0, 0]], at: 2 })).toBe(1);
+  });
+
   test("all public functions require sign-in", async () => {
     const { t, crewId, inviteCode, addPlace, file, bobId } = await setup();
     const placeId = await addPlace();

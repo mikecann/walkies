@@ -94,3 +94,18 @@ struct CloudTests {
         #expect(old.tiles == [Hex(q: 0, r: 0)])
     }
 }
+
+extension CloudTests {
+    @Test func crewGeometryProjectsOnceIntoBoundedChunksWithoutLosingJoins() {
+        let points = (0..<300).map { Coordinate(lat: start.lat, lon: start.lon + Double($0) * 0.00001) }
+        let geometry = CrewTrailGeometry(route: CrewRoute(segments: [points]), colour: "teal")
+        #expect(geometry.colour == "teal")
+        #expect(geometry.chunks.count == 3)
+        #expect(geometry.chunks.allSatisfy { $0.points.count <= 128 })
+        #expect(geometry.chunks[0].points.last?.x == geometry.chunks[1].points.first?.x)
+        #expect(geometry.chunks[1].points.last?.x == geometry.chunks[2].points.first?.x)
+        #expect(geometry.chunks[0].points.first?.x == MKMapPoint(points[0].cl).x)
+        let distant = MKMapRect(x: 0, y: 0, width: 1, height: 1)
+        #expect(geometry.chunks.allSatisfy { !$0.bounds.intersects(distant) })
+    }
+}

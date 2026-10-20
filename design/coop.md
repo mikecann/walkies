@@ -23,7 +23,7 @@ Mike wants a shared map he and his dad fill in together by walking, alongside hi
 - The usual clouds, with tiles cleared by anyone. In the drag honeycomb, tiles are tinted with the colour of whoever uncovered them first.
 - Members who share their trail have their routes drawn in their colour.
 - The place chip says which map you're on; tapping it lets you switch between My map and your crew maps, start one, or join one.
-- The secrets book for a crew map shows secrets found by anyone, with "Found by Dad · 21 Oct". Secrets you find while walking still go in your own book too.
+- The secrets book for a crew map shows secrets found by anyone, with "Found by Dad · 21 Oct". Personal secrets unlock only when you cross their placement on My map. Crew finds stay in the crew book and never award personal secrets, shells or levels.
 - The end-of-walk celebration adds a line per crew map: "+12 tiles for Mike & Dad".
 - Neighbouring suburbs' "+" buttons add the suburb to whichever map you're looking at.
 
@@ -44,3 +44,5 @@ Every function checks the caller is a member, using `currentUserId`. A crew map'
 
 - Live dots of each other while walking.
 - A competitive mode (racing to 100%).
+
+Pausing contributions clears unsent tiles, secrets and routes. Places received while paused are marked replayed. Walks paused on this phone (including a walk spanning the pause) are excluded from later history replay; resuming does not backfill them.

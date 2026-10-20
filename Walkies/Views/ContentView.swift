@@ -100,6 +100,9 @@ struct ContentView: View {
         } message: { place in
             Text("\(place.kind.capitalized) · \(Format.area(place.area)). It'll go under the clouds next to your other places, and any walks you've already done there count.")
         }
+        .alert("Crew membership changed", isPresented: Binding(get: { model.crewNotice != nil }, set: { if !$0 { model.crewNotice = nil } })) {
+            Button("OK") { model.crewNotice = nil }
+        } message: { Text(model.crewNotice ?? "") }
         .alert("Couldn't add it", isPresented: Binding(get: { addingError != nil }, set: { if !$0 { addingError = nil } })) {
             Button("OK") {}
         } message: {

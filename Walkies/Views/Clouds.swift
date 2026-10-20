@@ -196,64 +196,53 @@ struct CloudLayer: View {
 
     static let revealTime = 1.6
 
-    private var crewTints: [CloudField.Tile: String] {
-        guard let crew = model.currentCrew else { return [:] }
-        var tints: [CloudField.Tile: String] = [:]
-        for place in crew.places {
-            for (hex, first) in place.first {
-                tints[CloudField.Tile(grid: place.city.grid, hex: hex)] = crew.colour(for: first.by)
-            }
-        }
-        return tints
-    }
-
     var body: some View {
-        TimelineView(.animation(minimumInterval: handle.moving ? nil : 1.0 / 30)) { timeline in
-            Canvas { context, size in
-                guard let map = handle.map, size.width > 0 else { return }
-                let now = timeline.date
-                let clock = reduceMotion ? 0 : now.timeIntervalSinceReferenceDate
-                let reveal = min(1, now.timeIntervalSince(changedAt) / Self.revealTime)
-                let projection = Projection(map: map)
-                let bounds = CGRect(origin: .zero, size: size)
-                if model.currentCrewID == nil { CosmeticTrail(points: handle.route, style: model.equipped[.trail], projection: projection, bounds: bounds, clock: clock)
-                    .draw(in: &context) }
-                CloudPainter(
-                    field: field, leaving: reveal < 1 ? leaving : [], reveal: reveal,
-                    fresh: Set(leaving.map(\.tile)), projection: projection,
-                    bounds: bounds, clock: clock, theme: model.equipped[.clouds]
-                )
-                .draw(in: &context)
-                if let crew = model.currentCrew {
-                    let routes = crew.trails.map { ($0.by, $0.route) }
-                        + crew.pendingTrails.map { (crew.you?.userId ?? "", $0.route) }
-                    for (by, route) in routes {
-                        var path = Path()
-                        for segment in route.segments where segment.count > 1 {
-                            path.move(to: projection.point(MKMapPoint(segment[0].cl)))
-                            for coordinate in segment.dropFirst() { path.addLine(to: projection.point(MKMapPoint(coordinate.cl))) }
-                        }
-                        context.stroke(path, with: .color(.white.opacity(0.85)), style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
-                        context.stroke(path, with: .color(Color.crew(crew.colour(for: by))), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+        // Resolve the cached dictionary once per model update, outside animation.
+        let tints = model.crewTints
+        ZStack {
+            TimelineView(.animation(minimumInterval: handle.moving ? nil : 1.0 / 30)) { timeline in
+                Canvas { context, size in
+                    guard let map = handle.map, size.width > 0 else { return }
+                    let now = timeline.date
+                    let clock = reduceMotion ? 0 : now.timeIntervalSinceReferenceDate
+                    let reveal = min(1, now.timeIntervalSince(changedAt) / Self.revealTime)
+                    let projection = Projection(map: map)
+                    let bounds = CGRect(origin: .zero, size: size)
+                    if model.currentCrewID == nil { CosmeticTrail(points: handle.route, style: model.equipped[.trail], projection: projection, bounds: bounds, clock: clock)
+                        .draw(in: &context) }
+                    CloudPainter(
+                        field: field, leaving: reveal < 1 ? leaving : [], reveal: reveal,
+                        fresh: Set(leaving.map(\.tile)), projection: projection,
+                        bounds: bounds, clock: clock, theme: model.equipped[.clouds]
+                    )
+                    .draw(in: &context)
+                }
+            }
+            // Keep the sprite blanket on the GPU without flattening the static
+            // trail layer into the blanket's animated drawing group.
+            .drawingGroup()
+            CrewTrailLayer(handle: handle, key: model.crewTrailKey).id(model.currentCrewID)
+            TimelineView(.animation(minimumInterval: handle.moving ? nil : 1.0 / 30)) { timeline in
+                Canvas { context, size in
+                    guard let map = handle.map, size.width > 0 else { return }
+                    let now = timeline.date
+                    let clock = reduceMotion ? 0 : now.timeIntervalSinceReferenceDate
+                    let projection = Projection(map: map)
+                    let honeycomb = handle.honeycomb(at: now)
+                    if honeycomb > 0 {
+                        Honeycomb(field: field, walkTiles: walkTiles, tints: tints, projection: projection, bounds: CGRect(origin: .zero, size: size))
+                            .draw(in: &context, opacity: honeycomb)
+                    }
+                    // Read inside the timeline so a ring expires even while the map is idle.
+                    if let ring = model.activeSpyglassRing {
+                        SpyglassRing(ring: ring, projection: projection).draw(in: &context)
+                    }
+                    if let location = map.userLocation.location {
+                        YouAreHere(marker: model.equipped[.marker], location: location, projection: projection, clock: clock).draw(in: &context)
                     }
                 }
-                let honeycomb = handle.honeycomb(at: now)
-                if honeycomb > 0 {
-                    Honeycomb(field: field, walkTiles: walkTiles, tints: crewTints, projection: projection, bounds: CGRect(origin: .zero, size: size))
-                        .draw(in: &context, opacity: honeycomb)
-                }
-                // Read inside the timeline so a ring expires even while the map is idle.
-                if let ring = model.activeSpyglassRing {
-                    SpyglassRing(ring: ring, projection: projection).draw(in: &context)
-                }
-                if let location = map.userLocation.location {
-                    YouAreHere(marker: model.equipped[.marker], location: location, projection: projection, clock: clock).draw(in: &context)
-                }
             }
         }
-        // Paint it on the GPU. On the CPU, zoomed in, the big overlapping cloud
-        // sprites were too much for older phones.
-        .drawingGroup()
         .allowsHitTesting(false)
         .onAppear { shown = (key, field) }
         .onChange(of: key) {
@@ -266,6 +255,75 @@ struct CloudLayer: View {
                 leaving = []
             }
             shown = (key, field)
+        }
+    }
+}
+
+/// Project route coordinates once when route versions change. Small chunks let
+/// the renderer reject offscreen history before touching individual points.
+nonisolated struct CrewTrailGeometry: Sendable {
+    struct Chunk: Sendable {
+        var points: [MKMapPoint]
+        var bounds: MKMapRect
+    }
+    var colour: String
+    var chunks: [Chunk]
+
+    init(route: CrewRoute, colour: String) {
+        self.colour = colour
+        chunks = route.segments.flatMap { segment -> [Chunk] in
+            let points = segment.map { MKMapPoint($0.cl) }
+            guard points.count > 1 else { return [] }
+            return stride(from: 0, to: points.count - 1, by: 127).map { start in
+                let run = Array(points[start..<min(start + 128, points.count)])
+                let xs = run.map(\.x), ys = run.map(\.y)
+                let minX = xs.min()!, minY = ys.min()!
+                return Chunk(points: run, bounds: MKMapRect(x: minX, y: minY, width: max(0.01, xs.max()! - minX), height: max(0.01, ys.max()! - minY)))
+            }
+        }
+    }
+}
+
+private struct CrewTrailLayer: View {
+    let handle: MapHandle
+    let key: String
+    @Environment(AppModel.self) private var model
+    @State private var geometry: [CrewTrailGeometry] = []
+
+    var body: some View {
+        // Idle clouds can drift without reprojecting or repainting 512 routes.
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !handle.moving)) { _ in
+            Canvas { context, size in
+                guard let map = handle.map, size.width > 0 else { return }
+                let projection = Projection(map: map)
+                let screen = CGRect(origin: .zero, size: size).insetBy(dx: -6, dy: -6)
+                let visible = map.visibleMapRect
+                for trail in geometry {
+                    var path = Path()
+                    for chunk in trail.chunks where chunk.bounds.intersects(visible) {
+                        for (a, b) in zip(chunk.points, chunk.points.dropFirst()) {
+                            guard let (from, to) = projection.segment(a, b),
+                                  TrailLayout.visibleRange(from: from, to: to, in: screen) != nil else { continue }
+                            if path.currentPoint != from { path.move(to: from) }
+                            path.addLine(to: to)
+                        }
+                    }
+                    guard !path.isEmpty else { continue }
+                    context.stroke(path, with: .color(.white.opacity(0.85)), style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
+                    context.stroke(path, with: .color(Color.crew(trail.colour)), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                }
+            }
+        }
+        .task(id: key) {
+            geometry = []
+            let snapshot = model.currentCrew
+            let built = await Task.detached(priority: .utility) {
+                guard let crew = snapshot else { return [CrewTrailGeometry]() }
+                return crew.trails.map { CrewTrailGeometry(route: $0.route, colour: crew.colour(for: $0.by)) }
+                    + crew.pendingTrails.map { CrewTrailGeometry(route: $0.route, colour: crew.colour(for: crew.you?.userId ?? "")) }
+            }.value
+            guard !Task.isCancelled else { return }
+            geometry = built
         }
     }
 }

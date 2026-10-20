@@ -29,6 +29,9 @@ final class Account {
     var isSignedIn = false
     func client() async -> ConvexClient? { nil }
 }
-nonisolated struct CloudField {
-    init(cities: [City]) {}
+// App-only theme values used by the real cloud renderer in this macOS target.
+extension Color {
+    static let walkiesOrange = Color(red: 1, green: 0.47, blue: 0.18)
+    static let badgeTeal = Color(red: 0.29, green: 0.58, blue: 0.58)
+    static let badgeGreen = Color(red: 0.62, green: 0.77, blue: 0.58)
 }

@@ -34,7 +34,7 @@ throwing, so transaction rollback cannot bypass the limit. Convex documents thes
 | `removeMember` | action | `{ crewId, userId }` | `null` |
 | `uploadFile` | action | `{ json: string }` | `Id<"_storage">` |
 | `addCrewPlace` | action | `{ crewId, clientId, name, file, bounds: { minQ, maxQ, minR, maxR }, gridPlaceId?: Id | null }` | `Id<"crewPlaces">` |
-| `uploadCrewTiles` | mutation | `{ crewId, placeId, hexes: [q, r][], at }` | Number of new tiles |
+| `uploadCrewTiles` | mutation | `{ crewId, placeId, hexes: [q, r][], at, discoveredAt?: number[] }` | Number of new tiles |
 | `uploadCrewTrail` | action | `{ crewId, walkClientId, file, updatedAt }` | `null` |
 | `recordCrewSecrets` | mutation | `{ crewId, secrets: { secretId, at }[] }` | `null` |
 | `crewSnapshot` | query | `{ crewId, since?: number, cursor?: TileCursor }` | Snapshot below |
@@ -220,3 +220,7 @@ npx tsc -p convex --noEmit
 In a restricted checkout with `node_modules` symlinked outside the writable tree,
 use `npm test -- --configLoader runner` to avoid Vite's temporary config write in
 that shared directory. Tests and typechecking do not deploy anything.
+
+`uploadCrewTiles` also accepts optional `discoveredAt: number[]`, one finite millisecond timestamp per `hexes` entry. Older clients can keep using the batch-wide `at`. The phone packs history replay into at most 400 tiles per place per batch, retaining exact first-discovery dates through `discoveredAt`.
+
+Paused members (`walksCount: false`) receive `CONTRIBUTIONS_PAUSED` from tile, secret and trail contribution endpoints. Existing shared data stays available. The phone clears unsent contribution queues on pause and excludes locally paused walks from future replay.

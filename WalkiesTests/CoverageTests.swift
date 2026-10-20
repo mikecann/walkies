@@ -203,7 +203,11 @@ struct PendingWalkTests {
 
     @Test func gpsWobbleAtHomeNeverGetsFarEnoughToCount() {
         // Bouncing 40 m either way for ten minutes adds up to kilometres of "distance".
-        let wobble = (0..<120).map { point($0 % 2 == 0 ? -40 : 40, Double($0 % 3) * 20 - 20, at: Double($0) * 5) }
+        let wobble = (0..<120).map { index in
+            let x: Double = index % 2 == 0 ? -40 : 40
+            let y = Double(index % 3) * 20 - 20
+            return point(x, y, at: Double(index) * 5)
+        }
         #expect(AppModel.displacement(of: wobble) < AppModel.autoWalkConfirmDistance)
     }
 

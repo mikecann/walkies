@@ -18,7 +18,7 @@ struct ProgressionSheet: View {
                 VStack(spacing: 0) {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
-                            ForEach(Section.allCases, id: \.self) { section in
+                            ForEach(Section.allCases.filter { $0 != .spyglass || model.currentCrewID == nil }, id: \.self) { section in
                                 Button(section.rawValue) {
                                     withAnimation { proxy.scrollTo(section, anchor: .top) }
                                 }
@@ -40,7 +40,7 @@ struct ProgressionSheet: View {
                                 questsSection(now: timeline.date).id(Section.quests)
                                 shopSection.id(Section.shop)
                                 wardrobeSection.id(Section.wardrobe)
-                                spyglassSection(now: timeline.date).id(Section.spyglass)
+                                if model.currentCrewID == nil { spyglassSection(now: timeline.date).id(Section.spyglass) }
                             }
                             .padding()
                         }
@@ -279,7 +279,7 @@ struct ProgressionSheet: View {
 
     private func spyglassSection(now: Date) -> some View {
         let ring = model.activeSpyglassRing
-        let hasSecret = model.selectedCity?.stickers?.keys.contains { model.foundStickers[$0] == nil } ?? false
+        let hasSecret = model.currentCrewID == nil && (model.selectedCity?.stickers?.keys.contains { model.foundStickers[$0] == nil } ?? false)
         return VStack(alignment: .leading, spacing: 12) {
             sectionTitle("Spyglass", art: "progress-spyglass")
             Text("\(model.spyglasses) left").font(.headline)

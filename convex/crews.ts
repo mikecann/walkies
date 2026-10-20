@@ -339,24 +339,26 @@ export const addPlaceRecord = internalMutation({
   },
 });
 export const uploadCrewTiles = mutation({
-  args: { crewId: v.id("crews"), placeId: v.id("crewPlaces"), hexes: v.array(v.array(v.number())), at: v.number() }, returns: v.number(),
-  handler: async (ctx, { crewId, placeId, hexes, at }) => {
-    const { userId, crew } = await requireMember(ctx, crewId);
+  args: { crewId: v.id("crews"), placeId: v.id("crewPlaces"), hexes: v.array(v.array(v.number())), at: v.number(), discoveredAt: v.optional(v.array(v.number())) }, returns: v.number(),
+  handler: async (ctx, { crewId, placeId, hexes, at, discoveredAt }) => {
+    const { userId, crew, member } = await requireMember(ctx, crewId);
+    if (!member.walksCount) fail("CONTRIBUTIONS_PAUSED", "Resume contributions before sharing discoveries.");
     const place = await ctx.db.get("crewPlaces", placeId);
     if (place === null || place.crewId !== crewId) fail("PLACE_NOT_FOUND", "This place is not part of this crew map.");
     finite(at, "Discovery time");
+    if (discoveredAt !== undefined && (discoveredAt.length !== hexes.length || discoveredAt.some((time) => !Number.isFinite(time)))) fail("INVALID_ARGUMENT", "Supply one finite discovery time per tile.");
     if (hexes.length > 1000 || hexes.some((h) => h.length !== 2 || !h.every(Number.isSafeInteger))) fail("INVALID_ARGUMENT", "Send at most 1,000 integer [q, r] pairs.");
     if (place.bounds === undefined || place.tileCount === undefined) fail("PLACE_BOUNDS_REQUIRED", "This legacy place needs verified grid bounds before accepting more tiles.");
     const { minQ, maxQ, minR, maxR } = place.bounds;
     if (hexes.some(([q, r]) => q < minQ || q > maxQ || r < minR || r > maxR)) fail("INVALID_ARGUMENT", "Tile coordinates must be inside the place's grid extent.");
     const receivedAt = Math.max(Date.now(), crew.tilesUpdatedAt + 1);
     let added = 0;
-    for (const [rawQ, rawR] of hexes) {
+    for (const [index, [rawQ, rawR]] of hexes.entries()) {
       const q = rawQ === 0 ? 0 : rawQ, r = rawR === 0 ? 0 : rawR;
       const existing = await ctx.db.query("crewTiles").withIndex("by_crew_place_hex", (index) => index.eq("crewId", crewId).eq("placeId", placeId).eq("q", q).eq("r", r)).unique();
       if (existing !== null) continue;
       if (place.tileCount + added >= MAX_TILES) fail("TILE_LIMIT", "This place has reached its 50,000 tile limit.");
-      await ctx.db.insert("crewTiles", { crewId, placeId, q, r, by: userId, at, receivedAt });
+      await ctx.db.insert("crewTiles", { crewId, placeId, q, r, by: userId, at: discoveredAt?.[index] ?? at, receivedAt });
       added++;
     }
     if (added > 0) {
@@ -378,6 +380,7 @@ export const uploadTrailRecord = internalMutation({
   args: trailArgs, returns: v.null(),
   handler: async (ctx, args) => {
     const { userId, member } = await requireMember(ctx, args.crewId);
+    if (!member.walksCount) fail("CONTRIBUTIONS_PAUSED", "Resume contributions before sharing a route.");
     if (member.sharing !== "tilesAndTrail") fail("TRAIL_SHARING_DISABLED", "Enable tiles and trail sharing before uploading a route.");
     const walkClientId = text(args.walkClientId, "Walk id", 200);
     finite(args.updatedAt, "Route version");
@@ -396,7 +399,8 @@ export const uploadTrailRecord = internalMutation({
 export const recordCrewSecrets = mutation({
   args: { crewId: v.id("crews"), secrets: v.array(v.object({ secretId: v.string(), at: v.number() })) }, returns: v.null(),
   handler: async (ctx, { crewId, secrets }) => {
-    const { userId } = await requireMember(ctx, crewId);
+    const { userId, member } = await requireMember(ctx, crewId);
+    if (!member.walksCount) fail("CONTRIBUTIONS_PAUSED", "Resume contributions before sharing discoveries.");
     if (secrets.length > 1000) fail("INVALID_ARGUMENT", "Send at most 1,000 secrets per call.");
     let count = (await ctx.db.query("crewSecrets").withIndex("by_crew_secret", (q) => q.eq("crewId", crewId)).take(MAX_SECRETS)).length;
     for (const secret of secrets) {
