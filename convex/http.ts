@@ -60,4 +60,39 @@ ${deepLink === null ? "<p>Ask someone in the team for a fresh link or check the 
   }),
 });
 
+// The home page and privacy policy Google's sign-in screen links to.
+function page(title: string, body: string) {
+  return new Response(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title}</title><style>
+body { margin: 0; background: #faf3e5; color: #343b30; font: 18px/1.6 system-ui, sans-serif; }
+main { max-width: 34rem; margin: 0 auto; padding: 3rem 1.5rem; } h1 { font-size: 2rem; line-height: 1.2; }
+a { color: #3c6549; }
+</style></head><body><main>${body}</main></body></html>`, {
+    status: 200,
+    headers: { "Content-Type": "text/html; charset=utf-8", "X-Content-Type-Options": "nosniff" },
+  });
+}
+
+http.route({
+  path: "/",
+  method: "GET",
+  handler: httpAction(async () => page("Walkies", `<h1>Walkies</h1>
+<p>Clear the clouds by walking. A small app by Mike Cann.</p>
+<p><a href="/privacy">Privacy</a></p>`)),
+});
+
+http.route({
+  path: "/privacy",
+  method: "GET",
+  handler: httpAction(async () => page("Walkies privacy", `<h1>Walkies privacy</h1>
+<p>Walkies is a small app made by Mike Cann for exploring your area on foot.</p>
+<p><strong>What it keeps:</strong> your name, email and profile photo from Google or Apple sign-in; the places you add; your walks (routes and times); the tiles and secrets you've uncovered; and your shells and rewards.</p>
+<p><strong>Where:</strong> on your phone, and in your Walkies account on Convex (the database it runs on), so it's backed up and syncs.</p>
+<p><strong>Location:</strong> Walkies uses your location in the background to record walks, and only to clear tiles on your map.</p>
+<p><strong>Who sees it:</strong> just you. If you join a team, your teammates see your name and photo. Nothing is sold or shared, and there are no ads or trackers.</p>
+<p><strong>Deleting your data:</strong> email <a href="mailto:mike.cann@gmail.com">mike.cann@gmail.com</a> and everything in your account is deleted.</p>
+<p><a href="/">Walkies</a></p>`)),
+});
+
 export default http;
