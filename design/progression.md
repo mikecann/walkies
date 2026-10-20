@@ -11,7 +11,7 @@ Everything you've earned is **worked out from what's already synced** (places, w
 | For | Shells |
 |---|---|
 | Each counting tile you've walked, in every place (`tiles ∩ visited`) | 1 |
-| Each secret found | 10 |
+| Each secret discovered while walking (overlap finds stay in the book without a reward) | 10 |
 | A place passing 10% / 25% / 50% / 75% / 90% / 100% | 20 / 30 / 50 / 75 / 100 / 250 |
 | Each day with a walk (≥ 300 m) that follows a day with a walk | 5 × (days in the streak − 1), at most 25 a day |
 | Each weekly quest completed | 40 |
@@ -26,7 +26,7 @@ Each level gained gives a **pick of three** (the agency): chosen from, in order 
 
 ## Weekly quests
 
-Three quests each week (Monday to Sunday, phone's local time), picked by a seed from the year and week number, from:
+Three quests each week (Monday to Sunday, Australia/Perth home time), picked by a seed from the year and week number, from:
 
 - Uncover 25 new tiles this week
 - Uncover 60 new tiles this week
@@ -35,7 +35,11 @@ Three quests each week (Monday to Sunday, phone's local time), picked by a seed 
 - Walk 5 km in total this week
 - Uncover tiles in a place other than the one you've uncovered most of
 
-Progress comes from that week's walks and secrets. Each completed quest gives 40 shells (counted in "earned" automatically). The celebration summary shows quest progress after each walk.
+Progress comes from that week's walks and secrets, plus dated tile credits from
+confirmed always-on outings too short to keep in history. Tile quests count each
+place's hex once, in the first week it was uncovered. For distance, recordings
+whose time ranges overlap by more than half the shorter range count once, keeping
+the longer distance. Each completed quest gives 40 shells (counted in "earned" automatically). The celebration summary shows quest progress after each walk.
 
 ## The shop
 

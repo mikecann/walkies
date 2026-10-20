@@ -31,15 +31,23 @@ final class SyncEngine {
     private(set) var waiting = 0
 
     @ObservationIgnored private let model: AppModel
-    @ObservationIgnored private let account: Account
-    @ObservationIgnored private let store = Store()
+    @ObservationIgnored private let isSignedIn: () -> Bool
+    @ObservationIgnored private let makeClient: () async -> ConvexClient?
+    @ObservationIgnored private let store: Store
     @ObservationIgnored private var state: SyncState
     @ObservationIgnored private var scheduled: Task<Void, Never>?
     @ObservationIgnored private var running = false
+    @ObservationIgnored private var pending = false
 
-    init(model: AppModel, account: Account) {
+    convenience init(model: AppModel, account: Account) {
+        self.init(model: model, store: Store(), isSignedIn: { account.isSignedIn }, makeClient: { await account.client() })
+    }
+
+    init(model: AppModel, store: Store, isSignedIn: @escaping () -> Bool, makeClient: @escaping () async -> ConvexClient?) {
         self.model = model
-        self.account = account
+        self.store = store
+        self.isSignedIn = isSignedIn
+        self.makeClient = makeClient
         state = store.loadSyncState()
         lastSynced = UserDefaults.standard.object(forKey: "lastSynced") as? Date
         countWaiting()
@@ -48,6 +56,10 @@ final class SyncEngine {
     /// Syncs a moment from now. Several requests in a row become one sync.
     func schedule() {
         countWaiting()
+        if running {
+            pending = true
+            return
+        }
         scheduled?.cancel()
         scheduled = Task {
             try? await Task.sleep(for: .seconds(2))
@@ -57,15 +69,24 @@ final class SyncEngine {
     }
 
     func sync() async {
-        guard !running, account.isSignedIn else { return }
+        guard isSignedIn() else { return }
+        if running {
+            pending = true
+            return
+        }
         running = true
+        pending = false
         status = .syncing
         defer {
             running = false
             countWaiting()
+            if pending {
+                pending = false
+                schedule()
+            }
         }
-        guard let client = await account.client() else {
-            status = account.isSignedIn ? .failed("Offline") : .idle
+        guard let client = await makeClient() else {
+            status = isSignedIn() ? .failed("Offline") : .idle
             return
         }
         do {
@@ -83,6 +104,7 @@ final class SyncEngine {
     /// Forgets what was sent, for signing out.
     func reset() {
         scheduled?.cancel()
+        pending = false
         state = SyncState()
         lastSynced = nil
         status = .idle
@@ -123,19 +145,19 @@ final class SyncEngine {
             save()
         }
 
-        let progress = try progressJSON(model.ledger)
-        if state.uploadedProgress != progress {
-            let _: Nothing = try await client.mutation("sync:saveProgress", ["ledger": progress])
-            state.uploadedProgress = progress
-            save()
-        }
-
         let secrets = model.foundStickers.filter { !state.uploadedSecrets.contains($0.key) }
         if !secrets.isEmpty {
             let _: Nothing = try await client.mutation("sync:saveSecrets", [
                 "secrets": secrets.map { SecretArgs(secretId: $0.key, foundAt: $0.value.ms) },
             ])
             state.uploadedSecrets.formUnion(secrets.keys)
+            save()
+        }
+        // A rejected ledger must never hold secret uploads behind it.
+        let progress = try progressJSON(model.ledger)
+        if state.uploadedProgress != progress {
+            let _: Nothing = try await client.mutation("sync:saveProgress", ["ledger": progress])
+            state.uploadedProgress = progress
             save()
         }
     }
@@ -151,41 +173,34 @@ final class SyncEngine {
     private func pull(_ client: ConvexClient) async throws {
         let snapshot: Snapshot = try await client.query("sync:snapshot")
 
-        // Cities first, so the walks that follow are replayed over them.
+        // Download first, then apply one model transaction. No partial-history
+        // reward menus are prepared while a fresh phone pulls its walks.
+        let progress = try snapshot.progress.map { try JSONDecoder().decode(Ledger.self, from: Data($0.utf8)) }
+        var cities: [City] = []
         for place in snapshot.places {
             guard let id = UUID(uuidString: place.clientId), let url = place.url.flatMap(URL.init(string:)) else { continue }
             let remoteChanged = Date(ms: place.updatedAt)
             if let local = model.cities.first(where: { $0.id == id }) {
                 if local.lastChanged >= remoteChanged { continue }
             } else if state.uploadedPlaces[id] != nil {
-                continue // Deleted on this phone since it was sent.
+                continue
             }
-            let city = try JSONDecoder().decode(City.self, from: await client.download(url))
-            model.addRemote(city)
-            state.uploadedPlaces[id] = max(state.uploadedPlaces[id] ?? .distantPast, city.lastChanged)
-            save()
+            cities.append(try JSONDecoder().decode(City.self, from: await client.download(url)))
         }
-
         let have = Set(model.walks.map(\.id))
+        var walks: [Walk] = []
         for remote in snapshot.walks {
-            guard let id = UUID(uuidString: remote.clientId), !have.contains(id) else { continue }
-            guard let url = remote.url.flatMap(URL.init(string:)) else { continue }
-            let walk = try JSONDecoder().decode(Walk.self, from: await client.download(url))
-            model.addRemote(walk)
-            state.uploadedWalks.insert(id)
-            save()
+            guard let id = UUID(uuidString: remote.clientId), !have.contains(id),
+                  let url = remote.url.flatMap(URL.init(string:)) else { continue }
+            walks.append(try JSONDecoder().decode(Walk.self, from: await client.download(url)))
         }
-
-        if let json = snapshot.progress {
-            let remote = try JSONDecoder().decode(Ledger.self, from: Data(json.utf8))
-            model.addRemoteProgress(remote)
-            state.uploadedProgress = try progressJSON(remote)
-        }
-
-        model.addRemoteSecrets(Dictionary(
-            snapshot.secrets.map { ($0.secretId, Date(ms: $0.foundAt)) },
-            uniquingKeysWith: min
+        await model.addRemote(cities: cities, walks: walks, progress: progress, secrets: Dictionary(
+            snapshot.secrets.map { ($0.secretId, Date(ms: $0.foundAt)) }, uniquingKeysWith: min
         ))
+        for city in cities { state.uploadedPlaces[city.id] = max(state.uploadedPlaces[city.id] ?? .distantPast, city.lastChanged) }
+        state.uploadedWalks.formUnion(walks.map(\.id))
+        if let progress { state.uploadedProgress = try progressJSON(progress) }
+
         state.uploadedSecrets.formUnion(snapshot.secrets.map(\.secretId))
         save()
     }

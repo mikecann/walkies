@@ -42,6 +42,10 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
     var newTiles = 0
     /// Counting tiles first uncovered on this walk, by place UUID. Nil on older saves.
     var newTilesByPlace: [String: Int]?
+    /// Fresh hex identities let migrations deduplicate against saved walks without GPS replay.
+    var newTileHexesByPlace: [String: Set<Hex>]?
+    /// Tiles added to the counting grid on this walk, for an exact pre-walk recap.
+    var addedTilesByPlace: [String: Set<Hex>]?
     /// Recorded by always-on mode rather than started with the button. Optional so
     /// walks saved before always-on existed still load.
     var automatic: Bool?
@@ -124,7 +128,32 @@ nonisolated struct CoverageTracer: Sendable {
         return points.reduce(0) { $0 + tracer.add($1).distance }
     }
 
+    #if DEBUG
+    /// Thread-safe test hook for catching route work that slips onto the main actor.
+    final class ReplayObserver: @unchecked Sendable {
+        private let lock = NSLock()
+        private var callback: (@Sendable ([TrackPoint]) -> Void)?
+
+        func set(_ callback: (@Sendable ([TrackPoint]) -> Void)?) {
+            lock.lock()
+            self.callback = callback
+            lock.unlock()
+        }
+
+        func record(_ points: [TrackPoint]) {
+            lock.lock()
+            let callback = callback
+            lock.unlock()
+            callback?(points)
+        }
+    }
+    static let replayObserver = ReplayObserver()
+    #endif
+
     static func samples(for points: [TrackPoint]) -> [Coordinate] {
+        #if DEBUG
+        replayObserver.record(points)
+        #endif
         var tracer = CoverageTracer()
         return points.flatMap { tracer.add($0).samples }
     }

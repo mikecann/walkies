@@ -69,22 +69,36 @@ final class AppModel {
 
     let tracker = LocationTracker()
     let motion = MotionMonitor()
-    @ObservationIgnored private let store = Store()
+    @ObservationIgnored private let store: Store
+    @ObservationIgnored private let servicesEnabled: Bool
     @ObservationIgnored private var tracer = CoverageTracer()
     @ObservationIgnored private var shapes: [UUID: BoundaryShape] = [:]
     @ObservationIgnored private var lastSave = Date.distantPast
     @ObservationIgnored private var startWhenAllowed = false
 
-    init() {
+    @ObservationIgnored private var historyTask: Task<Void, Never>?
+    private(set) var historyReady = false
+    @ObservationIgnored private var dataGeneration = 0
+    @ObservationIgnored private var recapRequest = 0
+    @ObservationIgnored private var historyRevision = 0
+    @ObservationIgnored private var placesRevision = 0
+    @ObservationIgnored private var batchingProgress = false
+    @ObservationIgnored private var countingTilesByPlace: [UUID: Int] = [:]
+    @ObservationIgnored private var questTileCounts: [UUID: [UUID: Int]] = [:]
+    @ObservationIgnored private var addedTiles: [UUID: Set<Hex>] = [:]
+
+    init(store: Store = Store(), servicesEnabled: Bool = true, alwaysOn: Bool? = nil) {
+        self.store = store
+        self.servicesEnabled = servicesEnabled
         ledger = store.loadProgress()
         cities = store.loadCities()
-        alwaysOn = UserDefaults.standard.bool(forKey: "alwaysOn")
+        self.alwaysOn = alwaysOn ?? UserDefaults.standard.bool(forKey: "alwaysOn")
 
         // A walk without an end means the app was killed mid-walk. If iOS has just
         // relaunched us during an always-on walk, carry on with it; otherwise close it off.
         for var walk in store.loadWalks() {
             if walk.endedAt == nil {
-                if alwaysOn, walk.isAutomatic, let last = walk.points.last,
+                if self.alwaysOn, walk.isAutomatic, let last = walk.points.last,
                    Date.now.timeIntervalSince1970 - last.time < Self.autoWalkGap {
                     activeWalk = walk
                     autoWalkPending = Self.displacement(of: walk.points) < Self.autoWalkConfirmDistance
@@ -102,11 +116,68 @@ final class AppModel {
 
         tracker.onLocation = { [weak self] in self?.record($0) }
         tracker.onAuthorizationChange = { [weak self] in self?.authorizationChanged() }
-        fetchMissingRoads()
+        if servicesEnabled { fetchMissingRoads() }
         foundStickers = store.loadStickers()
         placeStickers()
         refreshNeighbours()
+        rebuildCountingTiles()
+        // Migration can be sizeable on an older phone. Never trace saved routes
+        // while opening the app, reading balance or processing a location fix.
+        historyTask = Task { await prepareHistory() }
+    }
+
+    private func rebuildCountingTiles() {
+        countingTilesByPlace = Dictionary(cities.map { ($0.id, $0.tiles.intersection($0.visited).count) }, uniquingKeysWith: max)
+    }
+
+    func waitForHistory() async { await historyTask?.value }
+
+    private func prepareHistory() async {
+        let generation = dataGeneration
+        let savedWalks = walks
+        let savedCities = cities
+        var resumed = activeWalk
+        let resumedEnd = resumed?.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? .now
+        resumed?.endedAt = resumedEnd
+        let routes = savedWalks + (autoWalkPending ? [] : resumed.map { [$0] } ?? [])
+        let repaired = await Task.detached(priority: .utility) {
+            Progression.backfill(walks: routes, cities: savedCities)
+        }.value
+        guard generation == dataGeneration else { return }
+        installBackfill(repaired)
+        if let active = activeWalk, let recovered = repaired.walks.first(where: { $0.id == active.id }) {
+            for (key, hexes) in recovered.newTileHexesByPlace ?? active.newTileHexesByPlace ?? [:] {
+                if let id = UUID(uuidString: key) { freshTiles[id, default: []].formUnion(hexes) }
+            }
+            for (key, hexes) in active.addedTilesByPlace ?? [:] {
+                if let id = UUID(uuidString: key) { addedTiles[id, default: []].formUnion(hexes) }
+            }
+        }
+        if var active = activeWalk {
+            active.newTilesByPlace = freshTiles.countsByPlaceID
+            active.newTileHexesByPlace = Dictionary(uniqueKeysWithValues: freshTiles.map { ($0.key.uuidString, $0.value) })
+            activeWalk = active
+            store.save(active)
+        }
+        historyReady = true
+        historyRevision += 1
         refreshProgressPicks()
+    }
+
+    private func installBackfill(_ repaired: Progression.Backfill) {
+        let byID = Dictionary(repaired.walks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for i in walks.indices {
+            guard let recovered = byID[walks[i].id] else { continue }
+            if walks[i].newTilesByPlace != recovered.newTilesByPlace || walks[i].newTileHexesByPlace != recovered.newTileHexesByPlace {
+                walks[i].newTilesByPlace = recovered.newTilesByPlace
+                walks[i].newTileHexesByPlace = recovered.newTileHexesByPlace
+                store.save(walks[i])
+            }
+        }
+        questTileCounts = repaired.counts
+        for walk in walks where questTileCounts[walk.id] == nil {
+            questTileCounts[walk.id] = Dictionary((walk.newTilesByPlace ?? [:]).compactMap { key, n in UUID(uuidString: key).map { ($0, n) } }, uniquingKeysWith: +)
+        }
     }
 
     /// Cities saved before we kept road lines get them fetched again in the background.
@@ -146,42 +217,53 @@ final class AppModel {
 
     func startWalk() {
         guard activeWalk == nil, !alwaysOn else { return }
-        switch tracker.authorization {
-        case .notDetermined:
-            startWhenAllowed = true
-            tracker.requestPermissionIfNeeded()
-            return
-        case .denied, .restricted:
-            return
-        default:
-            break
+        if servicesEnabled {
+            switch tracker.authorization {
+            case .notDetermined:
+                startWhenAllowed = true
+                tracker.requestPermissionIfNeeded()
+                return
+            case .denied, .restricted:
+                return
+            default:
+                break
+            }
         }
-        activeWalk = Walk(startedAt: .now)
+        activeWalk = Walk(startedAt: .now, newTilesByPlace: [:], newTileHexesByPlace: [:], addedTilesByPlace: [:])
         activePath = []
         freshTiles = [:]
+        addedTiles = [:]
         tracer = CoverageTracer()
-        tracker.start()
-        Notifier.requestPermission()
+        if servicesEnabled {
+            tracker.start()
+            Notifier.requestPermission()
+        }
     }
 
     func endWalk() {
+        guard historyReady else {
+            Task { await historyTask?.value; if historyReady { endWalk() } }
+            return
+        }
         guard var walk = activeWalk else { return }
         tracker.stop()
         walk.endedAt = .now
-        let counts = freshTiles.countsByPlaceID
-        // A walk resumed after a restart may have fresh tiles from before launch.
-        // Leave counts nil then, so quest history replays its whole saved route.
-        walk.newTilesByPlace = counts.values.reduce(0, +) == walk.newTiles ? counts : nil
+        finishCoverage(of: &walk)
         let history = walks
         let fresh = freshTiles
+        let counts = questTileCounts
         walks.append(walk)
+        questTileCounts[walk.id] = fresh.mapValues(\.count)
+        historyRevision += 1
         activeWalk = nil
         activePath = []
         freshTiles = [:]
+        addedTiles = [:]
         tilesRevision += 1
         store.save(walk)
         store.save(cities)
-        recap = WalkRecap.make(walk: walk, cities: cities, fresh: fresh, found: foundStickers, history: history)
+        recapRequest += 1
+        recap = WalkRecap.make(walk: walk, cities: cities, fresh: fresh, found: foundStickers, history: history, counts: counts)
         refreshProgressPicks()
         requestSync?()
     }
@@ -190,18 +272,29 @@ final class AppModel {
     /// on it is worked out again: the tiles under its route that no earlier walk crossed.
     func replay(_ walk: Walk) {
         let earlier = walks.filter { $0.id != walk.id && $0.startedAt < walk.startedAt }
-        var fresh: [UUID: Set<Hex>] = [:]
-        var before = cities
-        for i in before.indices {
-            var city = before[i]
-            city.visited = []
-            let shape = shape(for: city)
-            for old in earlier { _ = city.visit(CoverageTracer.samples(for: old.points), within: shape) }
-            let new = city.visit(CoverageTracer.samples(for: walk.points), within: shape)
-            if !new.isEmpty { fresh[city.id] = new }
-            before[i] = city
+        let savedCities = cities
+        let counts = questTileCounts
+        let found = foundStickers
+        let generation = dataGeneration
+        recapRequest += 1
+        let request = recapRequest
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                var fresh: [UUID: Set<Hex>] = [:]
+                var before = savedCities
+                for i in before.indices {
+                    var city = before[i]
+                    city.visited = []
+                    let shape = city.shape()
+                    for old in earlier { _ = city.visit(CoverageTracer.samples(for: old.points), within: shape) }
+                    let new = city.visit(CoverageTracer.samples(for: walk.points), within: shape)
+                    if !new.isEmpty { fresh[city.id] = new }
+                    before[i] = city
+                }
+                return WalkRecap.make(walk: walk, cities: before, fresh: fresh, found: found, history: earlier, counts: counts)
+            }.value
+            if generation == dataGeneration, request == recapRequest { recap = result }
         }
-        recap = WalkRecap.make(walk: walk, cities: before, fresh: fresh, found: foundStickers, history: earlier)
     }
 
     /// The End walk button on an always-on walk: ends it now and plays the celebration.
@@ -209,8 +302,21 @@ final class AppModel {
         finishAutoWalk(byYou: true)
     }
 
+    private func finishCoverage(of walk: inout Walk) {
+        // Don't overwrite a resumed legacy walk while its worker is still finding
+        // the tiles uncovered before launch.
+        guard historyReady else { return }
+        walk.newTilesByPlace = freshTiles.countsByPlaceID
+        walk.newTileHexesByPlace = Dictionary(uniqueKeysWithValues: freshTiles.map { ($0.key.uuidString, $0.value) })
+        walk.addedTilesByPlace = Dictionary(uniqueKeysWithValues: addedTiles.map { ($0.key.uuidString, $0.value) })
+    }
+
     func saveNow() {
-        if let activeWalk { store.save(activeWalk) }
+        if var walk = activeWalk {
+            finishCoverage(of: &walk)
+            activeWalk = walk
+            store.save(walk)
+        }
         store.save(cities)
         lastSave = .now
     }
@@ -266,9 +372,10 @@ final class AppModel {
         let step = tracer.add(point)
         guard !step.samples.isEmpty else { return }
         if activeWalk == nil {
-            activeWalk = Walk(startedAt: Date(timeIntervalSince1970: point.time), automatic: true)
+            activeWalk = Walk(startedAt: Date(timeIntervalSince1970: point.time), newTilesByPlace: [:], newTileHexesByPlace: [:], addedTilesByPlace: [:], automatic: true)
             activePath = []
             freshTiles = [:]
+            addedTiles = [:]
             autoWalkPending = true
         }
         guard var walk = activeWalk else { return }
@@ -331,29 +438,50 @@ final class AppModel {
     /// - Parameter byYou: you pressed End walk, so it ends now and is kept however short.
     ///   Otherwise it ended by itself, at its last fix, and only counts if it's long enough.
     private func finishAutoWalk(byYou: Bool = false) {
+        guard historyReady else {
+            Task { await historyTask?.value; if historyReady { finishAutoWalk(byYou: byYou) } }
+            return
+        }
         guard var walk = activeWalk, walk.isAutomatic else { return }
         let wasPending = autoWalkPending
+        finishCoverage(of: &walk)
         let fresh = freshTiles
         autoWalkPending = false
         activeWalk = nil
         activePath = []
         freshTiles = [:]
+        addedTiles = [:]
         tracer = CoverageTracer()
         tilesRevision += 1
         walk.endedAt = byYou ? .now : walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt
         // Measure again by today's rules, so walks logged by older versions (or GPS
         // wobble at home) don't get kept as real ones. Tiles already uncovered stay.
         walk.distance = CoverageTracer.distance(for: walk.points)
-        let counts = fresh.countsByPlaceID
-        walk.newTilesByPlace = counts.values.reduce(0, +) == walk.newTiles ? counts : nil
         if !wasPending, byYou || walk.distance >= Self.minimumAutoWalk {
             let history = walks
+            let counts = questTileCounts
             walks.append(walk)
+            questTileCounts[walk.id] = fresh.mapValues(\.count)
+            historyRevision += 1
             store.save(walk)
             // If it ended by itself while the phone was in your pocket, this plays the
             // next time you open the app.
-            recap = WalkRecap.make(walk: walk, cities: cities, fresh: fresh, found: foundStickers, history: history)
+            recapRequest += 1
+            recap = WalkRecap.make(walk: walk, cities: cities, fresh: fresh, found: foundStickers, history: history, counts: counts)
         } else {
+            // Keep the dated tile credit even though this outing doesn't qualify
+            // for walk history, distance/day quests or streak rewards.
+            for i in cities.indices {
+                guard let hexes = fresh[cities[i].id], !hexes.isEmpty else { continue }
+                cities[i].tileCredits = (cities[i].tileCredits ?? []) + [
+                    City.TileCredit(id: walk.id, at: walk.startedAt, hexes: hexes)
+                ]
+                cities[i].updatedAt = .now
+            }
+            if !fresh.isEmpty {
+                questTileCounts[walk.id] = fresh.mapValues(\.count)
+                historyRevision += 1
+            }
             store.delete(walk)
         }
         store.save(cities)
@@ -396,15 +524,19 @@ final class AppModel {
         var uncovered = 0
         for i in cities.indices {
             var city = cities[i]
+            let originalTiles = city.tiles
             let fresh = city.visit(points, within: shape(for: city))
             guard !fresh.isEmpty else { continue }
             city.updatedAt = .now
             cities[i] = city
             freshTiles[city.id, default: []].formUnion(fresh)
+            addedTiles[city.id, default: []].formUnion(fresh.subtracting(originalTiles))
+            countingTilesByPlace[city.id, default: 0] += fresh.count
+            tilesRevision += 1
             uncovered += fresh.count
             unlockStickers(in: city, on: fresh, notify: true, popUp: true)
         }
-        if uncovered > 0 { tilesRevision += 1 }
+        if uncovered > 0 { refreshProgressPicks() }
         return uncovered
     }
 
@@ -466,7 +598,7 @@ final class AppModel {
         let ids = placed.filter { hexes.contains($0.value) && foundStickers[$0.key] == nil }.map(\.key)
         guard !ids.isEmpty else { return }
         let entries = ids.sorted().compactMap(LoreLibrary.entry(id:))
-        for entry in entries { foundStickers[entry.id] = .now }
+        for entry in entries { foundStickers[entry.id] = notify ? .now : Progression.exploredSecretDate }
         store.save(stickers: foundStickers)
         if popUp { stickerQueue.append(contentsOf: entries) }
         if notify { Notifier.stickersFound(entries) }
@@ -486,6 +618,8 @@ final class AppModel {
         var city = city
         city.updatedAt = .now
         cities.append(city)
+        placesRevision += 1
+        rebuildCountingTiles()
         shapes[city.id] = city.shape()
         select(city.id)
         placeStickers()
@@ -499,6 +633,8 @@ final class AppModel {
     func deleteCities(at offsets: IndexSet) {
         let removed = offsets.map { cities[$0].id }
         cities.remove(atOffsets: offsets)
+        placesRevision += 1
+        rebuildCountingTiles()
         for id in removed { shapes[id] = nil }
         if let selectedCityID, removed.contains(selectedCityID) {
             self.selectedCityID = cities.first?.id
@@ -549,7 +685,7 @@ final class AppModel {
     /// Nominatim point by point when it isn't. Tries again a few times if both fail,
     /// and again whenever the app comes back.
     func refreshNeighbours() {
-        guard !fetchingNearby, let wanted = box(around: Self.neighbourhood), let fetch = box(around: Self.neighbourhood * 2) else { return }
+        guard servicesEnabled, !fetchingNearby, let wanted = box(around: Self.neighbourhood), let fetch = box(around: Self.neighbourhood * 2) else { return }
         if let saved = store.loadNearby(),
            saved.covers(south: wanted.south, west: wanted.west, north: wanted.north, east: wanted.east),
            saved.fetchedAt.timeIntervalSinceNow > -30 * 24 * 3600 {
@@ -608,23 +744,28 @@ final class AppModel {
 
     private(set) var ledger = Ledger()
     @ObservationIgnored private var cachedProgression: (key: String, state: Progression.State)?
-    @ObservationIgnored private var cachedQuestTiles: (key: String, counts: [UUID: [UUID: Int]])?
+    #if DEBUG
+    @ObservationIgnored private(set) var progressionHistoryBuilds = 0
+    #endif
+    @ObservationIgnored private var cachedHistoricalRewards: (key: String, rewards: Progression.HistoricalRewards)?
 
-    /// Coverage and history only change at the revisions below. The day/time-zone
-    /// key also lets the quest sheet roll over without a GPS fix or a new walk.
     var progression: Progression.State {
-        let calendar = Calendar.current
+        let calendar = Progression.calendar
         let now = Date.now
-        let key = "\(tilesRevision)-\(cities.count)-\(walks.count)-\(secretsRevision)-\(calendar.identifier)-\(calendar.startOfDay(for: now))-\(calendar.timeZone.identifier)"
+        let day = calendar.startOfDay(for: now)
+        let historyKey = "\(historyRevision)-\(placesRevision)-\(secretsRevision)-\(day)"
+        let key = "\(tilesRevision)-\(historyKey)"
         if let cachedProgression, cachedProgression.key == key { return cachedProgression.state }
-        var inputs = Progression.Inputs(cities: cities, walks: walks, foundSecrets: foundStickers, now: now, calendar: calendar)
-        // Legacy route replay doesn't depend on newly visited tiles. Keep it across
-        // GPS fixes, and redo it only for a new walk or a changed counting grid.
-        let historyKey = "\(walks.count)-\(cities.map { "\($0.id):\($0.tiles.count)" })"
-        if cachedQuestTiles?.key != historyKey {
-            cachedQuestTiles = (historyKey, Progression.placeTileCounts(inputs))
+        var inputs = Progression.Inputs(cities: cities, walks: walks, foundSecrets: foundStickers, now: now, calendar: calendar,
+                                       newTilesByWalk: questTileCounts, countingTilesByPlace: countingTilesByPlace,
+                                       unrecordedTilesByPlace: activeWalk == nil ? [:] : freshTiles.mapValues(\.count))
+        if cachedHistoricalRewards?.key != historyKey {
+            #if DEBUG
+            progressionHistoryBuilds += 1
+            #endif
+            cachedHistoricalRewards = (historyKey, Progression.historicalRewards(inputs))
         }
-        inputs.newTilesByWalk = cachedQuestTiles?.counts
+        inputs.historicalRewards = cachedHistoricalRewards?.rewards
         let state = Progression.state(inputs)
         cachedProgression = (key, state)
         return state
@@ -636,7 +777,7 @@ final class AppModel {
     var level: Int { progression.level }
     var nextLevelXP: Int { progression.nextLevelXP }
     var xpToNextLevel: Int { nextLevelXP - xp }
-    var pendingPicks: [Int] { Progression.pendingLevels(xp: xp, ledger: ledger) }
+    var pendingPicks: [Int] { historyReady && !batchingProgress ? Progression.pendingLevels(xp: xp, ledger: ledger) : [] }
     var weeklyQuests: [Progression.Quest] { progression.quests }
     var owned: Set<String> { ledger.owned }
     var equipped: Ledger.Equipped { ledger.resolvedEquipment }
@@ -652,8 +793,10 @@ final class AppModel {
     /// False means unknown item, already owned, or too few shells. Concurrent
     /// offline spending is retained on merge; the resulting debt blocks purchases.
     @discardableResult func buy(_ itemID: String) -> Bool {
-        guard let item = Progression.item(itemID), !item.isFree,
+        guard historyReady, let item = Progression.item(itemID), !item.isFree,
               item.group == nil || !owned.contains(itemID), balance >= item.price else { return false }
+        // Include levels reached since the last refresh before ownership changes.
+        ledger.preparePicks(xp: xp)
         ledger.purchases.append(Ledger.Purchase(item: itemID, cost: item.price, at: Date.now.timeIntervalSince1970))
         if let group = item.group { setEquipped(itemID, group: group) }
         saveProgress()
@@ -693,13 +836,14 @@ final class AppModel {
     }
 
     private func refreshProgressPicks() {
+        guard historyReady, !batchingProgress else { return }
         let old = ledger
         ledger.preparePicks(xp: xp)
         if ledger != old { saveProgress() }
     }
 
     private func saveProgress() {
-        ledger.preparePicks(xp: xp)
+        if historyReady, !batchingProgress { ledger.preparePicks(xp: xp) }
         store.save(progress: ledger)
         requestSync?()
     }
@@ -710,7 +854,7 @@ final class AppModel {
         let merged = remote.merged(with: ledger)
         guard merged != ledger else { return }
         ledger = merged
-        ledger.preparePicks(xp: xp)
+        if historyReady, !batchingProgress { ledger.preparePicks(xp: xp) }
         store.save(progress: ledger)
         requestSync?()
     }
@@ -720,39 +864,83 @@ final class AppModel {
     /// Asks the sync engine to push and pull shortly. Set by the app delegate.
     @ObservationIgnored var requestSync: (() -> Void)?
 
-    /// A walk from the server that this phone hasn't got: keep it and replay it over every city.
-    func addRemote(_ walk: Walk) {
-        guard walk.endedAt != nil, walk.id != activeWalk?.id, !walks.contains(where: { $0.id == walk.id }) else { return }
-        walks.append(walk)
-        walks.sort { $0.startedAt < $1.startedAt }
-        store.save(walk)
-        replay([walk])
-    }
-
-    /// A city from the server. A new one is added; one this phone already has is merged,
-    /// keeping every tile either copy uncovered.
-    func addRemote(_ remote: City) {
-        if let i = cities.firstIndex(where: { $0.id == remote.id }) {
-            var city = cities[i]
-            let hadMore = !city.visited.isSubset(of: remote.visited)
-            city.visited.formUnion(remote.visited)
-            city.tiles.formUnion(remote.tiles)
-            city.roads = city.roads ?? remote.roads
-            city.stickers = (city.stickers ?? [:]).merging(remote.stickers ?? [:]) { _, theirs in theirs }
-            // If this phone had tiles the server didn't, send the merged copy back.
-            city.updatedAt = hadMore ? .now : max(city.lastChanged, remote.lastChanged)
-            cities[i] = city
-        } else {
-            cities.append(remote)
-            if selectedCityID == nil { select(remote.id) }
-            refreshNeighbours()
-            placeStickers()
+    /// Apply a pull as one batch. Merge ownership before preparing any level menu,
+    /// and do coverage recovery on a worker rather than once per downloaded walk.
+    func addRemote(cities remoteCities: [City], walks remoteWalks: [Walk], progress: Ledger?, secrets: [String: Date]) async {
+        await historyTask?.value
+        let generation = dataGeneration
+        batchingProgress = true
+        defer {
+            batchingProgress = false
+            if generation == dataGeneration { refreshProgressPicks() }
         }
-        shapes[remote.id] = nil
-        replay(walks, onlyCity: remote.id)
+        if let progress { addRemoteProgress(progress) }
+        addRemoteSecrets(secrets)
+        var changedCities: Set<UUID> = []
+        for remote in remoteCities {
+            changedCities.insert(remote.id)
+            if let i = cities.firstIndex(where: { $0.id == remote.id }) {
+                var city = cities[i]
+                let localCredits = Set((city.tileCredits ?? []).map(\.id))
+                let remoteCredits = Set((remote.tileCredits ?? []).map(\.id))
+                let hadMore = !city.visited.isSubset(of: remote.visited) || !localCredits.isSubset(of: remoteCredits)
+                city.mergeTileCredits(from: remote)
+                city.visited.formUnion(remote.visited)
+                city.tiles.formUnion(remote.tiles)
+                city.roads = city.roads ?? remote.roads
+                city.stickers = (city.stickers ?? [:]).merging(remote.stickers ?? [:]) { _, theirs in theirs }
+                city.updatedAt = hadMore ? .now : max(city.lastChanged, remote.lastChanged)
+                cities[i] = city
+            } else {
+                cities.append(remote)
+                if selectedCityID == nil { select(remote.id) }
+            }
+            shapes[remote.id] = nil
+        }
+        let have = Set(walks.map(\.id))
+        let missing = remoteWalks.filter { $0.endedAt != nil && $0.id != activeWalk?.id && !have.contains($0.id) }
+        walks.append(contentsOf: missing)
+        walks.sort { $0.startedAt < $1.startedAt }
+        for walk in missing { store.save(walk) }
+        guard !changedCities.isEmpty || !missing.isEmpty else { return }
+        placesRevision += 1
+        tilesRevision += 1
+        rebuildCountingTiles()
+        let snapshotCities = cities
+        let snapshotWalks = walks
+        let newIDs = Set(missing.map(\.id))
+        let restored = await Task.detached(priority: .utility) {
+            var restoredCities = snapshotCities
+            let shapes = restoredCities.map { $0.shape() }
+            for walk in snapshotWalks {
+                let targets = restoredCities.indices.filter { changedCities.contains(restoredCities[$0].id) || newIDs.contains(walk.id) }
+                guard !targets.isEmpty else { continue }
+                let samples = CoverageTracer.samples(for: walk.points)
+                for i in targets { _ = restoredCities[i].visit(samples, within: shapes[i]) }
+            }
+            return (restoredCities, Progression.backfill(walks: snapshotWalks, cities: restoredCities))
+        }.value
+        guard generation == dataGeneration else { return }
+        // Location fixes can arrive while the worker runs. Union its result so no
+        // live coverage is overwritten by the snapshot it started with.
+        for restoredCity in restored.0 {
+            guard let i = cities.firstIndex(where: { $0.id == restoredCity.id }) else { continue }
+            cities[i].visited.formUnion(restoredCity.visited)
+            cities[i].tiles.formUnion(restoredCity.tiles)
+        }
+        installBackfill(restored.1)
+        historyRevision += 1
+        placesRevision += 1
+        tilesRevision += 1
+        rebuildCountingTiles()
+        placeStickers()
+        for city in cities { unlockStickers(in: city, on: city.visited, notify: false, popUp: false) }
+        store.save(cities)
+        refreshNeighbours()
     }
 
-    /// Secrets found on another phone, keeping the earliest time each was found.
+    /// A genuine discovery beats the explored-coverage sentinel; otherwise the
+    /// earliest discovery wins, matching the server's existing secret merge.
     func addRemoteSecrets(_ remote: [String: Date]) {
         var changed = false
         for (id, date) in remote where foundStickers[id].map({ date < $0 }) ?? true {
@@ -765,24 +953,12 @@ final class AppModel {
         }
     }
 
-    /// Runs walks over the cities again, quietly unlocking any secrets they pass.
-    private func replay(_ walks: [Walk], onlyCity: UUID? = nil) {
-        for i in cities.indices where onlyCity == nil || cities[i].id == onlyCity {
-            var city = cities[i]
-            let shape = shape(for: city)
-            for walk in walks {
-                _ = city.visit(CoverageTracer.samples(for: walk.points), within: shape)
-            }
-            cities[i] = city
-            unlockStickers(in: city, on: city.visited, notify: false, popUp: false)
-        }
-        tilesRevision += 1
-        store.save(cities)
-        refreshProgressPicks()
-    }
-
     /// Forgets everything on this phone, for signing out. It's all in the account.
     func wipeLocalData() {
+        dataGeneration += 1
+        historyTask?.cancel()
+        historyTask = nil
+        historyReady = true
         alwaysOn = false
         setupDone = false
         tracker.stop()
@@ -796,7 +972,12 @@ final class AppModel {
         foundStickers = [:]
         ledger = Ledger()
         cachedProgression = nil
-        cachedQuestTiles = nil
+        cachedHistoricalRewards = nil
+        questTileCounts = [:]
+        countingTilesByPlace = [:]
+        addedTiles = [:]
+        historyRevision += 1
+        placesRevision += 1
         stickerQueue = []
         nearby = []
         selectedCityID = nil

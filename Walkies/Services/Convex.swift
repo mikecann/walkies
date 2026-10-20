@@ -30,6 +30,7 @@ nonisolated enum ConvexError: LocalizedError {
 /// sync needs, and it keeps working when iOS gives the app a few seconds in the background.
 nonisolated struct ConvexClient: Sendable {
     var token: String?
+    var session: URLSession = .shared
 
     func query<Result: Decodable>(_ path: String, _ args: some Encodable = Empty()) async throws -> Result {
         try await call("query", path, args)
@@ -45,13 +46,13 @@ nonisolated struct ConvexClient: Sendable {
         request.httpMethod = "POST"
         request.httpBody = data
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let (body, response) = try await URLSession.shared.data(for: request)
+        let (body, response) = try await session.data(for: request)
         try Self.check(response)
         return try JSONDecoder().decode(Uploaded.self, from: body).storageId
     }
 
     func download(_ url: URL) async throws -> Data {
-        let (body, response) = try await URLSession.shared.data(from: url)
+        let (body, response) = try await session.data(from: url)
         try Self.check(response)
         return body
     }
@@ -82,7 +83,7 @@ nonisolated struct ConvexClient: Sendable {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         request.httpBody = try JSONEncoder().encode(Request(path: path, args: args))
-        let (body, response) = try await URLSession.shared.data(for: request)
+        let (body, response) = try await session.data(for: request)
         guard let envelope = try? JSONDecoder().decode(Envelope<Result>.self, from: body) else {
             try Self.check(response)
             throw ConvexError.badResponse((response as? HTTPURLResponse)?.statusCode ?? 0)

@@ -48,9 +48,32 @@ nonisolated enum Progression {
         var walks: [Walk] = []
         var foundSecrets: [String: Date] = [:]
         var now: Date = .now
-        var calendar: Calendar = .current
+        var calendar: Calendar = Progression.calendar
         /// Optional cached route analysis; independent of visited tiles and spending.
         var newTilesByWalk: [UUID: [UUID: Int]]?
+        /// Avoid intersecting every tile set on each GPS fix.
+        var countingTilesByPlace: [UUID: Int]?
+        /// A live walk isn't in history yet. Its tiles must not move the favourite.
+        var unrecordedTilesByPlace: [UUID: Int] = [:]
+        var historicalRewards: HistoricalRewards?
+    }
+
+    /// History always uses home time, including streak days and the current week.
+    /// This keeps lifetime XP stable when the phone travels.
+    static var calendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Australia/Perth")!
+        return calendar
+    }
+
+    /// Found in previously explored coverage, rather than discovered on a walk.
+    /// A future sentinel travels through the existing secret wire format. A real
+    /// discovery wins the server's earliest-date merge on another phone.
+    static let exploredSecretDate = Date.distantFuture
+
+    struct HistoricalRewards: Sendable {
+        var streaks: Int
+        var questsByWeek: [Week: Int]
     }
 
     struct Earned: Equatable, Sendable {
@@ -191,71 +214,191 @@ nonisolated enum Progression {
     }
 
     static func questProgress(_ kind: QuestKind, week: Week, inputs: Inputs) -> Double {
-        questProgress(kind, week: week, inputs: inputs, counts: kind == .anotherPlace ? (inputs.newTilesByWalk ?? placeTileCounts(inputs)) : [:])
+        questProgress(kind, week: week, inputs: inputs, counts: inputs.newTilesByWalk ?? placeTileCounts(inputs))
     }
 
     private static func questProgress(_ kind: QuestKind, week: Week, inputs: Inputs, counts: [UUID: [UUID: Int]]) -> Double {
         let walks = inputs.walks.filter { $0.endedAt != nil && $0.startedAt >= week.start && $0.startedAt < week.end && $0.startedAt <= inputs.now }
+        let coverage = tileRecords(walks: inputs.walks, cities: inputs.cities)
+        let weeklyCoverage = coverage.filter { $0.endedAt != nil && $0.startedAt >= week.start && $0.startedAt < week.end && $0.startedAt <= inputs.now }
         switch kind {
         case .tiles25, .tiles60:
-            return Double(walks.reduce(0) { $0 + $1.newTiles })
+            return Double(weeklyCoverage.reduce(0) { total, walk in
+                total + (counts[walk.id] ?? [:]).values.reduce(0, +)
+            })
         case .secret:
             return Double(inputs.foundSecrets.values.filter { $0 >= week.start && $0 < week.end && $0 <= inputs.now }.count)
         case .days3:
             return Double(Set(walks.map { inputs.calendar.startOfDay(for: $0.startedAt) }).count)
         case .metres5000:
-            return walks.reduce(0) { $0 + $1.distance }
+            // Deduplicate before filtering the week, including an outing recorded
+            // on either side of midnight on Monday by two phones.
+            return distinctOutings(inputs.walks.filter { $0.endedAt != nil && $0.startedAt <= inputs.now })
+                .filter { $0.startedAt >= week.start && $0.startedAt < week.end }
+                .reduce(0) { $0 + $1.distance }
         case .anotherPlace:
             // Freeze the favourite at the start of the week. Otherwise finding tiles
             // elsewhere could change the favourite and undo a completed quest.
-            var before = Dictionary(inputs.cities.map { ($0.id, $0.visited.intersection($0.tiles).count) }, uniquingKeysWith: max)
-            for walk in inputs.walks where walk.startedAt >= week.start {
+            var before = inputs.countingTilesByPlace ?? Dictionary(inputs.cities.map { ($0.id, $0.visited.intersection($0.tiles).count) }, uniquingKeysWith: max)
+            for (id, n) in inputs.unrecordedTilesByPlace { before[id, default: 0] -= n }
+            for walk in coverage where walk.startedAt >= week.start {
                 for (id, n) in counts[walk.id] ?? [:] { before[id, default: 0] -= n }
             }
             let favourite = inputs.cities.sorted {
                 let a = max(0, before[$0.id, default: 0]), b = max(0, before[$1.id, default: 0])
                 return a == b ? $0.id.uuidString < $1.id.uuidString : a > b
             }.first?.id
-            return walks.contains { walk in
+            return weeklyCoverage.contains { walk in
                 (counts[walk.id] ?? [:]).contains { $0.key != favourite && $0.value > 0 }
             } ? 1 : 0
         }
     }
 
-    /// New walks keep their per-place counts. For older saves, replay their accepted
-    /// route over today's counting tiles once, in date order, to recover the counts.
-    static func placeTileCounts(_ inputs: Inputs) -> [UUID: [UUID: Int]] {
-        if inputs.walks.allSatisfy({ $0.newTilesByPlace != nil }) {
-            return Dictionary(inputs.walks.map { walk in
-                (walk.id, Dictionary((walk.newTilesByPlace ?? [:]).compactMap { key, value in
-                    UUID(uuidString: key).map { ($0, value) }
-                }, uniquingKeysWith: +))
-            }, uniquingKeysWith: { first, _ in first })
+    /// When two devices record most of the same outing, use the longer distance.
+    /// More than half the shorter time range must overlap. Exactly half stays separate.
+    static func distinctOutings(_ walks: [Walk]) -> [Walk] {
+        let ordered = walks.sorted {
+            if $0.distance != $1.distance { return $0.distance > $1.distance }
+            if $0.startedAt != $1.startedAt { return $0.startedAt < $1.startedAt }
+            return $0.id.uuidString < $1.id.uuidString
         }
+        func overlaps(_ walk: Walk, _ other: Walk) -> Bool {
+            if walk.id == other.id { return true }
+            guard let end = walk.endedAt, let otherEnd = other.endedAt else { return false }
+            let duration = min(end.timeIntervalSince(walk.startedAt), otherEnd.timeIntervalSince(other.startedAt))
+            let overlap = min(end, otherEnd).timeIntervalSince(max(walk.startedAt, other.startedAt))
+            return duration > 0 && overlap > duration / 2
+        }
+        var kept: [Walk] = []
+        var grouped: Set<Int> = []
+        for index in ordered.indices where !grouped.contains(index) {
+            // The first member has the greatest distance. Follow all overlaps so
+            // a third phone cannot add the same outing through a shorter bridge.
+            kept.append(ordered[index])
+            grouped.insert(index)
+            var pending = [index]
+            while let member = pending.popLast() {
+                for candidate in ordered.indices where !grouped.contains(candidate) {
+                    guard overlaps(ordered[member], ordered[candidate]) else { continue }
+                    grouped.insert(candidate)
+                    pending.append(candidate)
+                }
+            }
+        }
+        return kept
+    }
+
+    /// Tile-only outings share the existing coverage calculation, but never enter
+    /// walk history or the distance, day and streak calculations.
+    private static func tileRecords(walks: [Walk], cities: [City]) -> [Walk] {
+        var credits: [UUID: Walk] = [:]
+        let savedIDs = Set(walks.map(\.id))
+        for city in cities {
+            for credit in city.tileCredits ?? [] where !savedIDs.contains(credit.id) {
+                var record = credits[credit.id] ?? Walk(id: credit.id, startedAt: credit.at, endedAt: credit.at,
+                                                      newTilesByPlace: [:], newTileHexesByPlace: [:])
+                record.newTileHexesByPlace?[city.id.uuidString, default: []].formUnion(credit.hexes)
+                record.newTilesByPlace?[city.id.uuidString] = record.newTileHexesByPlace?[city.id.uuidString]?.count
+                credits[credit.id] = record
+            }
+        }
+        return walks + credits.values
+    }
+
+    static func placeTileCounts(_ inputs: Inputs, onReplay: (UUID) -> Void = { _ in }) -> [UUID: [UUID: Int]] {
+        backfill(walks: inputs.walks, cities: inputs.cities, onReplay: onReplay).counts
+    }
+
+    struct Backfill: Sendable {
+        var walks: [Walk]
+        /// Effective first-discovery counts, deduplicated across devices and credits.
+        /// The original per-walk records are retained for future merges.
+        var counts: [UUID: [UUID: Int]]
+    }
+
+    /// Run on a worker at load or after a batch download, then persist recovered
+    /// identities. Ordinary state/recap reads use the returned counts without replay.
+    static func backfill(walks: [Walk], cities: [City], onReplay: (UUID) -> Void = { _ in }) -> Backfill {
+        let ordered = tileRecords(walks: walks, cities: cities).filter { $0.endedAt != nil }.sorted {
+            $0.startedAt == $1.startedAt ? $0.id.uuidString < $1.id.uuidString : $0.startedAt < $1.startedAt
+        }
+        let savedIDs = Set(walks.map(\.id))
         var seen: [UUID: Set<Hex>] = [:]
         var result: [UUID: [UUID: Int]] = [:]
-        for walk in inputs.walks.filter({ $0.endedAt != nil }).sorted(by: {
-            $0.startedAt == $1.startedAt ? $0.id.uuidString < $1.id.uuidString : $0.startedAt < $1.startedAt
-        }) {
-            if let saved = walk.newTilesByPlace {
-                result[walk.id] = Dictionary(saved.compactMap { key, value in UUID(uuidString: key).map { ($0, value) } }, uniquingKeysWith: +)
+        var repaired: [Walk] = []
+        for original in ordered {
+            var walk = original
+            if walk.newTileHexesByPlace == nil, walk.newTilesByPlace == nil || !walk.points.isEmpty {
+                onReplay(walk.id)
+                let samples = CoverageTracer.samples(for: walk.points)
+                var freshByPlace: [String: Set<Hex>] = [:]
+                for city in cities {
+                    let tiles = Set(samples.map(city.grid.hex(containing:))).intersection(city.tiles)
+                    freshByPlace[city.id.uuidString] = tiles.subtracting(seen[city.id] ?? [])
+                }
+                walk.newTileHexesByPlace = freshByPlace
             }
-            let samples = CoverageTracer.samples(for: walk.points)
-            for city in inputs.cities {
-                let tiles = Set(samples.map(city.grid.hex(containing:))).intersection(city.tiles)
-                let fresh = tiles.subtracting(seen[city.id] ?? [])
-                if walk.newTilesByPlace == nil { result[walk.id, default: [:]][city.id] = fresh.count }
-                seen[city.id, default: []].formUnion(tiles)
+            if walk.newTilesByPlace == nil, let hexes = walk.newTileHexesByPlace {
+                walk.newTilesByPlace = hexes.mapValues(\.count)
             }
+            if let hexes = walk.newTileHexesByPlace {
+                var counts: [UUID: Int] = [:]
+                for (key, tiles) in hexes {
+                    guard let id = UUID(uuidString: key) else { continue }
+                    counts[id] = tiles.subtracting(seen[id] ?? []).count
+                    seen[id, default: []].formUnion(tiles)
+                }
+                result[walk.id] = counts
+            } else {
+                // Very old count-only records without route data cannot recover
+                // identities. Retain their saved credit rather than deleting it.
+                result[walk.id] = Dictionary((walk.newTilesByPlace ?? [:]).compactMap { key, n in
+                    UUID(uuidString: key).map { ($0, n) }
+                }, uniquingKeysWith: +)
+            }
+            if savedIDs.contains(walk.id) { repaired.append(walk) }
         }
-        return result
+        return Backfill(walks: repaired, counts: result)
+    }
+
+    /// Past weeks and streaks are independent of GPS tile revisions. AppModel
+    /// retains this until walks, secrets, places or the home day change.
+    static func historicalRewards(_ inputs: Inputs) -> HistoricalRewards {
+        var inputs = inputs
+        if inputs.countingTilesByPlace == nil {
+            inputs.countingTilesByPlace = Dictionary(inputs.cities.map { ($0.id, $0.tiles.intersection($0.visited).count) }, uniquingKeysWith: max)
+        }
+        let walks = inputs.walks.filter { $0.endedAt != nil && $0.startedAt <= inputs.now }
+        let days = Set(walks.filter { $0.distance >= 300 }.map { inputs.calendar.startOfDay(for: $0.startedAt) }).sorted()
+        var previous: Date?
+        var streak = 0
+        var streaks = 0
+        for day in days {
+            streak = previous.flatMap { inputs.calendar.dateComponents([.day], from: $0, to: day).day } == 1 ? streak + 1 : 1
+            streaks += min(25, 5 * (streak - 1))
+            previous = day
+        }
+        let current = week(containing: inputs.now, calendar: inputs.calendar)
+        let weeks = Set(tileRecords(walks: walks, cities: inputs.cities).filter { $0.startedAt <= inputs.now }.map { week(containing: $0.startedAt, calendar: inputs.calendar) }
+            + inputs.foundSecrets.values.filter { $0 <= inputs.now }.map { week(containing: $0, calendar: inputs.calendar) })
+        let counts = inputs.newTilesByWalk ?? placeTileCounts(inputs)
+        var rewards: [Week: Int] = [:]
+        for week in weeks where week != current {
+            rewards[week] = quests(for: week, inputs: inputs, counts: counts).filter(\.isComplete).count * 40
+        }
+        return HistoricalRewards(streaks: streaks, questsByWeek: rewards)
     }
 
     static func state(_ inputs: Inputs) -> State {
+        var inputs = inputs
+        if inputs.newTilesByWalk == nil { inputs.newTilesByWalk = placeTileCounts(inputs) }
+        if inputs.countingTilesByPlace == nil {
+            inputs.countingTilesByPlace = Dictionary(inputs.cities.map { ($0.id, $0.tiles.intersection($0.visited).count) }, uniquingKeysWith: max)
+        }
         var earned = Earned()
         let milestones: [(Double, Int)] = [(0.1, 20), (0.25, 30), (0.5, 50), (0.75, 75), (0.9, 100), (1, 250)]
         for city in inputs.cities {
-            let count = city.tiles.intersection(city.visited).count
+            let count = inputs.countingTilesByPlace?[city.id] ?? 0
             earned.tiles += count
             if !city.tiles.isEmpty {
                 let fraction = Double(count) / Double(city.tiles.count)
@@ -263,26 +406,20 @@ nonisolated enum Progression {
             }
         }
         earned.secrets = inputs.foundSecrets.values.filter { $0 <= inputs.now }.count * 10
-        let walks = inputs.walks.filter { $0.endedAt != nil && $0.startedAt <= inputs.now }
-        let days = Set(walks.filter { $0.distance >= 300 }.map { inputs.calendar.startOfDay(for: $0.startedAt) }).sorted()
-        var previous: Date?
-        var streak = 0
-        for day in days {
-            streak = previous.flatMap { inputs.calendar.dateComponents([.day], from: $0, to: day).day } == 1 ? streak + 1 : 1
-            earned.streaks += min(25, 5 * (streak - 1))
-            previous = day
-        }
-        // Keep rewards from previous weeks, even after the current quest sheet rolls over.
-        let weeks = Set(walks.map { week(containing: $0.startedAt, calendar: inputs.calendar) }
-            + inputs.foundSecrets.values.filter { $0 <= inputs.now }.map { week(containing: $0, calendar: inputs.calendar) })
+        let history = inputs.historicalRewards ?? historicalRewards(inputs)
+        earned.streaks = history.streaks
         let counts = inputs.newTilesByWalk ?? placeTileCounts(inputs)
-        for week in weeks {
-            earned.quests += quests(for: week, inputs: inputs, counts: counts).filter(\.isComplete).count * 40
-        }
-        return State(earned: earned, quests: quests(for: week(containing: inputs.now, calendar: inputs.calendar), inputs: inputs, counts: counts))
+        let quests = quests(for: week(containing: inputs.now, calendar: inputs.calendar), inputs: inputs, counts: counts)
+        earned.quests = history.questsByWeek.values.reduce(0, +) + quests.filter(\.isComplete).count * 40
+        return State(earned: earned, quests: quests)
     }
 
     static func walkEarnings(before: Inputs, after: Inputs) -> WalkEarnings {
+        let beforeCounts = before.newTilesByWalk ?? placeTileCounts(before)
+        let afterCounts = after.newTilesByWalk ?? placeTileCounts(after)
+        var before = before, after = after
+        before.newTilesByWalk = beforeCounts
+        after.newTilesByWalk = afterCounts
         let old = state(before).earned, new = state(after).earned
         let delta = Earned(tiles: new.tiles - old.tiles, secrets: new.secrets - old.secrets,
                            milestones: new.milestones - old.milestones, streaks: new.streaks - old.streaks,
@@ -292,8 +429,8 @@ nonisolated enum Progression {
             + [week(containing: after.now, calendar: after.calendar)])
         let gains = weeks.sorted { $0.start < $1.start }.flatMap { week in
             questKinds(for: week).compactMap { kind -> QuestGain? in
-                let a = questProgress(kind, week: week, inputs: before)
-                let b = questProgress(kind, week: week, inputs: after)
+                let a = questProgress(kind, week: week, inputs: before, counts: beforeCounts)
+                let b = questProgress(kind, week: week, inputs: after, counts: afterCounts)
                 return b > a ? QuestGain(week: week, kind: kind, before: a, after: b) : nil
             }
         }

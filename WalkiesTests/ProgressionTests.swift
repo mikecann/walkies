@@ -24,7 +24,7 @@ struct ProgressionTests {
 
     func walk(_ n: Int = 0, tiles: Int = 0, metres: Double = 300, place: UUID? = nil) -> Walk {
         var walk = Walk(startedAt: day(n), endedAt: day(n).addingTimeInterval(1800), distance: metres, newTiles: tiles)
-        walk.newTilesByPlace = place.map { [$0.uuidString: tiles] } ?? [:]
+        walk.newTilesByPlace = [(place ?? UUID(uuidString: "00000000-0000-0000-0000-000000000001")!).uuidString: tiles]
         return walk
     }
 
@@ -296,6 +296,144 @@ struct ProgressionTests {
         #expect(Progression.state(input).quests == original.quests)
     }
 
+    @Test func duplicatePhoneCoverageCountsEachTileOnlyInItsFirstWeek() throws {
+        let place = city(visited: 40)
+        let hexes = Set((0..<40).map { Hex(q: Int32($0), r: 0) })
+        var first = walk(0, tiles: 40, metres: 3000, place: place.id)
+        first.newTileHexesByPlace = [place.id.uuidString: hexes]
+        var duplicate = first
+        duplicate.id = UUID()
+        duplicate.startedAt = first.startedAt.addingTimeInterval(30)
+        duplicate.endedAt = first.endedAt?.addingTimeInterval(30)
+        let week = Progression.week(containing: monday, calendar: calendar)
+        var input = inputs(cities: [place], walks: [duplicate, first])
+        #expect(Progression.questProgress(.tiles60, week: week, inputs: input) == 40)
+        #expect(Progression.questProgress(.metres5000, week: week, inputs: input) == 3000)
+        #expect(Progression.state(input).earned == Progression.state(inputs(cities: [place], walks: [first])).earned)
+        let recovered = Progression.backfill(walks: input.walks, cities: input.cities)
+        #expect(recovered.walks.allSatisfy { $0.newTilesByPlace?[place.id.uuidString] == 40 })
+        let saved = try JSONDecoder().decode([Walk].self, from: JSONEncoder().encode(recovered.walks))
+        input.walks = saved
+        input.newTilesByWalk = Progression.backfill(walks: saved, cities: [place]).counts
+        #expect(Progression.questProgress(.tiles60, week: week, inputs: input) == 40)
+        // A repeat in a later week cannot earn the same first-discovery credit.
+        duplicate.startedAt = day(7)
+        duplicate.endedAt = day(7).addingTimeInterval(1800)
+        input = inputs(cities: [place], walks: [first, duplicate], now: day(8))
+        let nextWeek = Progression.week(containing: day(7), calendar: calendar)
+        #expect(Progression.questProgress(.tiles25, week: nextWeek, inputs: input) == 0)
+    }
+
+    @Test func countOnlyHistoryRecoversTileIdentitiesOnceForSyncDeduplication() throws {
+        let place = city(visited: 2)
+        var first = walk(0, tiles: 2, place: place.id)
+        first.points = [0.0, 90.0].enumerated().map { index, x in
+            let c = place.grid.projection.unproject(SIMD2(x, 0))
+            return TrackPoint(lat: c.lat, lon: c.lon, time: first.startedAt.timeIntervalSince1970 + Double(index) * 40,
+                              accuracy: 5, speed: 1)
+        }
+        var duplicate = first
+        duplicate.id = UUID()
+        duplicate.startedAt = first.startedAt.addingTimeInterval(1)
+        var replays: [UUID] = []
+        let backfill = Progression.backfill(walks: [duplicate, first], cities: [place]) { replays.append($0) }
+        #expect(Set(replays) == Set([first.id, duplicate.id]))
+        #expect(backfill.counts.values.reduce(0) { $0 + $1.values.reduce(0, +) } == 2)
+        #expect(backfill.walks.allSatisfy { $0.newTilesByPlace?[place.id.uuidString] == 2 })
+        let saved = try JSONDecoder().decode([Walk].self, from: JSONEncoder().encode(backfill.walks))
+        replays = []
+        #expect(Progression.backfill(walks: saved, cities: [place]) { replays.append($0) }.counts == backfill.counts)
+        #expect(replays.isEmpty)
+    }
+
+    @Test func distanceOverlapUsesLongerOutingAndStrictHalfOfShorterRange() {
+        let first = walk(0, metres: 3000)
+        var duplicate = first
+        duplicate.id = UUID()
+        duplicate.startedAt = first.startedAt.addingTimeInterval(600)
+        duplicate.endedAt = first.endedAt?.addingTimeInterval(600)
+        duplicate.distance = 3200
+        var separate = first
+        separate.id = UUID()
+        separate.startedAt = first.startedAt.addingTimeInterval(3600)
+        separate.endedAt = first.endedAt?.addingTimeInterval(3600)
+        separate.distance = 2000
+        let week = Progression.week(containing: monday, calendar: calendar)
+        let input = inputs(walks: [first, duplicate, separate])
+        #expect(Progression.questProgress(.metres5000, week: week, inputs: input) == 5200)
+        #expect(Progression.distinctOutings([separate, duplicate, first]).map(\.id) == Progression.distinctOutings(input.walks).map(\.id))
+        duplicate.startedAt = first.startedAt.addingTimeInterval(900)
+        duplicate.endedAt = first.endedAt?.addingTimeInterval(900)
+        #expect(Progression.distinctOutings([first, duplicate]).count == 2)
+        // A short recording wholly inside a longer outing is also a duplicate.
+        duplicate.startedAt = first.startedAt.addingTimeInterval(100)
+        duplicate.endedAt = first.startedAt.addingTimeInterval(200)
+        #expect(Progression.distinctOutings([first, duplicate]).count == 1)
+    }
+
+    @Test func overlappingDeviceRecordingsMergeTransitivelyAndAcrossWeeks() {
+        let monday = Progression.week(containing: self.monday, calendar: calendar).start
+        let start = monday.addingTimeInterval(-600)
+        let first = Walk(startedAt: start, endedAt: start.addingTimeInterval(1800), distance: 3000)
+        let bridge = Walk(startedAt: start.addingTimeInterval(600), endedAt: start.addingTimeInterval(2400), distance: 2900)
+        let third = Walk(startedAt: start.addingTimeInterval(1200), endedAt: start.addingTimeInterval(3000), distance: 2800)
+        #expect(Progression.distinctOutings([third, bridge, first]).map(\.id) == [first.id])
+        let input = inputs(walks: [third, first, bridge])
+        let week = Progression.week(containing: monday, calendar: calendar)
+        #expect(Progression.questProgress(.metres5000, week: week, inputs: input) == 0)
+        let previous = Progression.week(containing: start, calendar: calendar)
+        #expect(Progression.questProgress(.metres5000, week: previous, inputs: input) == 3000)
+    }
+
+    @Test func discardedCoverageKeepsWeekStartFavouriteAndWeeklyTileCredit() throws {
+        let favourite = city(visited: 100, total: 200)
+        var other = city(visited: 110, total: 200)
+        let hexes = Set((90..<110).map { Hex(q: Int32($0), r: 0) })
+        other.tileCredits = [.init(id: UUID(), at: day(0), hexes: hexes)]
+        let week = Progression.week(containing: monday, calendar: calendar)
+        var input = inputs(cities: [favourite, other])
+        #expect(Progression.questProgress(.tiles25, week: week, inputs: input) == 20)
+        #expect(Progression.questProgress(.anotherPlace, week: week, inputs: input) == 1)
+        #expect(Progression.questProgress(.days3, week: week, inputs: input) == 0)
+        #expect(Progression.questProgress(.metres5000, week: week, inputs: input) == 0)
+        #expect(Progression.state(input).earned.streaks == 0)
+        var inFavourite = walk(0, tiles: 1, place: favourite.id)
+        inFavourite.newTileHexesByPlace = [favourite.id.uuidString: [Hex(q: 99, r: 0)]]
+        input.walks = [inFavourite]
+        #expect(Progression.questProgress(.anotherPlace, week: week, inputs: input) == 1)
+        // Both phones finding the discarded coverage doesn't duplicate the credit.
+        var duplicate = walk(1, tiles: 20, place: other.id)
+        duplicate.newTileHexesByPlace = [other.id.uuidString: hexes]
+        input.walks.append(duplicate)
+        #expect(Progression.questProgress(.tiles25, week: week, inputs: input) == 21)
+        input.cities = try JSONDecoder().decode([City].self, from: JSONEncoder().encode(input.cities))
+        #expect(Progression.questProgress(.tiles25, week: week, inputs: input) == 21)
+        let before = Progression.state(input).earned.quests
+        input.now = day(7)
+        #expect(Progression.state(input).earned.quests == before)
+    }
+
+    @Test func lastFixSecretAppearsInAutomaticRecapRewardsAndQuestTick() throws {
+        // Pick a week containing the secret quest so this pins the tick as well.
+        let start = try #require((0..<52).map { day($0 * 7) }.first {
+            Progression.questKinds(for: Progression.week(containing: $0, calendar: calendar)).contains(.secret)
+        })
+        var place = city(visited: 1)
+        let entry = try #require(LoreLibrary.all.first)
+        let hex = Hex(q: 0, r: 0)
+        place.stickers = [entry.id: hex]
+        let end = start.addingTimeInterval(600)
+        let walk = Walk(startedAt: start, endedAt: end, distance: 300, newTiles: 1,
+                        newTilesByPlace: [place.id.uuidString: 1], newTileHexesByPlace: [place.id.uuidString: [hex]], automatic: true)
+        let recap = WalkRecap.make(walk: walk, cities: [place], fresh: [place.id: [hex]],
+                                   found: [entry.id: end.addingTimeInterval(0.1)], history: [], now: end.addingTimeInterval(1), counts: [:])
+        #expect(recap.secrets.map { $0.entry.id } == [entry.id])
+        #expect(recap.earnings.breakdown.secrets == 10)
+        #expect(recap.earnings.breakdown.quests == 40)
+        #expect(recap.questProgress.contains { $0.kind == .secret && $0.completed })
+        #expect(recap.xp == recap.earnings.breakdown.total)
+    }
+
     @Test func equipmentFromALosingOfflineClaimFallsBackWithoutChangingLedger() {
         var ledger = Ledger()
         ledger.equipped.trail = "trail.sparkles"
@@ -305,6 +443,109 @@ struct ProgressionTests {
         ledger.claims.append(.init(level: 2, choice: "trail.sparkles"))
         #expect(ledger.resolvedEquipment.trail == "trail.sparkles")
         #expect(ledger.resolvedEquipment.updatedAt == 20)
+    }
+
+    @Test func mixedSavedAndLegacyWalksKeepCountsAndOnlyRecoverTheRequiredPrefix() throws {
+        let place = city(visited: 2)
+        var saved = walk(-2, tiles: 1, place: place.id)
+        saved.newTileHexesByPlace = [place.id.uuidString: [Hex(q: 0, r: 0)]]
+        var legacy = walk(-1, tiles: 1)
+        legacy.newTilesByPlace = nil
+        legacy.points = [0.0, 90.0].enumerated().map { index, x in
+            let p = place.grid.projection.unproject(SIMD2(x, 0))
+            return TrackPoint(lat: p.lat, lon: p.lon, time: legacy.startedAt.timeIntervalSince1970 + Double(index) * 40,
+                              accuracy: 5, speed: 1)
+        }
+        let tail = walk(0, tiles: 99, place: place.id)
+        var replays: [UUID] = []
+        let recovered = Progression.backfill(walks: [tail, legacy, saved], cities: [place]) { replays.append($0) }
+        #expect(replays == [legacy.id])
+        #expect(recovered.counts[saved.id]?[place.id] == 1)
+        #expect(recovered.counts[legacy.id]?[place.id] == 1)
+        #expect(recovered.counts[tail.id]?[place.id] == 99)
+        let persisted = try JSONDecoder().decode([Walk].self, from: JSONEncoder().encode(recovered.walks))
+        replays = []
+        #expect(Progression.backfill(walks: persisted, cities: [place]) { replays.append($0) }.counts == recovered.counts)
+        #expect(replays.isEmpty)
+    }
+
+    @Test func mixedOldCountOnlyPrefixIsRecoveredOnceWithoutOverwritingSavedCounts() {
+        let place = city(visited: 2)
+        var saved = walk(-1, tiles: 1, place: place.id), legacy = walk(0, tiles: 1)
+        func points(start: Date, end: Double) -> [TrackPoint] {
+            [0.0, end].enumerated().map { index, x in
+                let p = place.grid.projection.unproject(SIMD2(x, 0))
+                return TrackPoint(lat: p.lat, lon: p.lon, time: start.timeIntervalSince1970 + Double(index) * 40,
+                                  accuracy: 5, speed: 1)
+            }
+        }
+        saved.points = points(start: saved.startedAt, end: 15)
+        legacy.newTilesByPlace = nil
+        legacy.points = points(start: legacy.startedAt, end: 90)
+        var replays: [UUID] = []
+        let recovered = Progression.backfill(walks: [saved, legacy], cities: [place]) { replays.append($0) }
+        #expect(replays == [saved.id, legacy.id])
+        #expect(recovered.counts[saved.id]?[place.id] == 1)
+        #expect(recovered.counts[legacy.id]?[place.id] == 1)
+        replays = []
+        _ = Progression.backfill(walks: recovered.walks, cities: [place]) { replays.append($0) }
+        #expect(replays.isEmpty)
+    }
+
+    @Test func recapDoesNotReawardMilestoneWhenWalkAddsACountingTile() {
+        var place = city(visited: 10)
+        let fresh = Hex(q: -1, r: 0)
+        place.tiles.insert(fresh)
+        place.visited.insert(fresh)
+        var walk = walk(0, tiles: 1, place: place.id)
+        walk.addedTilesByPlace = [place.id.uuidString: [fresh]]
+        let recap = WalkRecap.make(walk: walk, cities: [place], fresh: [place.id: [fresh]], found: [:], history: [], counts: [:])
+        #expect(recap.earnings.breakdown.milestones == 0)
+        #expect(recap.earnings.breakdown.tiles == 1)
+        #expect(recap.shells == 1)
+        #expect(recap.places.first?.before == 0.1)
+        #expect(recap.before.first?.tiles.count == 100)
+    }
+
+    @Test func exploredSecretsAreFoundWithoutRewardingShellsOrQuests() throws {
+        let found = ["explored": Progression.exploredSecretDate, "walked": day(0)]
+        let roundTrip = try JSONDecoder().decode([String: Date].self, from: JSONEncoder().encode(found))
+        #expect(roundTrip["explored"] == Progression.exploredSecretDate)
+        let input = inputs(secrets: roundTrip)
+        #expect(Progression.state(input).earned.secrets == 10)
+        #expect(Progression.questProgress(.secret, week: Progression.week(containing: monday, calendar: calendar), inputs: input) == 1)
+    }
+
+    @Test func historicalRewardsCanBeReusedWhileLiveTileAndCurrentQuestProgressChanges() {
+        let favourite = city(visited: 50), other = city(visited: 10)
+        var input = inputs(cities: [favourite, other], walks: [walk(-14, tiles: 60, metres: 5000, place: other.id)])
+        input.newTilesByWalk = Progression.placeTileCounts(input)
+        let history = Progression.historicalRewards(input)
+        let before = Progression.state(input)
+        input.historicalRewards = history
+        input.cities[1].visited.insert(Hex(q: 10, r: 0))
+        input.unrecordedTilesByPlace = [other.id: 1]
+        let after = Progression.state(input)
+        #expect(after.earned.tiles == before.earned.tiles + 1)
+        #expect(after.earned.quests == before.earned.quests)
+        #expect(after.earned.streaks == before.earned.streaks)
+        #expect(history.questsByWeek == Progression.historicalRewards(input).questsByWeek)
+    }
+
+    @Test func progressionHomeCalendarKeepsSundayWalksAndLifetimeXPStableWhenTravelling() {
+        let sunday = calendar.date(from: DateComponents(year: 2026, month: 10, day: 25, hour: 23, minute: 30))!
+        var tokyo = Calendar(identifier: .gregorian)
+        tokyo.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        #expect(Progression.week(containing: sunday, calendar: tokyo) != Progression.week(containing: sunday, calendar: Progression.calendar))
+        let walk = Walk(startedAt: sunday, endedAt: sunday.addingTimeInterval(600), distance: 5000, newTiles: 60, newTilesByPlace: [:])
+        let input = Progression.Inputs(walks: [walk], foundSecrets: ["secret": sunday], now: sunday.addingTimeInterval(86400))
+        #expect(input.calendar.timeZone.identifier == "Australia/Perth")
+        let state = Progression.state(input)
+        let homeWeek = Progression.week(containing: sunday, calendar: Progression.calendar)
+        let completed = Progression.quests(for: homeWeek, inputs: input).filter(\.isComplete).count
+        #expect(state.earned.quests == completed * 40)
+        // Device calendars never enter the default production inputs.
+        #expect(Progression.Inputs().calendar == Progression.calendar)
     }
 
 }

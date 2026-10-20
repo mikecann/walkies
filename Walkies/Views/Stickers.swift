@@ -304,7 +304,7 @@ struct LoreCardView: View {
                 }
 
                 if let foundAt {
-                    Text("Found \(foundAt.formatted(date: .abbreviated, time: .shortened))")
+                    Text(foundAt == Progression.exploredSecretDate ? "Found in your explored tiles" : "Found \(foundAt.formatted(date: .abbreviated, time: .shortened))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)

@@ -5,11 +5,12 @@ import os
 nonisolated struct Store {
     private static let log = Logger(subsystem: "com.mikecann.walkies", category: "store")
 
-    private let root = URL.applicationSupportDirectory.appending(path: "Walkies", directoryHint: .isDirectory)
+    private let root: URL
     private var citiesURL: URL { root.appending(path: "cities.json") }
     private var walksDir: URL { root.appending(path: "walks", directoryHint: .isDirectory) }
 
-    init() {
+    init(root: URL = URL.applicationSupportDirectory.appending(path: "Walkies", directoryHint: .isDirectory)) {
+        self.root = root
         try? FileManager.default.createDirectory(at: walksDir, withIntermediateDirectories: true)
     }
 

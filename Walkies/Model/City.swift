@@ -19,6 +19,29 @@ nonisolated struct City: Codable, Identifiable, Sendable {
     var createdAt = Date()
     /// When anything about it last changed on this phone, so sync knows to send it.
     var updatedAt: Date?
+    /// Coverage from confirmed automatic outings too short to keep in walk history.
+    /// These records travel with the place so tile quests retain their date and identity.
+    var tileCredits: [TileCredit]?
+
+    struct TileCredit: Codable, Sendable {
+        var id: UUID
+        var at: Date
+        var hexes: Set<Hex>
+    }
+
+    mutating func mergeTileCredits(from other: City) {
+        var credits = Dictionary((tileCredits ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for credit in other.tileCredits ?? [] {
+            if var old = credits[credit.id] {
+                old.hexes.formUnion(credit.hexes)
+                old.at = min(old.at, credit.at)
+                credits[credit.id] = old
+            } else {
+                credits[credit.id] = credit
+            }
+        }
+        if !credits.isEmpty { tileCredits = credits.values.sorted { $0.id.uuidString < $1.id.uuidString } }
+    }
 
     var lastChanged: Date { updatedAt ?? createdAt }
 

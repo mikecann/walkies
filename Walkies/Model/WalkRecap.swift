@@ -64,7 +64,7 @@ nonisolated struct WalkRecap: Identifiable, Sendable {
     ///   - fresh: the tiles this walk uncovered, per place.
     ///   - found: when each secret was found.
     ///   - history: your other finished walks.
-    static func make(walk: Walk, cities: [City], fresh: [UUID: Set<Hex>], found: [String: Date], history: [Walk], now: Date = .now) -> WalkRecap {
+    static func make(walk: Walk, cities: [City], fresh: [UUID: Set<Hex>], found: [String: Date], history: [Walk], now: Date = .now, counts: [UUID: [UUID: Int]]? = nil) -> WalkRecap {
         let route = CoverageTracer.samples(for: walk.points)
         let touched = cities.filter { !(fresh[$0.id] ?? []).isEmpty }
 
@@ -99,25 +99,36 @@ nonisolated struct WalkRecap: Identifiable, Sendable {
         let before = touched.map { city -> City in
             var old = city
             old.visited.subtract(fresh[city.id] ?? [])
+            old.tiles.subtract(walk.addedTilesByPlace?[city.id.uuidString] ?? [])
             return old
         }
         let places = zip(before, touched).map { old, now in
             Place(
                 id: now.id, name: now.name,
-                before: Double(old.visited.count) / Double(max(now.tiles.count, 1)), after: now.progress,
+                before: old.progress, after: now.progress,
                 newTiles: (fresh[now.id] ?? []).count, tilesLeft: now.tiles.count - now.visited.count
             )
         }.sorted { $0.newTiles > $1.newTiles }
 
         let finished = history.filter { $0.endedAt != nil && $0.id != walk.id }
         var beforeCities = cities
-        for i in beforeCities.indices { beforeCities[i].visited.subtract(fresh[beforeCities[i].id] ?? []) }
+        for i in beforeCities.indices {
+            beforeCities[i].visited.subtract(fresh[beforeCities[i].id] ?? [])
+            beforeCities[i].tiles.subtract(walk.addedTilesByPlace?[beforeCities[i].id.uuidString] ?? [])
+        }
         let beforeFound = found.filter { $0.value < walk.startedAt }
         let afterFound = found.filter { $0.value <= end }
-        let rewardDate = walk.endedAt ?? now
+        // Secret timestamps are assigned while processing the last fix, slightly
+        // after its GPS timestamp. Use the same inclusive window as the list above.
+        let rewardDate = end
+        let beforeCounts = counts ?? Progression.placeTileCounts(.init(cities: beforeCities, walks: finished))
+        var afterCounts = beforeCounts
+        afterCounts[walk.id] = Dictionary((walk.newTilesByPlace ?? Dictionary(uniqueKeysWithValues: fresh.map { ($0.key.uuidString, $0.value.count) })).compactMap { key, n in
+            UUID(uuidString: key).map { ($0, n) }
+        }, uniquingKeysWith: +)
         let earnings = Progression.walkEarnings(
-            before: Progression.Inputs(cities: beforeCities, walks: finished, foundSecrets: beforeFound, now: rewardDate),
-            after: Progression.Inputs(cities: cities, walks: finished + [walk], foundSecrets: afterFound, now: rewardDate)
+            before: Progression.Inputs(cities: beforeCities, walks: finished, foundSecrets: beforeFound, now: rewardDate, newTilesByWalk: beforeCounts),
+            after: Progression.Inputs(cities: cities, walks: finished + [walk], foundSecrets: afterFound, now: rewardDate, newTilesByWalk: afterCounts)
         )
         return WalkRecap(
             walk: walk, route: route, reveals: reveals, secrets: secrets, places: places,

@@ -21,11 +21,16 @@ schedules sync after successful actions. All the maths in `Progression.swift` is
 | `activeSpyglassRing` | Selected place's active ring, or nil. Centre is a `Coordinate`, radius is metres, expiry is a `Date`. |
 | `ledger` | Read-only persisted ledger, available for inspection. |
 
-The state cache invalidates with tile revisions, walk count, secret revisions and
-the local calendar day/time zone. Legacy per-place route analysis is cached
-separately across GPS fixes, until a walk or counting grid changes. Use a clock-driven view refresh for the weekly
-rollover and ring expiry. Reading `activeSpyglassRing` checks the current time;
-there is no model timer.
+The state cache invalidates with tile revisions, walk/secret/place revisions and
+calendar days in Australia/Perth. Historical quest rewards are cached per week,
+separately from current quests and tile/milestone sums. Counting-tile totals update
+incrementally during a walk. GPS fixes and balance reads never trace old routes.
+
+Legacy per-place counts are backfilled on a worker at load or after a batched
+pull, then saved into each walk. `historyReady` becomes true when load migration
+finishes; level menus and purchases wait for it. Use a clock-driven view refresh
+for the weekly rollover and ring expiry. Reading `activeSpyglassRing` checks the
+current time; there is no model timer.
 
 ## Actions
 
@@ -55,8 +60,9 @@ A level choice is a catalog cosmetic ID, `Progression.shellBag` (`shells.50`) or
 `Progression.spyglassPair` (`spyglasses.2`). The last two mean 50 shells and two
 spyglasses. The price ceiling starts at 150 at level 2 and rises by 50 each level.
 Candidates are seeded by level, prefer unowned cosmetics, then fall back to the
-bag and spyglass pair. Once all cosmetics are owned there are only two distinct
-reward types, so the third slot repeats the bag. Render choice slots by index,
+bag and spyglass pair. Tile reveals prepare the offers immediately when walking
+XP reaches a level, before a mid-walk purchase can change ownership. Once all
+cosmetics are owned there are only two distinct reward types, so the third slot repeats the bag. Render choice slots by index,
 not by choice string.
 
 `Ledger.offers` is optional, backwards-compatible metadata beyond the four fields
@@ -91,25 +97,49 @@ and further spending is blocked until enough has been earned/bought.
   `spyglassesLeft` expose the spending calculations.
 
 `WalkRecap.earnings` is computed once by `make`, from before/after coverage and
-history. `shells`, `xp` and `questProgress` are convenience accessors for the
-celebration. It includes all places for milestone totals, even though the
-existing recap's map arrays only contain touched places.
+history. AppModel supplies cached per-walk counts. Walks also save fresh hexes and
+newly added counting tiles, so a resumed walk's recap reconstructs its exact
+pre-walk counting grid as well as its visited tiles. `shells`, `xp` and
+`questProgress` are convenience accessors for the celebration. It includes all places for milestone totals, even though the
+existing recap's map arrays only contain touched places. Secret list and reward
+calculations both include discoveries up to 60 seconds after the final GPS fix.
 
 ## Calendar and history choices
 
-Weeks use the phone calendar/time zone, forced to Monday with the four-day first
-week rule. Seeds use week-year and week number, including around New Year.
+Production progression uses the Gregorian calendar in Australia/Perth for all
+weeks and days, forced to Monday with the four-day first week rule. Travelling
+cannot reassign past walks or change lifetime quest XP. Pure model inputs can
+still accept an explicit calendar for tests. Seeds use week-year and week number,
+including around New Year.
 Finished walks belong to the week and day they started in; secret discoveries
-use their own dates. Any finished walk counts for quest days/distance. The
-300-metre minimum applies only to streak rewards, as specified in the design.
+use their own dates. Tile quests count distinct first-discovered hexes per place,
+not the sum of each device's walk totals. Distance quests discard an overlapping
+recording when more than half the shorter time range overlaps another recording.
+Connected overlapping recordings count as one outing, keeping the largest distance
+(with stable start-time/UUID ties). Exactly half an overlap remains separate.
+Deduplication happens across week boundaries too. Any finished walk qualifies for
+quest days/distance. The 300-metre minimum applies only to streak rewards, as specified in the design.
 Streaks use calendar-day arithmetic, including daylight-saving changes, and
 only award once per date. Historical completed quests remain in lifetime XP.
 
 The other-place quest compares against the place with most counting tiles at
 the **start of that week**, so walking elsewhere cannot undo completion by
 changing the favourite. Ties use the place UUID. Future walks save optional
-`Walk.newTilesByPlace` counts (UUID strings as keys); older walks recover counts
-by replaying accepted route samples in chronological order over today's tiles.
+`Walk.newTilesByPlace` counts (UUID strings as keys), `newTileHexesByPlace` fresh
+hex identities and `addedTilesByPlace` counting-grid additions. Older walks recover
+counts by replaying accepted route samples once on a worker in chronological order
+over today's tiles. Saved counts are retained per walk; cached effective counts
+deduplicate the identities across all walks. Count-only records with routes need one recovery
+pass even when no legacy count is missing, because counts cannot identify overlap.
+Persisted hex identities prevent later repeats. A count-only record with no route
+cannot recover identities and retains its saved credit.
+
+Confirmed automatic outings discarded below 300 m save optional per-place
+`City.tileCredits` records (`id`, `at`, `hexes`) in the existing place JSON. Credits
+merge by outing ID with a hex union, participate in the same first-discovery
+calculation and week-start favourite reconstruction, and never count as walk days,
+distance or streaks. This adds no Convex schema. Previously discarded outings
+have no recoverable timestamps, so this cannot retroactively date their coverage.
 As with the design's other derived earnings, deleting a place or changing its
 counting tiles can change historical totals.
 
@@ -123,7 +153,17 @@ existing whole-directory sign-out wipe removes it. Ledger timestamps are Unix
 merges with the existing `progress` row and returns null. `sync:snapshot` adds
 `progress: String | null`. The iPhone pushes only when canonical ledger JSON
 changes, then merges the snapshot with server precedence. Duplicate-account
-migration also merges the progress rows.
+migration also merges the progress rows. Pulls merge server ownership before
+preparing level menus and refresh progression once after the batch. Requests made
+while syncing queue another pass. Secrets push before the ledger, so a rejected
+ledger cannot block their upload.
+
+Secrets revealed when a newly added place overlaps already explored tiles are
+saved as found with `Progression.exploredSecretDate` (`Date.distantFuture`). They
+stay in the book, with an explored-tiles label, but earn neither secret shells nor
+quest progress. The marker uses the existing secret date wire format, requiring
+no backend schema change. A genuine date from another phone wins the existing
+earliest-date merge.
 
 An equipped cosmetic from a losing offline claim falls back to its group's free
 default in `AppModel.equipped`; the original last-write record stays in the ledger
