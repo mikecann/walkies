@@ -357,8 +357,9 @@ final class AppModel {
         requestSync?()
     }
 
-    /// Plays an old walk's celebration again, from walk history. Which tiles were new
+    /// Plays an old walk's replay again, from walk history. Which tiles were new
     /// on it is worked out again: the tiles under its route that no earlier walk crossed.
+    /// It's marked as a rewatch, so it only recaps the walk and awards nothing.
     func replay(_ walk: Walk) {
         let earlier = walks.filter { $0.id != walk.id && $0.startedAt < walk.startedAt }
         let savedCities = cities
@@ -380,7 +381,10 @@ final class AppModel {
                     if !new.isEmpty { fresh[city.id] = new }
                     before[i] = city
                 }
-                return WalkRecap.make(walk: walk, cities: before, fresh: fresh, found: found, history: earlier, counts: counts)
+                var recap = WalkRecap.make(walk: walk, cities: before, fresh: fresh, found: found, history: earlier, counts: counts)
+                recap.isRewatch = true
+                recap.earnings = Progression.WalkEarnings()
+                return recap
             }.value
             if generation == dataGeneration, request == recapRequest { recap = result }
         }

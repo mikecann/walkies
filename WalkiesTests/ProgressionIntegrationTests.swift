@@ -74,12 +74,41 @@ struct ProgressionIntegrationTests {
         _ = model.balance
         model.endWalk()
         #expect(model.recap != nil)
+        #expect(model.recap?.isRewatch == false)
         #expect(log.count == 200)
         #expect(log.mainCount == 0)
         let reopened = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await reopened.waitForHistory()
         _ = reopened.balance
         #expect(log.count == 200)
+    }
+
+    @Test func rewatchingAWalkFromHistoryAwardsAndChangesNothing() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let city = city()
+        store.save([city])
+        for n in 0..<3 { store.save(legacyWalk(n, in: city)) }
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        let ledger = model.ledger, xp = model.xp, balance = model.balance, picks = model.pendingPicks
+        let earned = model.earnedBreakdown.total, stickers = model.stickerQueue.count
+        let walks = model.walks.map(\.id), cities = model.cities.map(\.visited)
+        model.replay(try #require(model.walks.first))
+        for _ in 0..<500 where model.recap == nil { try await Task.sleep(for: .milliseconds(10)) }
+        let recap = try #require(model.recap)
+        #expect(recap.isRewatch)
+        #expect(recap.shells == 0)
+        #expect(recap.xp == 0)
+        #expect(recap.questProgress.isEmpty)
+        #expect(model.ledger == ledger)
+        #expect(model.xp == xp)
+        #expect(model.balance == balance)
+        #expect(model.pendingPicks == picks)
+        #expect(model.earnedBreakdown.total == earned)
+        #expect(model.stickerQueue.count == stickers)
+        #expect(model.walks.map(\.id) == walks)
+        #expect(model.cities.map(\.visited) == cities)
     }
 
     @Test func uncoveringNonCountingTilesReusesHistoricalQuestRewards() async {

@@ -41,6 +41,8 @@ nonisolated struct WalkRecap: Identifiable, Sendable {
     var walk: Walk
     /// The route, as evenly spaced points.
     var route: [Coordinate]
+    /// Seconds into the walk at each point of `route`.
+    var routeTimes: [Double] = []
     var reveals: [Reveal]
     var secrets: [Secret]
     var places: [Place]
@@ -57,7 +59,24 @@ nonisolated struct WalkRecap: Identifiable, Sendable {
     var xp: Int { earnings.xp }
     var questProgress: [Progression.QuestGain] { earnings.quests }
 
+    /// Watching an old walk again from history: just the walk, no rewards.
+    var isRewatch = false
+
     var newTiles: Int { reveals.count }
+
+    /// How long you'd been walking when the replay has drawn this far (0 to 1) along
+    /// the route. Read from the fixes' own times, so a stop shows up as a jump. Ends
+    /// on the walk's full time.
+    func elapsed(at progress: Double) -> TimeInterval {
+        let total = walk.duration
+        guard progress > 0 else { return 0 }
+        guard progress < 1 else { return total }
+        guard routeTimes.count > 1 else { return total * progress }
+        let end = progress * Double(routeTimes.count - 1)
+        let whole = Int(end)
+        let a = routeTimes[whole], b = routeTimes[min(whole + 1, routeTimes.count - 1)]
+        return min(total, max(0, a + (b - a) * (end - Double(whole))))
+    }
 
     /// - Parameters:
     ///   - cities: every place, as it is now the walk's over.
@@ -65,7 +84,7 @@ nonisolated struct WalkRecap: Identifiable, Sendable {
     ///   - found: when each secret was found.
     ///   - history: your other finished walks.
     static func make(walk: Walk, cities: [City], fresh: [UUID: Set<Hex>], found: [String: Date], history: [Walk], now: Date = .now, counts: [UUID: [UUID: Int]]? = nil) -> WalkRecap {
-        let route = CoverageTracer.samples(for: walk.points)
+        let (route, times) = CoverageTracer.timedSamples(for: walk.points)
         let touched = cities.filter { !(fresh[$0.id] ?? []).isEmpty }
 
         // When the route first reaches each new tile.
@@ -131,7 +150,7 @@ nonisolated struct WalkRecap: Identifiable, Sendable {
             after: Progression.Inputs(cities: cities, walks: finished + [walk], foundSecrets: afterFound, now: rewardDate, newTilesByWalk: afterCounts)
         )
         return WalkRecap(
-            walk: walk, route: route, reveals: reveals, secrets: secrets, places: places,
+            walk: walk, route: route, routeTimes: times.map { $0 - walk.startedAt.timeIntervalSince1970 }, reveals: reveals, secrets: secrets, places: places,
             prediction: prediction(for: places.first, walk: walk, history: finished, now: now),
             isBest: !finished.isEmpty && reveals.count > (finished.map(\.newTiles).max() ?? 0),
             before: before, after: touched, earnings: earnings

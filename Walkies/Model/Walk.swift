@@ -74,6 +74,8 @@ nonisolated struct CoverageTracer: Sendable {
         var distance: Double
         /// Start of this accepted segment, for routes without bridging rejected fixes.
         var origin: Coordinate? = nil
+        /// When you were at `origin` (seconds since 1970).
+        var originTime: Double? = nil
         static let none = Step(samples: [], distance: 0)
     }
 
@@ -131,7 +133,7 @@ nonisolated struct CoverageTracer: Sendable {
 
         let n = max(1, Int((d / Self.spacing).rounded(.up)))
         let samples = (1...n).map { prev.coordinate.lerp(to: point.coordinate, Double($0) / Double(n)) }
-        return Step(samples: samples, distance: d, origin: prev.coordinate)
+        return Step(samples: samples, distance: d, origin: prev.coordinate, originTime: prev.time)
     }
 
     /// How far these points really walked, by the same rules.
@@ -163,10 +165,26 @@ nonisolated struct CoverageTracer: Sendable {
     #endif
 
     static func samples(for points: [TrackPoint]) -> [Coordinate] {
+        timedSamples(for: points).samples
+    }
+
+    /// The samples, each with when you passed it (seconds since 1970), spread evenly
+    /// between the two fixes either side.
+    static func timedSamples(for points: [TrackPoint]) -> (samples: [Coordinate], times: [Double]) {
         #if DEBUG
         replayObserver.record(points)
         #endif
         var tracer = CoverageTracer()
-        return points.flatMap { tracer.add($0).samples }
+        var samples: [Coordinate] = []
+        var times: [Double] = []
+        for point in points {
+            let step = tracer.add(point)
+            let start = step.originTime ?? point.time
+            for (i, sample) in step.samples.enumerated() {
+                samples.append(sample)
+                times.append(start + (point.time - start) * Double(i + 1) / Double(step.samples.count))
+            }
+        }
+        return (samples, times)
     }
 }

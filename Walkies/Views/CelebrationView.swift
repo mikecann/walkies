@@ -4,7 +4,8 @@ import SwiftUI
 /// The end-of-walk celebration. Your walk plays back over the map: the route draws
 /// itself, the clouds clear tile by tile with a pop and a puff of sparkles, and it
 /// stops for a moment on any secret you found. Then a summary of what the walk did
-/// for each place, and roughly how many more it'll take to finish.
+/// for each place, and roughly how many more it'll take to finish. Rewatched from
+/// history it's just the walk: no rewards, and nothing changes.
 struct CelebrationView: View {
     let recap: WalkRecap
     /// Your other places, unchanged by this walk, so they're still under cloud.
@@ -17,6 +18,9 @@ struct CelebrationView: View {
     @State private var handle = MapHandle()
     @State private var openSecret: LoreEntry?
     @State private var showingProgress = false
+    /// You've moved the map yourself, so offer to put it back on the walk.
+    @State private var moved = false
+    @State private var recentre = 0
 
     init(recap: WalkRecap, others: [City], tilted: Bool) {
         self.recap = recap
@@ -27,7 +31,7 @@ struct CelebrationView: View {
 
     var body: some View {
         ZStack {
-            ReplayMap(recap: recap, tilted: tilted, handle: handle)
+            ReplayMap(recap: recap, tilted: tilted, handle: handle, recentre: recentre) { moved = true }
                 .overlay { CloudLayer(field: player.field, key: player.fieldKey, handle: handle) }
                 .overlay { ReplayEffects(recap: recap, player: player, handle: handle, style: model.equipped[.celebration]) }
                 .ignoresSafeArea()
@@ -35,14 +39,24 @@ struct CelebrationView: View {
             VStack {
                 HStack(alignment: .top) {
                     tileCounter
+                    clock
                     Spacer()
-                    if player.phase == .replay {
-                        Button("Skip") { player.skip() }
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Color.ink)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .stickerCard(in: .capsule)
+                    VStack(alignment: .trailing, spacing: 10) {
+                        if player.phase == .replay {
+                            Button("Skip") { player.skip() }
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Color.ink)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .stickerCard(in: .capsule)
+                        }
+                        if moved {
+                            HexBadge(icon: .symbol("scope"), fill: .badgeTeal, label: "Back to the walk") {
+                                moved = false
+                                recentre += 1
+                            }
+                            .transition(.scale.combined(with: .opacity))
+                        }
                     }
                 }
                 .padding(.horizontal)
@@ -51,6 +65,7 @@ struct CelebrationView: View {
 
             if let secret = player.showingSecret {
                 SecretPop(entry: secret)
+                    .allowsHitTesting(false)
                     .transition(.scale(scale: 0.4).combined(with: .opacity))
             }
 
@@ -59,7 +74,7 @@ struct CelebrationView: View {
                     Spacer()
                     SummaryCard(
                         recap: recap, endingXP: model.xp,
-                        hasReward: !model.pendingPicks.isEmpty,
+                        hasReward: !recap.isRewatch && !model.pendingPicks.isEmpty,
                         onReward: { showingProgress = true },
                         onSecret: { openSecret = $0 }, onReplay: { player.replay() }, onDone: { dismiss() }
                     )
@@ -70,6 +85,7 @@ struct CelebrationView: View {
         .background(Color.cream)
         .animation(.spring(response: 0.45, dampingFraction: 0.75), value: player.showingSecret?.id)
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: player.phase)
+        .animation(.snappy, value: moved)
         .task { await player.run() }
         .sheet(isPresented: $showingProgress) {
             ProgressionSheet(initialSection: .level)
@@ -96,6 +112,19 @@ struct CelebrationView: View {
         .scaleEffect(player.bump ? 1.12 : 1)
         .animation(.snappy(duration: 0.15), value: player.tilesShown)
         .animation(.spring(response: 0.2, dampingFraction: 0.5), value: player.bump)
+    }
+
+    /// How long you'd been out at the point the route's drawn to, racing up to the
+    /// walk's full time.
+    private var clock: some View {
+        Text(Format.duration(player.elapsed))
+            .font(.system(.title2, design: .rounded, weight: .heavy))
+            .monospacedDigit()
+            .foregroundStyle(Color.ink)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .stickerCard(in: .capsule)
+            .accessibilityLabel("Time walked")
     }
 }
 
@@ -142,6 +171,9 @@ final class ReplayPlayer {
     /// Seconds for the route to draw: 5 for every 10 minutes walked. At least 2, so a
     /// short walk is still watchable, and at most 30, so a long one doesn't drag.
     var duration: Double { min(30, max(2, recap.walk.duration / 600 * 5)) }
+
+    /// Time into the walk at the replay's current point.
+    var elapsed: TimeInterval { recap.elapsed(at: progress) }
 
     init(recap: WalkRecap, others: [City]) {
         self.recap = recap
@@ -268,27 +300,57 @@ final class ReplayPlayer {
 
 // MARK: The map
 
-/// A still satellite map framed on the walk, for the replay to play over.
+/// A satellite map framed on the walk, for the replay to play over. You can pan,
+/// pinch and turn it; it only moves by itself when `recentre` changes.
 private struct ReplayMap: UIViewRepresentable {
     let recap: WalkRecap
     let tilted: Bool
     let handle: MapHandle
+    var recentre: Int
+    let onUserMove: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
+        map.delegate = context.coordinator
         map.preferredConfiguration = MKHybridMapConfiguration(elevationStyle: tilted ? .realistic : .flat)
         map.pointOfInterestFilter = .excludingAll
-        map.isUserInteractionEnabled = false
         map.showsUserLocation = false
         handle.map = map
+        context.coordinator.recentre = recentre
         // Wait for the map to have its real size before framing the walk.
-        DispatchQueue.main.async { frame(map) }
+        DispatchQueue.main.async { frame(map, animated: false) }
         return map
     }
 
-    func updateUIView(_ map: MKMapView, context: Context) {}
+    func updateUIView(_ map: MKMapView, context: Context) {
+        context.coordinator.handle = handle
+        context.coordinator.onUserMove = onUserMove
+        if recentre != context.coordinator.recentre {
+            context.coordinator.recentre = recentre
+            frame(map, animated: true)
+        }
+    }
 
-    private func frame(_ map: MKMapView) {
+    final class Coordinator: NSObject, MKMapViewDelegate {
+        var recentre = 0
+        weak var handle: MapHandle?
+        var onUserMove: () -> Void = {}
+
+        func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
+            let touched = mapView.subviews.first?.gestureRecognizers?.contains { $0.state == .began || $0.state == .changed } ?? false
+            // Every frame while it moves, so the clouds stay stuck to the ground.
+            handle?.moving = true
+            if touched { onUserMove() }
+        }
+
+        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            handle?.moving = false
+        }
+    }
+
+    private func frame(_ map: MKMapView, animated: Bool) {
         let points = recap.route.isEmpty ? recap.walk.points.map(\.coordinate) : recap.route
         guard let first = points.first else { return }
         var rect = MKMapRect(origin: MKMapPoint(first.cl), size: MKMapSize(width: 0, height: 0))
@@ -297,14 +359,14 @@ private struct ReplayMap: UIViewRepresentable {
         let minimum = 400 * MKMapPointsPerMeterAtLatitude(first.lat)
         rect = rect.insetBy(dx: -max(0, minimum - rect.width) / 2, dy: -max(0, minimum - rect.height) / 2)
         let padding = UIEdgeInsets(top: 130, left: 40, bottom: 280, right: 40)
+        let start = map.camera.copy() as? MKMapCamera
+        // Fit from flat and facing north, so a camera you've tilted or turned doesn't skew it.
+        map.camera = MKMapCamera(lookingAtCenter: map.centerCoordinate, fromDistance: map.camera.centerCoordinateDistance, pitch: 0, heading: 0)
         map.setVisibleMapRect(rect, edgePadding: padding, animated: false)
-        if tilted {
-            let fitted = map.camera
-            map.setCamera(
-                MKMapCamera(lookingAtCenter: fitted.centerCoordinate, fromDistance: fitted.centerCoordinateDistance, pitch: 45, heading: 0),
-                animated: false
-            )
-        }
+        let fitted = map.camera
+        let target = MKMapCamera(lookingAtCenter: fitted.centerCoordinate, fromDistance: fitted.centerCoordinateDistance, pitch: tilted ? 45 : 0, heading: 0)
+        if animated, let start { map.camera = start }
+        map.setCamera(target, animated: animated)
     }
 }
 
@@ -555,7 +617,9 @@ private struct SummaryCard: View {
                     stat("\(recap.secrets.count)", recap.secrets.count == 1 ? "Secret" : "Secrets")
                 }
 
-                progressionSummary
+                if !recap.isRewatch {
+                    progressionSummary
+                }
 
                 if !recap.secrets.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -596,7 +660,7 @@ private struct SummaryCard: View {
                     }
                 }
 
-                if let prediction = recap.prediction {
+                if !recap.isRewatch, let prediction = recap.prediction {
                     VStack(spacing: 4) {
                         Text("About \(prediction.walks) more \(prediction.walks == 1 ? "walk" : "walks") like these to finish \(prediction.place)")
                             .font(.subheadline.weight(.semibold))
@@ -700,6 +764,7 @@ private struct SummaryCard: View {
     }
 
     /// Count tiles and shells together, then fill each level crossed by this walk.
+    /// A rewatch only counts the tiles.
     private func countUp() async {
         let before = max(0, endingXP - recap.xp)
         let meter = LevelMeter(xp: before)
@@ -716,6 +781,7 @@ private struct SummaryCard: View {
             if total > 0, i % 2 == 0 || steps == 1 { SoundFX.shared.play(.tick) }
         }
         withAnimation(.easeOut(duration: 0.9)) { filled = true }
+        guard !recap.isRewatch else { return }
         let fills = LevelMeter.fills(from: before, to: endingXP)
         let duration = xpAnimationDuration
         for fill in fills {
