@@ -1149,8 +1149,7 @@ extension AppModel {
                 guard crew.routeWork.contains(where: { $0.id == walkID }) else { return }
                 crew.routeWork.removeAll { $0.id == walkID }
                 guard crew.you?.sharing == .tilesAndTrail, !route.segments.isEmpty else { return }
-                crew.pendingTrails.removeAll { $0.walkClientId == walkID.uuidString }
-                crew.pendingTrails.append(CrewPendingTrail(walkClientId: walkID.uuidString, route: route))
+                crew.queueRoute(route, walkClientId: walkID.uuidString)
             }
         }
     }
@@ -1187,8 +1186,8 @@ extension AppModel {
             if live.you?.sharing == .tilesAndTrail {
                 for trail in result.pendingTrails {
                     if let index = live.pendingTrails.firstIndex(where: { $0.id == trail.id }) {
-                        if live.pendingTrails[index].route != trail.route { live.pendingTrails[index] = trail }
-                    } else { live.pendingTrails.append(trail) }
+                        if live.pendingTrails[index].route != trail.route { live.queueRoute(trail.route, walkClientId: trail.id) }
+                    } else { live.queueRoute(trail.route, walkClientId: trail.id) }
                 }
             }
             live.replayedPlaces.formUnion(result.replayedPlaces)
@@ -1204,13 +1203,33 @@ extension AppModel {
     func refreshCrew(_ id: String, api: CrewsAPI) async throws {
         let generation = dataGeneration
         let existing = crews.first { $0.id == id }
-        let snapshot = try await api.snapshot(id, since: existing?.since)
-        guard generation == dataGeneration else { throw CancellationError() }
-        editCrew(id) { crew in
-            crew.members = snapshot.members
-            crew.trails.removeAll { trail in !snapshot.members.contains { $0.userId == trail.by && $0.sharing == .tilesAndTrail } }
-            if crew.you?.sharing != .tilesAndTrail { crew.pendingTrails = []; crew.routeWork = [] }
+        let snapshot: CrewSnapshot
+        do {
+            snapshot = try await api.snapshot(id, since: existing?.since) { [weak self] page in
+                guard let self, self.dataGeneration == generation else { return }
+                // Apply revocations immediately, even when a later page/download fails.
+                // Tile progress and its watermark are still committed together at the end.
+                self.editCrew(id) { crew in
+                    crew.name = page.crew.name
+                    crew.inviteCode = page.crew.inviteCode
+                    crew.createdBy = page.crew.createdBy
+                    crew.members = page.members
+                    crew.trails.removeAll { trail in
+                        !page.members.contains { $0.userId == trail.by && $0.sharing == .tilesAndTrail }
+                        || !page.trails.contains { $0.by == trail.by && $0.walkClientId == trail.walkClientId && $0.at == trail.at && $0.url != nil }
+                    }
+                    if crew.you?.sharing != .tilesAndTrail { crew.pendingTrails = []; crew.routeWork = [] }
+                }
+            }
         }
+        catch {
+            guard generation == dataGeneration else { throw CancellationError() }
+            if let error = error as? ConvexError, ["NOT_A_MEMBER", "CREW_NOT_FOUND", "MEMBER_REMOVED"].contains(error.code ?? "") {
+                retainCrews(Set(crews.map(\.id)).subtracting([id]))
+            }
+            throw error
+        }
+        guard generation == dataGeneration else { throw CancellationError() }
         var cities: [String: City] = [:]
         for place in snapshot.places where existing?.places.contains(where: { $0.id == place.placeId }) != true {
             // Don't advance the tile cursor until every place can accept its tiles.
@@ -1249,6 +1268,7 @@ extension AppModel {
                 guard generation == dataGeneration else { throw CancellationError() }
                 let assigned = LoreLibrary.assign(to: crew.cities + [city]) { city, point in city.shape().contains(city.grid.projection.project(point)) }
                 city.stickers = city.placeStickers(assigned[city.id] ?? [])
+                _ = try CrewPlaceBounds(city: city)
                 cityID = city.id
                 editCrew(id) { $0.pendingPlaces.append(CrewPendingPlace(city: city)) }
             }
@@ -1276,26 +1296,72 @@ extension AppModel {
     private func performCrewPlaceUploads(_ id: String, api: CrewsAPI) async throws {
         let generation = dataGeneration
         let drafts = crews.first(where: { $0.id == id })?.pendingPlaces ?? []
-        for draft in drafts {
-            let file: String
-            if let uploaded = draft.file { file = uploaded }
-            else {
-                file = try await api.upload(JSONEncoder().encode(draft.city))
+        for original in drafts {
+            // A null grid anchor is checked transactionally. If another phone wins
+            // the first-place race, no incompatible immutable place gets saved.
+            var draft = original
+            for attempt in 0..<3 {
+                try await refreshCrew(id, api: api)
+                guard let crew = crews.first(where: { $0.id == id }) else { throw CancellationError() }
+                if crew.places.contains(where: { $0.clientId == draft.city.id.uuidString }) {
+                    editCrew(id) { $0.pendingPlaces.removeAll { $0.id == draft.id } }
+                    break
+                }
+                if let anchor = crew.places.first, anchor.city.grid != draft.city.grid {
+                    let place = PlaceResult(id: 0, name: draft.city.name, detail: draft.city.detail, kind: "suburb", boundary: draft.city.boundary, area: 0)
+                    var rebuilt = try await CityBuilder.build(from: place, walks: [], grid: anchor.city.grid, client: api.client, status: { _ in })
+                    rebuilt.id = draft.city.id
+                    let assigned = LoreLibrary.assign(to: crew.cities + [rebuilt]) { city, point in city.shape().contains(city.grid.projection.project(point)) }
+                    rebuilt.stickers = rebuilt.placeStickers(assigned[rebuilt.id] ?? [])
+                    draft = CrewPendingPlace(city: rebuilt)
+                }
+                guard generation == dataGeneration else { throw CancellationError() }
+                do { _ = try CrewPlaceBounds(city: draft.city) }
+                catch {
+                    editCrew(id) { $0.pendingPlaces.removeAll { $0.id == draft.id }; $0.syncMessage = error.localizedDescription }
+                    throw error
+                }
+                if draft.file == nil || draft.uploadClaimed != true {
+                    do { draft.file = try await api.upload(JSONEncoder().encode(draft.city)) }
+                    catch {
+                        if let coded = error as? ConvexError, coded.code == "INVALID_ARGUMENT" {
+                            editCrew(id) { $0.pendingPlaces.removeAll { $0.id == draft.id }; $0.syncMessage = error.localizedDescription }
+                        }
+                        throw error
+                    }
+                    draft.uploadClaimed = true
+                }
                 guard generation == dataGeneration else { throw CancellationError() }
                 editCrew(id) { crew in
-                    if let i = crew.pendingPlaces.firstIndex(where: { $0.id == draft.id }) { crew.pendingPlaces[i].file = file }
+                    if let i = crew.pendingPlaces.firstIndex(where: { $0.id == draft.id }) { crew.pendingPlaces[i] = draft }
+                }
+                do {
+                    _ = try await api.addPlace(id, city: draft.city, file: draft.file!, gridPlaceId: crew.places.first?.id)
+                    guard generation == dataGeneration else { throw CancellationError() }
+                    editCrew(id) { $0.pendingPlaces.removeAll { $0.id == draft.id } }
+                    break
+                } catch {
+                    // Rejected saves discard unused uploads. Expired claims also need a new file.
+                    if let error = error as? ConvexError, error.code != nil {
+                        draft.file = nil
+                        editCrew(id) { crew in
+                            if let i = crew.pendingPlaces.firstIndex(where: { $0.id == draft.id }) { crew.pendingPlaces[i].file = nil }
+                        }
+                        if error.code == "GRID_CHANGED", attempt < 2 { continue }
+                        if ["PLACE_LIMIT", "INVALID_ARGUMENT"].contains(error.code ?? "") {
+                            editCrew(id) { $0.pendingPlaces.removeAll { $0.id == draft.id }; $0.syncMessage = error.localizedDescription }
+                        }
+                    }
+                    throw error
                 }
             }
-            _ = try await api.addPlace(id, city: draft.city, file: file)
-            guard generation == dataGeneration else { throw CancellationError() }
-            editCrew(id) { $0.pendingPlaces.removeAll { $0.id == draft.id } }
         }
     }
 
     func openCrewURL(_ url: URL) {
         let parts = url.pathComponents.filter { $0 != "/" }
         guard url.scheme?.lowercased() == "walkies", url.host?.lowercased() == "join",
-              parts.count == 1, let code = parts.first, code.count == 6 else { return }
-        pendingCrewInvite = code.uppercased()
+              parts.count == 1, let raw = parts.first, CrewInviteCode.isValid(CrewInviteCode.normalise(raw)) else { return }
+        pendingCrewInvite = CrewInviteCode.normalise(raw)
     }
 }

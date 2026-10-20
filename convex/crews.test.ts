@@ -51,6 +51,30 @@ describe("crew maps", () => {
     expect((await alice.query(api.crews.myCrews))[0].memberCount).toBe(1);
   });
 
+  test("competing first-place adds must retry on the winning grid; lost replies stay idempotent", async () => {
+    const { alice, bob, crewId, joinBob, file } = await setup();
+    await joinBob();
+    const bounds = { minQ: -5, maxQ: 5, minR: -5, maxR: 5 };
+    const a = { crewId, clientId: "a", name: "First", bounds, gridPlaceId: null, file: await file() };
+    const b = { crewId, clientId: "b", name: "Second", bounds, gridPlaceId: null, file: await file(bob) };
+    const results = await Promise.allSettled([
+      alice.action(api.crews.addCrewPlace, a), bob.action(api.crews.addCrewPlace, b),
+    ]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const failed = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+    expect(String(failed.reason)).toContain("GRID_CHANGED");
+    const snapshot = await alice.query(api.crews.crewSnapshot, { crewId });
+    expect(snapshot.places).toHaveLength(1);
+    const winner = snapshot.places[0];
+    const [owner, args, loser, rejected] = winner.clientId === "a" ? [alice, a, bob, b] : [bob, b, alice, a];
+    // Same client ID is accepted before the stale null anchor is checked.
+    expect(await owner.action(api.crews.addCrewPlace, args)).toBe(winner.placeId);
+    expect(await loser.run((ctx) => ctx.storage.getUrl(rejected.file))).toBeNull();
+    const saved = await loser.action(api.crews.addCrewPlace, { ...rejected, file: await file(loser), gridPlaceId: winner.placeId });
+    expect(saved).not.toBe(winner.placeId);
+    expect((await alice.query(api.crews.crewSnapshot, { crewId })).places).toHaveLength(2);
+  });
+
   test("all public functions require sign-in", async () => {
     const { t, crewId, inviteCode, addPlace, file, bobId } = await setup();
     const placeId = await addPlace();

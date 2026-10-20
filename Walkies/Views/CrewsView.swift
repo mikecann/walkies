@@ -58,7 +58,7 @@ struct MapChoices: View {
         } label: {
             HStack(spacing: 6) {
                 Text(name).lineLimit(1)
-                ForEach(members.prefix(6)) { member in
+                ForEach(members.prefix(8)) { member in
                     Circle().fill(Color.crew(member.colour)).frame(width: 8, height: 8)
                         .accessibilityLabel(member.name)
                 }
@@ -149,6 +149,7 @@ struct CrewInviteCard: View {
             Text("They can enter this code in Walkies, or open the link on their phone.")
                 .font(.subheadline).foregroundStyle(.secondary)
             ShareLink(item: crew.inviteURL) { Label("Share invite link", systemImage: "square.and.arrow.up") }
+            if crew.members.count >= 8 { Text("This crew is full (8 members).").font(.subheadline) }
             Text(crew.inviteURL.absoluteString).font(.caption).textSelection(.enabled)
         }
         .padding(16)
@@ -223,18 +224,17 @@ struct JoinCrewView: View {
     @State private var sharing = CrewSharing.tiles
     @State private var busy = false
     @State private var error: String?
-    private var normalisedCode: String { code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() }
+    private var normalisedCode: String { CrewInviteCode.normalise(code) }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Invite code") {
-                    TextField("ABC234", text: $code).textInputAutocapitalization(.characters).autocorrectionDisabled()
-                    Button("Check code", action: check).disabled(normalisedCode.count != 6 || busy)
+                    TextField("ABCD2345", text: $code).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                    Button("Check code", action: check).disabled(!CrewInviteCode.isValid(normalisedCode) || busy)
                 }
                 if let preview, checkedCode == normalisedCode {
                     Section(preview.name) {
-                        Text(preview.memberNames.joined(separator: ", "))
                         Text("Past walks in the crew's places count too.").font(.subheadline)
                     }
                     CrewPreferences(colour: $colour, sharing: $sharing)
@@ -247,7 +247,7 @@ struct JoinCrewView: View {
             .scrollContentBackground(.hidden).background(Color.cream)
             .navigationTitle("Join a crew map").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(busy) } }
-            .onAppear { if code.isEmpty { code = initialCode }; if normalisedCode.count == 6 { check() } }
+            .onAppear { if code.isEmpty { code = initialCode }; if CrewInviteCode.isValid(normalisedCode) { check() } }
         }
         .interactiveDismissDisabled(busy)
     }
@@ -256,6 +256,8 @@ struct JoinCrewView: View {
         busy = true
         error = nil
         let input = normalisedCode
+        preview = nil
+        checkedCode = ""
         Task {
             defer { busy = false }
             do {
@@ -303,7 +305,7 @@ struct CrewSettingsView: View {
         NavigationStack {
             Form {
                 if let crew {
-                    Section("Members") {
+                    Section("Members (\(crew.members.count)/8)") {
                         ForEach(crew.members) { member in
                             HStack {
                                 Circle().fill(Color.crew(member.colour)).frame(width: 14, height: 14)
@@ -333,7 +335,18 @@ struct CrewSettingsView: View {
                         Text("Switch off to pause contributions. Tiles you've already shared stay on the crew map. Tiles only removes your shared trails.")
                     }
                     CrewInviteCard(crew: crew).listRowBackground(Color.clear)
+                    if let message = crew.syncMessage { Text(message).foregroundStyle(.red) }
                     if crew.you?.userId == crew.createdBy {
+                        Section {
+                            Button("New invite link") {
+                                run { api in
+                                    let code = try await api.newInviteCode(crewID)
+                                    model.editCrew(crewID) { $0.inviteCode = code }
+                                }
+                            }
+                        } footer: {
+                            Text("Replaces the current link and allows previously removed members to join with the new one.")
+                        }
                         Section("Crew name") {
                             TextField("Name", text: $name)
                             Button("Rename crew map") { run { try await $0.rename(crewID, name: name) } }
@@ -363,7 +376,7 @@ struct CrewSettingsView: View {
             } message: { Text("Your uncovered tiles and secrets stay. Your shared trails are removed.") }
             .confirmationDialog("Remove \(removal?.name ?? "member")?", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }), titleVisibility: .visible) {
                 if let member = removal { Button("Remove member", role: .destructive) { run { try await $0.remove(crewID, userId: member.userId) } } }
-            }
+            } message: { Text("Their shared trails will be removed and the invite link will change. They can only rejoin after you issue a new invite link.") }
         }
         .interactiveDismissDisabled(busy)
     }

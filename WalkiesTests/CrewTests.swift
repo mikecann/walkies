@@ -17,7 +17,7 @@ struct CrewTests {
         CrewMember(userId: id, name: id == "you" ? "Mike" : "Dad", colour: id == "you" ? "teal" : "blue", sharing: sharing, walksCount: walksCount, joinedAt: 1, isYou: id == "you")
     }
     func crew(_ city: City) -> CrewMap {
-        CrewMap(id: "crew", name: "Mike & Dad", createdBy: "you", inviteCode: "ABC234", members: [member(), member("dad")], places: [CrewPlace(placeId: "place", clientId: city.id.uuidString, city: city)])
+        CrewMap(id: "crew", name: "Mike & Dad", createdBy: "you", inviteCode: "ABCD2345", members: [member(), member("dad")], places: [CrewPlace(placeId: "place", clientId: city.id.uuidString, city: city)])
     }
     func walk(_ city: City) -> Walk {
         let date = Date(timeIntervalSince1970: 10_000)
@@ -218,10 +218,10 @@ struct CrewTests {
         #expect(model.mapCities[0].id == shared.id)
         #expect(model.cities[0].id == personal.id)
         #expect(model.balance == before)
-        model.openCrewURL(URL(string: "walkies://join/abc234")!)
-        #expect(model.pendingCrewInvite == "ABC234")
+        model.openCrewURL(URL(string: "walkies://join/abcd2345")!)
+        #expect(model.pendingCrewInvite == "ABCD2345")
         model.openCrewURL(URL(string: "walkies://signed-in?code=nope")!)
-        #expect(model.pendingCrewInvite == "ABC234")
+        #expect(model.pendingCrewInvite == "ABCD2345")
         model.wipeLocalData()
         #expect(model.crews.isEmpty)
         #expect(model.currentCrewID == nil)
@@ -302,6 +302,124 @@ extension CrewTests {
         #expect(!built.tiles.isEmpty)
     }
 
+    @Test func inviteCodesAndActionKindsMatchCurrentContract() async throws {
+        #expect(CrewInviteCode.isValid(CrewInviteCode.normalise(" abcd2345 ")))
+        #expect(!CrewInviteCode.isValid("ABC234"))
+        #expect(!CrewInviteCode.isValid("ABCI2345"))
+        let server = CrewHTTPServer(map: crew(city()))
+        CrewHTTPProtocol.server = server
+        defer { CrewHTTPProtocol.server = nil }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CrewHTTPProtocol.self]
+        let api = CrewsAPI(client: ConvexClient(session: URLSession(configuration: configuration)))
+        #expect(try await api.create(name: "Crew", colour: "teal", sharing: .tiles).inviteCode == "ABCD2345")
+        #expect(try await api.join(code: "ABCD2345", colour: "teal", sharing: .tiles) == "crew")
+        #expect(try await api.newInviteCode("crew") == "EFGH2345")
+        try await api.remove("crew", userId: "dad")
+        for code in ["RATE_LIMITED", "MEMBER_REMOVED", "CREW_FULL", "NOT_A_MEMBER"] {
+            let message = ConvexError.coded(code, "Raw backend message").localizedDescription
+            #expect(!message.contains("Raw backend"))
+        }
+    }
+
+    @Test func trailVersionsSurviveRetriesChangesAndLegacySavesAndRespectCap() throws {
+        let city = city()
+        var map = crew(city)
+        let walk = walk(city)
+        map.queueTrail(walk)
+        let first = map.pendingTrails[0]
+        map.pendingTrails[0].file = "claimed"
+        map.queueTrail(walk)
+        #expect(map.pendingTrails[0].updatedAt == first.updatedAt)
+        #expect(map.pendingTrails[0].file == "claimed")
+        let route = CrewRoute(segments: [[Coordinate(lat: 1, lon: 1), Coordinate(lat: 2, lon: 2)]])
+        map.queueRoute(route, walkClientId: first.id)
+        #expect(map.pendingTrails[0].updatedAt > first.updatedAt)
+        #expect(map.pendingTrails[0].file == nil)
+        let restored = try JSONDecoder().decode(CrewMap.self, from: JSONEncoder().encode(map))
+        #expect(restored.pendingTrails[0].updatedAt == map.pendingTrails[0].updatedAt)
+        let legacy = Data(#"{"walkClientId":"old","route":{"segments":[]},"file":"personal-upload"}"#.utf8)
+        let migrated = try JSONDecoder().decode(CrewPendingTrail.self, from: legacy)
+        #expect(migrated.file == nil)
+        #expect(migrated.updatedAt.isFinite)
+        for n in 0..<100 { map.queueRoute(route, walkClientId: "walk-\(n)") }
+        #expect(map.pendingTrails.count == 64)
+        map.queueRoute(first.route, walkClientId: first.id)
+        #expect(map.pendingTrails.count == 64)
+    }
+
+    @Test func boundsCoverNonStreetDiscoveryAndRejectOversizedPlaces() throws {
+        var city = city()
+        let inside = city.tiles
+        city.tiles = [Hex(q: 0, r: 0)]
+        let bounds = try CrewPlaceBounds(city: city)
+        #expect(inside.allSatisfy { $0.q >= bounds.minQ && $0.q <= bounds.maxQ && $0.r >= bounds.minR && $0.r <= bounds.maxR })
+        city.tiles.insert(Hex(q: 1_000_001, r: 0))
+        #expect(throws: (any Error).self) { try CrewPlaceBounds(city: city) }
+    }
+
+    @Test func snapshotPagingIsAtomicOnFailureAndKeepsExactCursor() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let city = city()
+        var local = crew(city)
+        local.since = 90
+        local.replayedPlaces = ["place"]
+        local.trails = [CrewTrail(walkClientId: "walk", by: "you", at: 1, route: CrewRoute(segments: []))]
+        store.save(crews: [local])
+        let server = CrewHTTPServer(map: crew(city))
+        await server.configurePaging(fail: true)
+        CrewHTTPProtocol.server = server
+        defer { CrewHTTPProtocol.server = nil }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CrewHTTPProtocol.self]
+        let api = CrewsAPI(client: ConvexClient(session: URLSession(configuration: configuration)))
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        do { try await model.refreshCrew("crew", api: api); Issue.record("Expected page failure") } catch { }
+        #expect(model.crews[0].since == 90)
+        #expect(store.loadCrews()[0].since == 90)
+        #expect(model.crews[0].places[0].city.visited.isEmpty)
+        #expect(model.crews[0].trails.isEmpty)
+        await server.configurePaging(fail: false)
+        try await model.refreshCrew("crew", api: api)
+        #expect(model.crews[0].places[0].city.visited.count == 2001)
+        #expect(store.loadCrews()[0].since == 200)
+        #expect(model.crews[0].name == "Last page")
+        // Initial full sync also echoes cursor.since as explicit JSON null.
+        let full = try await api.snapshot("crew", since: nil)
+        #expect(full.isFull && full.tiles.count == 2001)
+    }
+
+    @Test func firstPlaceRaceRebuildsOnWinningGridBeforeSaving() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let original = city()
+        let winning = city(origin: original.grid.projection.unproject(SIMD2(37, 21)), size: 35)
+        var local = crew(original)
+        local.places = []
+        local.pendingPlaces = [CrewPendingPlace(city: original)]
+        store.save(crews: [local])
+        let server = CrewHTTPServer(map: crew(winning))
+        await server.configureRace()
+        CrewHTTPProtocol.server = server
+        defer { CrewHTTPProtocol.server = nil }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CrewHTTPProtocol.self]
+        let api = CrewsAPI(client: ConvexClient(session: URLSession(configuration: configuration)))
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        try await model.uploadCrewPlaces("crew", api: api)
+        #expect(model.crews[0].pendingPlaces.isEmpty)
+        #expect(await server.uploadCalls == 2)
+        #expect(await server.placeClientIDs == [original.id.uuidString, original.id.uuidString])
+        let data = try #require(await server.routeFile)
+        let saved = try JSONDecoder().decode(City.self, from: data)
+        #expect(saved.grid == winning.grid)
+        #expect(saved.id == original.id)
+        #expect(saved.visited.isEmpty)
+    }
+
     @Test func placeRetryReusesClientAndStorageIDsAfterLostReply() async throws {
         let store = store()
         let city = city()
@@ -333,6 +451,47 @@ extension CrewTests {
         model.wipeLocalData()
     }
 
+    @Test func permanentLimitsDrainQueuesAndExpiredTrailUploadIsReplaced() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let city = city()
+        var local = crew(city)
+        local.replayedPlaces = ["place"]
+        local.queueTrail(walk(city))
+        let version = local.pendingTrails[0].updatedAt
+        store.save(crews: [local])
+        let server = CrewHTTPServer(map: crew(city))
+        await server.expireNextTrail()
+        CrewHTTPProtocol.server = server
+        defer { CrewHTTPProtocol.server = nil }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CrewHTTPProtocol.self]
+        let client = ConvexClient(session: URLSession(configuration: configuration))
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, makeClient: { client })
+        await engine.sync()
+        #expect(model.crews[0].pendingTrails[0].file == nil)
+        #expect(store.loadCrews()[0].pendingTrails[0].updatedAt == version)
+        await engine.sync()
+        #expect(await server.uploadCalls == 2)
+        #expect(model.crews[0].pendingTrails.isEmpty)
+        #expect(engine.status == .idle)
+        await server.rejectContributions()
+        model.editCrew("crew") { crew in
+            _ = crew.visit([city.grid.projection.origin], at: .now)
+            crew.pendingSecrets["limit"] = Date.now.ms
+            crew.queueRoute(CrewRoute(segments: [[Coordinate(lat: 0, lon: 0), Coordinate(lat: 1, lon: 1)]]), walkClientId: "extra")
+        }
+        await engine.sync()
+        #expect(model.crews[0].waiting == 0)
+        #expect(model.crews[0].syncMessage != nil)
+        #expect(model.crews[0].places[0].city.visited.isEmpty)
+        let calls = await server.trailCalls
+        await engine.sync()
+        #expect(await server.trailCalls == calls)
+    }
+
     @Test func httpSyncRetriesCommittedTilesUsesCursorAndHonoursTrailOptOut() async throws {
         let store = store()
         defer { store.wipe() }
@@ -349,7 +508,7 @@ extension CrewTests {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [CrewHTTPProtocol.self]
         let client = ConvexClient(token: "mock", session: URLSession(configuration: configuration))
-        let invalidInvite = try await CrewsAPI(client: client).preview("BAD234")
+        let invalidInvite = try await CrewsAPI(client: client).preview("BAD23456")
         #expect(invalidInvite == nil)
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
@@ -394,7 +553,18 @@ private actor CrewHTTPServer {
     var savedSecrets: Set<String> = []
     var sinceValues: [Double] = []
     var routeFile: Data?
+    var expireTrail = false
+    var rejectLimits = false
+    func expireNextTrail() { expireTrail = true }
+    func rejectContributions() { rejectLimits = true }
+    var paging = false
+    var failPage = false
+    var racing = false
+    var raceWon = false
     var trailSharing = true
+    func configurePaging(fail: Bool) { paging = true; failPage = fail; trailSharing = false }
+    func configureRace() { racing = true }
+
     init(map: CrewMap) { self.map = map }
     func disableTrails() { trailSharing = false }
 
@@ -405,12 +575,28 @@ private actor CrewHTTPServer {
             return Data(#"{"storageId":"crew-route-file"}"#.utf8)
         }
         if request.url?.path == "/route" { return routeFile! }
+        if request.url?.path == "/place" { return try JSONEncoder().encode(map.places[0].city) }
+        if request.url?.path == "/api/interpreter" { return Data(#"{"elements":[]}"#.utf8) }
         let call = try JSONSerialization.jsonObject(with: Self.body(request)) as! [String: Any]
         let path = call["path"] as! String, args = call["args"] as! [String: Any]
         var value: Any = NSNull()
         switch path {
         case "sync:snapshot": value = ["walks": [], "places": [], "secrets": []]
-        case "sync:generateUploadUrl": value = "https://crew.walkies.test/upload"
+        case "crews:uploadFile":
+            #expect(request.url?.path == "/api/action")
+            uploadCalls += 1
+            routeFile = Data((args["json"] as! String).utf8)
+            value = "crew-route-file"
+        case "crews:createCrew":
+            #expect(request.url?.path == "/api/action")
+            value = ["crewId": "crew", "inviteCode": "ABCD2345"]
+        case "crews:joinCrew":
+            #expect(request.url?.path == "/api/action")
+            value = "crew"
+        case "crews:newInviteCode":
+            #expect(request.url?.path == "/api/action")
+            value = "EFGH2345"
+        case "crews:removeMember": #expect(request.url?.path == "/api/action")
         case "crews:myCrews":
             let membership = try JSONSerialization.jsonObject(with: JSONEncoder().encode(map.members[0]))
             value = [["crewId": map.id, "name": map.name, "memberCount": 2, "membership": membership]]
@@ -428,24 +614,70 @@ private actor CrewHTTPServer {
                 "trails": trailSharing && trailCalls > 0 ? [["walkClientId": "walk", "by": "you", "at": 100, "url": "https://crew.walkies.test/route"]] : [],
                 "secrets": savedSecrets.map { ["secretId": $0, "by": "you", "at": 50_000] as [String: Any] },
                 "serverTime": savedTiles.isEmpty ? 100 : 101,
+                "more": false, "cursor": NSNull(),
             ] as [String: Any]
+            if racing {
+                var page = value as! [String: Any]
+                page["places"] = raceWon ? [["placeId": "place", "clientId": map.places[0].clientId, "name": "Winner", "updatedAt": 1, "url": "https://crew.walkies.test/place"]] : []
+                value = page
+            }
+            if paging {
+                let cursor = args["cursor"] as? [String: Any]
+                let pageIndex = cursor?["position"] as? String == "opaque/second+=" ? 1 : cursor == nil ? 0 : 2
+                if let cursor {
+                    #expect(cursor["until"] as? Double == 200)
+                    if let since { #expect(cursor["since"] as? Double == since) }
+                    else { #expect(cursor["since"] is NSNull) }
+                }
+                if failPage && pageIndex == 1 { return Data(#"{"status":"error","errorData":{"code":"RETRY","message":"page failed"}}"#.utf8) }
+                var page = value as! [String: Any]
+                let start = pageIndex * 1000, end = min(start + 1000, 2001)
+                page["tiles"] = (start..<end).map { ["placeId": "place", "q": $0, "r": 0, "by": "dad", "at": 1] as [String: Any] }
+                page["serverTime"] = 200
+                page["more"] = pageIndex < 2
+                page["cursor"] = pageIndex < 2 ? ["position": pageIndex == 0 ? "opaque/second+=" : "opaque/third+=", "until": 200, "since": since.map { $0 as Any } ?? NSNull()] : NSNull()
+                page["crew"] = ["crewId": map.id, "name": pageIndex == 2 ? "Last page" : map.name, "createdBy": map.createdBy, "inviteCode": map.inviteCode, "createdAt": 1]
+                value = page
+            }
         case "crews:addCrewPlace":
+            #expect(request.url?.path == "/api/action")
+            #expect(args["bounds"] != nil)
+            #expect(args.keys.contains("gridPlaceId"))
             placeClientIDs.append(args["clientId"] as! String)
-            if placeClientIDs.count == 1 { return Data(#"{"status":"error","errorMessage":"Lost place reply"}"#.utf8) }
+            if racing {
+                if !raceWon {
+                    #expect(args["gridPlaceId"] is NSNull)
+                    raceWon = true
+                    return Data(#"{"status":"error","errorData":{"code":"GRID_CHANGED","message":"Another place won"}}"#.utf8)
+                }
+                #expect(args["gridPlaceId"] as? String == "place")
+            }
+            if !racing && placeClientIDs.count == 1 { return Data(#"{"status":"error","errorMessage":"Lost place reply"}"#.utf8) }
             value = "place"
         case "crews:uploadCrewTiles":
             tileCalls += 1
+            if rejectLimits { return Self.failure("TILE_LIMIT") }
             for hex in args["hexes"] as! [[Int]] {
                 savedTiles["\(hex[0]),\(hex[1])"] = ["placeId": "place", "q": hex[0], "r": hex[1], "by": "you", "at": args["at"]!]
             }
             if tileCalls == 1 { return Data(#"{"status":"error","errorData":{"code":"RETRY","message":"Reply lost after commit"}}"#.utf8) }
             value = 0
-        case "crews:uploadCrewTrail": trailCalls += 1
+        case "crews:crewForInvite": #expect(request.url?.path == "/api/mutation")
+        case "crews:uploadCrewTrail":
+            #expect(request.url?.path == "/api/action")
+            #expect((args["updatedAt"] as? Double)?.isFinite == true)
+            trailCalls += 1
+            if expireTrail { expireTrail = false; return Self.failure("INVALID_UPLOAD") }
+            if rejectLimits { return Self.failure("TRAIL_LIMIT") }
         case "crews:recordCrewSecrets":
+            if rejectLimits { return Self.failure("SECRET_LIMIT") }
             for secret in args["secrets"] as! [[String: Any]] { savedSecrets.insert(secret["secretId"] as! String) }
         default: break
         }
         return try JSONSerialization.data(withJSONObject: ["status": "success", "value": value])
+    }
+    private static func failure(_ code: String) -> Data {
+        try! JSONSerialization.data(withJSONObject: ["status": "error", "errorData": ["code": code, "message": code]])
     }
     private static func body(_ request: URLRequest) -> Data {
         if let data = request.httpBody { return data }

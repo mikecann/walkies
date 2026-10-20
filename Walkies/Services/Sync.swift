@@ -235,27 +235,52 @@ final class SyncEngine {
                 }
                 guard let crew = model.crews.first(where: { $0.id == id }) else { continue }
                 for batch in crew.pendingTiles {
-                    try await api.tiles(id, batch: batch)
+                    do { try await api.tiles(id, batch: batch) }
+                    catch {
+                        try checkSession()
+                        guard let coded = error as? ConvexError, ["TILE_LIMIT", "PLACE_BOUNDS_REQUIRED", "PLACE_NOT_FOUND", "INVALID_ARGUMENT"].contains(coded.code ?? "") else { throw error }
+                        model.editCrew(id) { $0.syncMessage = error.localizedDescription; $0.since = nil }
+                    }
                     try checkSession()
                     model.editCrew(id) { $0.pendingTiles.removeAll { $0.id == batch.id } }
                 }
                 for trail in crew.pendingTrails where crew.you?.sharing == .tilesAndTrail {
-                    let file: String
-                    if let uploaded = trail.file { file = uploaded }
-                    else {
-                        file = try await api.upload(JSONEncoder().encode(trail.route))
-                        model.editCrew(id) { live in
-                            if let i = live.pendingTrails.firstIndex(where: { $0.id == trail.id && $0.route == trail.route }) { live.pendingTrails[i].file = file }
+                    do {
+                        let file: String
+                        if let uploaded = trail.file { file = uploaded }
+                        else {
+                            file = try await api.upload(JSONEncoder().encode(trail.route))
+                            try checkSession()
+                            model.editCrew(id) { live in
+                                if let i = live.pendingTrails.firstIndex(where: { $0.id == trail.id && $0.updatedAt == trail.updatedAt }) { live.pendingTrails[i].file = file }
+                            }
                         }
+                        try await api.trail(id, trail: trail, file: file)
                     }
-                    try await api.trail(id, trail: trail, file: file)
+                    catch {
+                        try checkSession()
+                        guard let coded = error as? ConvexError else { throw error }
+                        if ["INVALID_UPLOAD", "FILE_NOT_FOUND"].contains(coded.code ?? "") {
+                            model.editCrew(id) { live in
+                                if let i = live.pendingTrails.firstIndex(where: { $0.id == trail.id && $0.updatedAt == trail.updatedAt }) { live.pendingTrails[i].file = nil }
+                            }
+                            throw error
+                        }
+                        guard ["TRAIL_LIMIT", "INVALID_ARGUMENT"].contains(coded.code ?? "") else { throw error }
+                        model.editCrew(id) { $0.syncMessage = error.localizedDescription }
+                    }
                     try checkSession()
-                    model.editCrew(id) { $0.pendingTrails.removeAll { $0.id == trail.id && $0.route == trail.route } }
+                    model.editCrew(id) { $0.pendingTrails.removeAll { $0.id == trail.id && $0.updatedAt == trail.updatedAt } }
                 }
                 let entries = crew.pendingSecrets.sorted { $0.key < $1.key }
                 for start in stride(from: 0, to: entries.count, by: 400) {
                     let batch = Dictionary(uniqueKeysWithValues: entries[start..<min(start + 400, entries.count)].map { ($0.key, $0.value) })
-                    try await api.secrets(id, secrets: batch)
+                    do { try await api.secrets(id, secrets: batch) }
+                    catch {
+                        try checkSession()
+                        guard let coded = error as? ConvexError, ["SECRET_LIMIT", "INVALID_ARGUMENT"].contains(coded.code ?? "") else { throw error }
+                        model.editCrew(id) { $0.syncMessage = error.localizedDescription }
+                    }
                     try checkSession()
                     model.editCrew(id) { live in
                         for (secret, at) in batch where live.pendingSecrets[secret] == at { live.pendingSecrets[secret] = nil }
@@ -265,10 +290,10 @@ final class SyncEngine {
                 try await model.refreshCrew(id, api: api)
             } catch {
                 try checkSession()
-                if let error = error as? ConvexError, error.code == "NOT_A_MEMBER" {
+                if let error = error as? ConvexError, ["NOT_A_MEMBER", "CREW_NOT_FOUND", "MEMBER_REMOVED"].contains(error.code ?? "") {
                     model.retainCrews(Set(model.crews.map(\.id)).subtracting([id]))
                 } else if let error = error as? ConvexError, error.code == "TRAIL_SHARING_DISABLED" {
-                    model.editCrew(id) { $0.pendingTrails = []; $0.trails = [] }
+                    model.editCrew(id) { $0.pendingTrails = []; $0.trails = []; $0.routeWork = [] }
                     try? await model.refreshCrew(id, api: api)
                 } else { failure = error }
             }

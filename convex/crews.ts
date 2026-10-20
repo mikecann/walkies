@@ -310,7 +310,7 @@ export const rotateInvite = internalMutation({
   },
 });
 
-const placeArgs = { crewId: v.id("crews"), clientId: v.string(), name: v.string(), file: v.id("_storage"), bounds: boundsValidator };
+const placeArgs = { crewId: v.id("crews"), clientId: v.string(), name: v.string(), file: v.id("_storage"), bounds: boundsValidator, gridPlaceId: v.optional(v.union(v.id("crewPlaces"), v.null())) };
 export const addCrewPlace = action({
   args: placeArgs, returns: v.id("crewPlaces"),
   handler: async (ctx, args): Promise<Id<"crewPlaces">> => {
@@ -329,8 +329,13 @@ export const addPlaceRecord = internalMutation({
     if (!Object.values(args.bounds).every((n) => Number.isSafeInteger(n) && Math.abs(n) <= 1_000_000) || minQ > maxQ || minR > maxR || maxQ - minQ > 10_000 || maxR - minR > 10_000) fail("INVALID_ARGUMENT", "Supply a valid, bounded axial grid extent.");
     const places = await ctx.db.query("crewPlaces").withIndex("by_crew_client", (q) => q.eq("crewId", args.crewId)).take(MAX_PLACES);
     if (places.length >= MAX_PLACES) fail("PLACE_LIMIT", "A crew can contain at most 16 places.");
+    // A first-place upload must still be first when it commits. Later places
+    // reference a grid they actually downloaded. No schema or file parsing needed.
+    if (args.gridPlaceId !== undefined && (args.gridPlaceId === null ? places.length > 0 : !places.some((p) => p._id === args.gridPlaceId))) {
+      fail("GRID_CHANGED", "Refresh the crew and rebuild this place on its shared grid.");
+    }
     await consumeFile(ctx, args.file, userId);
-    return await ctx.db.insert("crewPlaces", { ...args, clientId, name: text(args.name, "Place name"), addedBy: userId, updatedAt: Date.now(), tileCount: 0 });
+    return await ctx.db.insert("crewPlaces", { crewId: args.crewId, file: args.file, bounds: args.bounds, clientId, name: text(args.name, "Place name"), addedBy: userId, updatedAt: Date.now(), tileCount: 0 });
   },
 });
 export const uploadCrewTiles = mutation({

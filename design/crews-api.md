@@ -33,7 +33,7 @@ throwing, so transaction rollback cannot bypass the limit. Convex documents thes
 | `renameCrew` | mutation | `{ crewId, name }` | `null` |
 | `removeMember` | action | `{ crewId, userId }` | `null` |
 | `uploadFile` | action | `{ json: string }` | `Id<"_storage">` |
-| `addCrewPlace` | action | `{ crewId, clientId, name, file, bounds: { minQ, maxQ, minR, maxR } }` | `Id<"crewPlaces">` |
+| `addCrewPlace` | action | `{ crewId, clientId, name, file, bounds: { minQ, maxQ, minR, maxR }, gridPlaceId?: Id | null }` | `Id<"crewPlaces">` |
 | `uploadCrewTiles` | mutation | `{ crewId, placeId, hexes: [q, r][], at }` | Number of new tiles |
 | `uploadCrewTrail` | action | `{ crewId, walkClientId, file, updatedAt }` | `null` |
 | `recordCrewSecrets` | mutation | `{ crewId, secrets: { secretId, at }[] }` | `null` |
@@ -114,6 +114,13 @@ inside those stored bounds. A crew can have at most 16 immutable places and each
 place at most 50,000 tiles. These caps also apply if a faulty client supplies
 misleading bounds.
 
+The phone supplies `gridPlaceId`: the ID of a downloaded place whose grid it used,
+or explicit `null` when building the first place. The save transaction rejects
+`GRID_CHANGED` if another first place has appeared or the referenced place no longer
+exists. Refresh, rebuild on the shared grid, and re-upload before retrying. This
+prevents simultaneous first additions from establishing incompatible grids. The
+argument is optional for older clients; those clients cannot guarantee this check.
+
 Adding the same `(crewId, clientId)` returns its original place ID and preserves
 its first file, bounds and metadata. There is no place editing/removal API.
 
@@ -137,7 +144,7 @@ Limits and uniqueness are checked transactionally, including concurrent uploads.
 Besides the errors above, codes include `UNAUTHENTICATED`, `NOT_A_MEMBER`,
 `CREW_NOT_FOUND`, `CREATOR_ONLY`, `INVALID_INVITE`, `INVITE_CODE_EXHAUSTED`,
 `MEMBER_REMOVED`, `CREW_FULL`, `INVALID_ARGUMENT`, `PLACE_NOT_FOUND`, `PLACE_LIMIT`,
-`PLACE_BOUNDS_REQUIRED`, `TILE_LIMIT`, `TRAIL_LIMIT`, `SECRET_LIMIT`, `FILE_NOT_FOUND`
+`PLACE_BOUNDS_REQUIRED`, `TILE_LIMIT`, `TRAIL_LIMIT`, `SECRET_LIMIT`, `FILE_NOT_FOUND`, `GRID_CHANGED`
 and `TRAIL_SHARING_DISABLED`. Non-members get `NOT_A_MEMBER` for either missing or
 inaccessible crews. Unknown invite previews return null. Refresh membership before
 retrying revoked/disabled contributions; do not keep retrying permanent limit errors.

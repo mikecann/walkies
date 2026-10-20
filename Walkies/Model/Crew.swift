@@ -59,6 +59,7 @@ nonisolated struct CrewTileBatch: Codable, Sendable, Identifiable {
 nonisolated struct CrewPendingPlace: Codable, Sendable, Identifiable {
     var city: City
     var file: String?
+    var uploadClaimed: Bool?
     var id: UUID { city.id }
 }
 
@@ -67,7 +68,22 @@ nonisolated struct CrewPendingTrail: Codable, Sendable, Identifiable {
     var route: CrewRoute
     /// Keep the storage id across retries; each row owns a dedicated file.
     var file: String?
+    var updatedAt: Double
     var id: String { walkClientId }
+
+    init(walkClientId: String, route: CrewRoute, file: String? = nil, updatedAt: Double = Date.now.ms) {
+        self.walkClientId = walkClientId; self.route = route; self.file = file; self.updatedAt = updatedAt
+    }
+    private enum CodingKeys: String, CodingKey { case walkClientId, route, file, updatedAt }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        walkClientId = try c.decode(String.self, forKey: .walkClientId)
+        route = try c.decode(CrewRoute.self, forKey: .route)
+        file = try c.decodeIfPresent(String.self, forKey: .file)
+        updatedAt = try c.decodeIfPresent(Double.self, forKey: .updatedAt) ?? Date.now.ms
+        // Old queued files were uploaded through personal sync and cannot be claimed.
+        if !c.contains(.updatedAt) { file = nil }
+    }
 }
 
 nonisolated struct CrewMap: Codable, Sendable, Identifiable {
@@ -80,6 +96,9 @@ nonisolated struct CrewMap: Codable, Sendable, Identifiable {
     var trails: [CrewTrail] = []
     var secrets: [String: CrewDiscovery] = [:]
     var since: Double?
+    /// Retained after delivery so replay versions always increase, even in one millisecond.
+    var trailVersions: [String: Double]?
+    var syncMessage: String?
     var pendingPlaces: [CrewPendingPlace] = []
     var pendingTiles: [CrewTileBatch] = []
     var pendingTrails: [CrewPendingTrail] = []
@@ -130,8 +149,22 @@ nonisolated struct CrewMap: Codable, Sendable, Identifiable {
         guard let you, you.walksCount, you.sharing == .tilesAndTrail else { return }
         let route = CrewCoverage.route(for: walk.points, cities: cities)
         guard !route.segments.isEmpty else { return }
-        pendingTrails.removeAll { $0.walkClientId == walk.id.uuidString }
-        pendingTrails.append(CrewPendingTrail(walkClientId: walk.id.uuidString, route: route))
+        queueRoute(route, walkClientId: walk.id.uuidString)
+    }
+
+    mutating func queueRoute(_ route: CrewRoute, walkClientId: String) {
+        guard !route.segments.isEmpty else { return }
+        let pending = pendingTrails.first { $0.id == walkClientId }
+        if pending?.route == route { return }
+        if pending == nil, trails.contains(where: { $0.by == you?.userId && $0.walkClientId == walkClientId && $0.route == route }) { return }
+        let ids = Set(trails.filter { $0.by == you?.userId }.map(\.walkClientId) + pendingTrails.map(\.id))
+        guard ids.contains(walkClientId) || ids.count < 64 else { return }
+        let previous = max(trailVersions?[walkClientId] ?? 0, pending?.updatedAt ?? 0)
+        let version = max(Date.now.ms, previous + 1)
+        if trailVersions == nil { trailVersions = [:] }
+        trailVersions?[walkClientId] = version
+        pendingTrails.removeAll { $0.id == walkClientId }
+        pendingTrails.append(CrewPendingTrail(walkClientId: walkClientId, route: route, updatedAt: version))
     }
 
     /// Server credit wins over optimistic local credit, even for an older offline walk.
@@ -175,8 +208,8 @@ nonisolated enum CrewCoverage {
         guard crew.you?.walksCount == true else { return crew }
         for walk in walks.sorted(by: { $0.startedAt < $1.startedAt }) {
             if includeTiles { _ = crew.visit(CoverageTracer.samples(for: walk.points), at: walk.startedAt, only: placeIDs) }
-            crew.queueTrail(walk)
         }
+        for walk in walks.sorted(by: { $0.startedAt > $1.startedAt }) { crew.queueTrail(walk) }
         crew.replayedPlaces.formUnion(crew.places.map(\.id))
         return crew
     }
@@ -237,5 +270,27 @@ nonisolated enum CrewCoverage {
             if current.count > 1 { out.append(current) }
         }
         return CrewRoute(segments: out)
+    }
+}
+
+/// Include every boundary hex, not only streets: walking can uncover a non-street tile too.
+nonisolated struct CrewPlaceBounds: Encodable {
+    var minQ: Int32; var maxQ: Int32; var minR: Int32; var maxR: Int32
+    init(city: City) throws {
+        let hexes = City.hexes(inside: city.shape(), grid: city.grid).union(city.tiles)
+        guard let minQ = hexes.map(\.q).min(), let maxQ = hexes.map(\.q).max(),
+              let minR = hexes.map(\.r).min(), let maxR = hexes.map(\.r).max(),
+              [minQ, maxQ, minR, maxR].allSatisfy({ abs(Int($0)) <= 1_000_000 }),
+              Int(maxQ) - Int(minQ) <= 10_000, Int(maxR) - Int(minR) <= 10_000 else {
+            throw ConvexError.coded("INVALID_ARGUMENT", "This place is too large for a crew map. Choose a smaller place.")
+        }
+        self.minQ = minQ; self.maxQ = maxQ; self.minR = minR; self.maxR = maxR
+    }
+}
+
+nonisolated enum CrewInviteCode {
+    static func normalise(_ code: String) -> String { code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() }
+    static func isValid(_ code: String) -> Bool {
+        code.count == 8 && code.allSatisfy { "ABCDEFGHJKMNPQRSTUVWXYZ23456789".contains($0) }
     }
 }
