@@ -1167,7 +1167,7 @@ extension AppModel {
     func joinedCrew(_ id: String) {
         crewMembershipRevision += 1
         if !crews.contains(where: { $0.id == id }) {
-            crews.append(CrewMap(id: id, name: "Crew map", createdBy: "", inviteCode: ""))
+            crews.append(CrewMap(id: id, name: "Team map", createdBy: "", inviteCode: ""))
         }
         dirtyCrewIDs.insert(id)
         saveCrews()
@@ -1368,7 +1368,7 @@ extension AppModel {
     }
 
     func crewAPI() async throws -> CrewsAPI {
-        guard let client = await makePlaceClient?() else { throw ConvexError.server("Connect and sign in to manage a crew map.") }
+        guard let client = await makePlaceClient?() else { throw ConvexError.server("Connect and sign in to manage a team map.") }
         return CrewsAPI(client: client)
     }
 
@@ -1413,7 +1413,7 @@ extension AppModel {
         var cities: [String: City] = [:]
         for place in snapshot.places where !knownPlaces.contains(place.placeId) {
             // Don't advance the tile cursor until every place can accept its tiles.
-            guard let url = place.url.flatMap(URL.init(string:)) else { throw ConvexError.server("A crew place isn't available yet. Try syncing again shortly.") }
+            guard let url = place.url.flatMap(URL.init(string:)) else { throw ConvexError.server("A team place isn't available yet. Try syncing again shortly.") }
             var city = try await api.city(url)
             city.visited = []
             city.tileCredits = nil

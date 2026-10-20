@@ -43,16 +43,16 @@ http.route({
     const normalized = code.trim().toUpperCase();
     const valid = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$/.test(normalized);
     const deepLink = valid ? `walkies://join/${normalized}` : null;
-    const heading = "Open Walkies to join a crew";
+    const heading = "Open Walkies to join a team";
     return new Response(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Join a Walkies crew</title><style>
+<title>Join a Walkies team</title><style>
 body { margin: 0; min-height: 100svh; display: grid; place-items: center; background: #faf3e5; color: #343b30; font: 18px/1.5 system-ui, sans-serif; }
 main { max-width: 30rem; padding: 2rem; text-align: center; } h1 { font-size: 2rem; line-height: 1.2; }
 a { display: inline-block; padding: .8rem 1.4rem; border-radius: 1rem; background: #3c6549; color: white; text-decoration: none; }
 </style></head><body><main><h1>${heading}</h1>
-${deepLink === null ? "<p>Ask someone in the crew for a fresh link or check the eight-character code in Walkies.</p>" :
-  `<p>Your next walk can help fill in the map together.</p><a href="${deepLink}">Open Walkies</a><p>If nothing opens, install Walkies and enter <strong>${escapeHtml(normalized)}</strong> in Join a crew map.</p>`}
+${deepLink === null ? "<p>Ask someone in the team for a fresh link or check the eight-character code in Walkies.</p>" :
+  `<p>Your next walk can help fill in the map together.</p><a href="${deepLink}">Open Walkies</a><p>If nothing opens, install Walkies and enter <strong>${escapeHtml(normalized)}</strong> in Join a team map.</p>`}
 </main>${deepLink === null ? "" : `<script>window.location.href = ${JSON.stringify(deepLink)};</script>`}</body></html>`, {
       status: 200,
       headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },

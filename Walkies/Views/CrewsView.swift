@@ -50,7 +50,7 @@ struct MapChoices: View {
                 }
             }
             Button { sheet = .start } label: {
-                Text("Start a crew map")
+                Text("Start a team map")
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .contentShape(.rect)
             }
@@ -189,7 +189,7 @@ struct CrewInviteCard: View {
             Text("They can enter this code in Walkies, or open the link on their phone.")
                 .font(.subheadline).foregroundStyle(.secondary)
             ShareLink(item: crew.inviteURL) { Label("Share invite link", systemImage: "square.and.arrow.up") }
-            if crew.members.count >= 8 { Text("This crew is full (8 members).").font(.subheadline) }
+            if crew.members.count >= 8 { Text("This team is full (8 members).").font(.subheadline) }
             Text(crew.inviteURL.absoluteString).font(.caption).textSelection(.enabled)
         }
         .padding(16)
@@ -217,7 +217,7 @@ struct StartCrewView: View {
                     CrewInviteCard(crew: crew).listRowBackground(Color.clear)
                     Text("Add a place from Maps and places, then your past walks there will count too.")
                 } else {
-                    Section("Crew name") {
+                    Section("Team name") {
                         TextField("Mike & Dad", text: $name)
                             .textInputAutocapitalization(.words)
                             .focused($nameFocused)
@@ -227,13 +227,13 @@ struct StartCrewView: View {
                     CrewPreferences(colour: $colour, sharing: $sharing)
                     Section {
                         Button(action: create) {
-                            Text("Start crew map").frame(maxWidth: .infinity)
+                            Text("Start team map").frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(!canCreate)
                         .listRowBackground(Color.clear)
                     } footer: {
-                        Text("Your walks count on My map and this crew map. Shells and levels stay yours.")
+                        Text("Your walks count on My map and this team map. Shells and levels stay yours.")
                     }
                 }
                 if busy { ProgressView() }
@@ -243,7 +243,7 @@ struct StartCrewView: View {
             .disabled(busy)
             .scrollDismissesKeyboard(.interactively)
             .scrollContentBackground(.hidden).background(Color.cream)
-            .navigationTitle("Start a crew map").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Start a team map").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(busy) }
                 ToolbarItemGroup(placement: .keyboard) {
@@ -302,7 +302,7 @@ struct JoinCrewView: View {
                 }
                 if let preview = draft.preview, draft.checkedCode == normalisedCode {
                     Section(preview.name) {
-                        Text("Past walks in the crew's places count too.").font(.subheadline)
+                        Text("Past walks in the team's places count too.").font(.subheadline)
                     }
                     CrewPreferences(colour: $colour, sharing: $sharing)
                     Button("Join \(preview.name)", action: join).disabled(busy)
@@ -313,7 +313,7 @@ struct JoinCrewView: View {
             .buttonStyle(.borderless)
             .disabled(busy)
             .scrollContentBackground(.hidden).background(Color.cream)
-            .navigationTitle("Join a crew map").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Join a team map").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(busy) } }
             .onAppear { if draft.code.isEmpty { draft.replace(with: initialCode) }; if CrewInviteCode.isValid(normalisedCode) { check() } }
             .onChange(of: initialCode) {
@@ -338,7 +338,7 @@ struct JoinCrewView: View {
                 let api = try await model.crewAPI()
                 let result = try await api.preview(input)
                 guard !Task.isCancelled, draft.receive(result, for: input) else { return }
-                if result == nil { error = "That code doesn't match a crew map." }
+                if result == nil { error = "That code doesn't match a team map." }
             } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         }
     }
@@ -407,7 +407,7 @@ struct CrewSettingsView: View {
                             }
                         }
                     } footer: {
-                        Text("Switch off to pause contributions. Tiles you've already shared stay on the crew map. Tiles only removes your shared trails.")
+                        Text("Switch off to pause contributions. Tiles you've already shared stay on the team map. Tiles only removes your shared trails.")
                     }
                     CrewInviteCard(crew: crew).listRowBackground(Color.clear)
                     if let message = crew.syncMessage { Text(message).foregroundStyle(.red) }
@@ -422,13 +422,13 @@ struct CrewSettingsView: View {
                         } footer: {
                             Text("Replaces the current link and allows previously removed members to join with the new one.")
                         }
-                        Section("Crew name") {
+                        Section("Team name") {
                             TextField("Name", text: $name)
-                            Button("Rename crew map") { run { try await $0.rename(crewID, name: name) } }
+                            Button("Rename team map") { run { try await $0.rename(crewID, name: name) } }
                                 .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                     }
-                    Button("Leave crew map", role: .destructive) { leaving = true }
+                    Button("Leave team map", role: .destructive) { leaving = true }
                 }
                 if busy { ProgressView() }
                 if let error { Text(error).foregroundStyle(.red) }
@@ -436,13 +436,13 @@ struct CrewSettingsView: View {
             .buttonStyle(.borderless)
             .disabled(busy)
             .scrollContentBackground(.hidden).background(Color.cream)
-            .navigationTitle(crew?.name ?? "Crew map").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(crew?.name ?? "Team map").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(busy) } }
             .onAppear {
                 if let crew, let you = crew.you { name = crew.name; colour = you.colour; sharing = you.sharing; walksCount = you.walksCount }
             }
-            .confirmationDialog("Leave this crew map?", isPresented: $leaving, titleVisibility: .visible) {
-                Button("Leave crew map", role: .destructive) {
+            .confirmationDialog("Leave this team map?", isPresented: $leaving, titleVisibility: .visible) {
+                Button("Leave team map", role: .destructive) {
                     run { api in
                         try await api.leave(crewID)
                         model.retainCrews(Set(model.crews.map(\.id)).subtracting([crewID]))

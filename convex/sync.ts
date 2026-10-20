@@ -14,7 +14,7 @@ async function requirePersonalFile(ctx: MutationCtx, file: Id<"_storage">) {
   // Crew uploads are exclusively owned by a crew row. Personal sync must never
   // adopt or delete one, even when the caller supplies another person's ID.
   const claim = await ctx.db.query("crewUploads").withIndex("by_file", (q) => q.eq("file", file)).unique();
-  if (claim !== null) throw new ConvexError("Crew files cannot be used for personal sync");
+  if (claim !== null) throw new ConvexError("Team files cannot be used for personal sync");
 }
 
 /** Where to upload a walk or city file before saving it. */

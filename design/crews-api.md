@@ -1,7 +1,7 @@
-# Crew backend API
+# Team backend API
 
 Implemented in `convex/crews.ts`; product decisions are in [coop.md](coop.md).
-Crew contributions are separate from personal walking and progression records.
+Team contributions are separate from personal walking and progression records.
 
 ## Calling conventions
 
@@ -52,8 +52,8 @@ attempt. Once exhausted, previews and joins return `RATE_LIMITED` until it expir
 Preview results keep the `memberNames` field for compatibility but always return
 an empty array. Names of members are available only after joining.
 
-A crew holds at most **eight members, including its creator**. A repeated join
-returns the crew without changing preferences, even when the crew is full.
+A team holds at most **eight members, including its creator**. A repeated join
+returns the team without changing preferences, even when the team is full.
 `createCrew` uses the account name; `joinCrew` uses its optional override, then the
 account name, then `"Explorer"`.
 
@@ -68,17 +68,17 @@ yourself is leaving. Ownership does not transfer on departure, but follows an
 account merge. A creator who leaves can rejoin if they have a current invite.
 
 Leaving/removal erases route rows and their exclusively owned files. Switching to
-`tiles` does the same. New data is capped at 64 trails per member per crew, so normal
+`tiles` does the same. New data is capped at 64 trails per member per team, so normal
 opt-out/departure cleanup fits in one transaction. Legacy excess drains in batches
 of at most 500 rows. Membership identity and a sharing epoch prevent old cleanup
 jobs from deleting newly shared routes or old routes from becoming visible after
 rejoining/re-enabling. Re-enabling requires a phone replay. Tile/secret credits
 survive departure; use fallback labels/colours for departed contributors.
 
-The last departure deletes the crew immediately, disabling access and invites.
+The last departure deletes the team immediately, disabling access and invites.
 Place, tile, trail, secret and removal rows then drain in batches of 500 per table.
-No other crew or personal rows are deleted. Account merges keep one membership per
-crew. Overlapping memberships retain the canonical user's preferences and discard
+No other team or personal rows are deleted. Account merges keep one membership per
+team. Overlapping memberships retain the canonical user's preferences and discard
 the duplicate's routes; other memberships and their routes move to the canonical
 user. Attribution moves too, in scheduled batches for large tile histories. Tile
 attribution updates advance the ingestion clock so previously synced phones receive
@@ -86,16 +86,16 @@ the corrected user IDs in their next delta.
 
 ## Files and place grids
 
-1. Prepare dedicated crew JSON. Place JSON contains the boundary, streets and grid
-   without personal progress. Trail JSON contains only the route inside crew places.
+1. Prepare dedicated team JSON. Place JSON contains the boundary, streets and grid
+   without personal progress. Trail JSON contains only the route inside team places.
 2. Call the **`crews:uploadFile({ json })` action**, which accepts valid JSON up to
    2 MiB and returns a storage ID already claimed by the authenticated account.
 3. Pass that ID to `addCrewPlace` or `uploadCrewTrail`.
 
-Do not use `sync:generateUploadUrl` for crew files. There is no public API to claim
+Do not use `sync:generateUploadUrl` for team files. There is no public API to claim
 an existing storage ID: only the server's upload action can establish ownership.
-Each upload can be consumed by one crew row, once. Personal sync rejects claimed
-crew files as well, so personal and crew cleanup cannot delete one another's files.
+Each upload can be consumed by one team row, once. Personal sync rejects claimed
+team files as well, so personal and team cleanup cannot delete one another's files.
 Unclaimed personal uploads, other users' uploads and already-consumed files are
 rejected with `INVALID_UPLOAD` when a write would adopt them.
 
@@ -104,13 +104,13 @@ deleted on an idempotent place retry or an obsolete trail retry. Rejected place 
 trail saves discard only the caller's unused claimed file, never a foreign/used
 file. Abandoned unused uploads expire after 24 hours. Re-upload if one expires.
 
-All crew places must use the first place's grid, including origin and scale. The
+All team places must use the first place's grid, including origin and scale. The
 phone checks geographic clipping and grid compatibility; the server validates
 JSON syntax but does not interpret its geographic contents. `bounds` supplies the
 inclusive axial extent of the prepared place grid. All four bounds must be safe
 integers with absolute value at most 1,000,000, minima no greater than maxima, and
 at most 10,000 coordinate steps along either axis. Every uploaded tile must lie
-inside those stored bounds. A crew can have at most 16 immutable places and each
+inside those stored bounds. A team can have at most 16 immutable places and each
 place at most 50,000 tiles. These caps also apply if a faulty client supplies
 misleading bounds.
 
@@ -137,7 +137,7 @@ the phone intends to share within that cap.
 Tile batches accept at most 1,000 safe integer `[q, r]` pairs, including signed
 zero (normalized to zero). Duplicates are ignored, even at the place tile cap.
 Secrets accept at most 1,000 entries per request, with at most 1,000 stored secrets
-per crew. Tiles and secrets use **first committed upload wins**, not oldest `at`.
+per team. Tiles and secrets use **first committed upload wins**, not oldest `at`.
 An earlier offline discovery cannot replace another member's existing credit.
 Limits and uniqueness are checked transactionally, including concurrent uploads.
 
@@ -146,7 +146,7 @@ Besides the errors above, codes include `UNAUTHENTICATED`, `NOT_A_MEMBER`,
 `MEMBER_REMOVED`, `CREW_FULL`, `INVALID_ARGUMENT`, `PLACE_NOT_FOUND`, `PLACE_LIMIT`,
 `PLACE_BOUNDS_REQUIRED`, `TILE_LIMIT`, `TRAIL_LIMIT`, `SECRET_LIMIT`, `FILE_NOT_FOUND`, `GRID_CHANGED`
 and `TRAIL_SHARING_DISABLED`. Non-members get `NOT_A_MEMBER` for either missing or
-inaccessible crews. Unknown invite previews return null. Refresh membership before
+inaccessible teams. Unknown invite previews return null. Refresh membership before
 retrying revoked/disabled contributions; do not keep retrying permanent limit errors.
 
 ## Snapshot and polling
@@ -173,15 +173,15 @@ type TileCursor = { position: string; until: number; since: number | null };
    the same `since` to the next request. There are at most 1,000 tiles per page.
 4. Only after **every page** has been applied, persist the response's `serverTime`
    atomically with the applied changes. Do not advance it after a partial sync.
-5. Replace crew info, members, places, trails and secrets on each response. Only
-   tiles are incremental. Remove crew data after losing membership, and hide
+5. Replace team info, members, places, trails and secrets on each response. Only
+   tiles are incremental. Remove team data after losing membership, and hide
    routes when a member disappears or disables sharing.
 
 The first page freezes an upper ingestion watermark for the entire traversal.
 The native Convex pagination cursor includes index tie breakers, so a single
 `receivedAt` group can span pages without dropping tiles. New uploads made while
 paging appear in the next delta. `receivedAt` is a monotonic server clock persisted
-in the crew, advancing strictly on new tiles; phone discovery times do not affect
+in the team, advancing strictly on new tiles; phone discovery times do not affect
 pagination. Treat `serverTime` and the cursor as opaque. Complete metadata is
 bounded by the caps above; tiles retain the existing object format, with pages
 small enough to avoid a packed-array API change. URLs can be null.
@@ -189,7 +189,7 @@ small enough to avoid a packed-array API change. URLs can be null.
 ## Public invite page
 
 `GET https://<deployment>.convex.site/join/<code>` always returns HTTP 200, with
-`Cache-Control: no-store`. It never looks up a crew or reveals crew/member names.
+`Cache-Control: no-store`. It never looks up a team or reveals team/member names.
 Every well-formed code, real or unknown, gets the same generic page with its
 `walkies://join/<CODE>` button and automatic open attempt. Malformed links get
 generic guidance. Public requests cannot test invite existence; authenticated,
@@ -199,9 +199,9 @@ rate-limited calls resolve the invite inside the app.
 
 This change does not deploy or migrate a live database. New schema fields are
 optional so existing records remain readable. Before deploying against existing
-crew data, rotate any six-character codes, backfill verified place bounds and
+team data, rotate any six-character codes, backfill verified place bounds and
 accurate tile counts, and audit file ownership. Places without bounds/counts
-reject new tile writes with `PLACE_BOUNDS_REQUIRED`. Unclaimed legacy crew files
+reject new tile writes with `PLACE_BOUNDS_REQUIRED`. Unclaimed legacy team files
 are deliberately retained during row deletion because their exclusive ownership
 cannot be established safely; an audited migration must clean them up. Existing
 rows beyond the new metadata caps also need an audit before rollout.

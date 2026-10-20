@@ -360,7 +360,7 @@ describe("crew maps", () => {
     expect(html).not.toContain("Alice");
     const unknown = await t.fetch("/join/bad-code");
     expect(unknown.status).toBe(200);
-    expect(await unknown.text()).toContain("Ask someone in the crew");
+    expect(await unknown.text()).toContain("Ask someone in the team");
   });
 });
 
@@ -438,7 +438,7 @@ describe("crew review regressions", () => {
     const other = await alice.action(api.crews.createCrew, { name: "Other", colour: "x", sharing: "tilesAndTrail" });
     await expect(alice.action(api.crews.uploadCrewTrail, { crewId: other.crewId, walkClientId: "walk", file: own, updatedAt: 1 })).rejects.toThrow("INVALID_UPLOAD");
     await expect(alice.action(api.crews.addCrewPlace, { crewId, clientId: "bad", name: "bad", file: victim, bounds: { minQ: 0, maxQ: 1, minR: 0, maxR: 1 } })).rejects.toThrow("INVALID_UPLOAD");
-    await expect(alice.mutation(api.sync.saveWalk, { clientId: "personal", file: own, startedAt: 1, endedAt: 2, distance: 1, newTiles: 0 })).rejects.toThrow("Crew files cannot");
+    await expect(alice.mutation(api.sync.saveWalk, { clientId: "personal", file: own, startedAt: 1, endedAt: 2, distance: 1, newTiles: 0 })).rejects.toThrow("Team files cannot");
     for (const id of [personal, victim, own]) expect(await t.run((ctx) => ctx.storage.getUrl(id))).not.toBeNull();
   });
 

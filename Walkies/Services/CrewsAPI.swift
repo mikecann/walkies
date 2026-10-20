@@ -66,7 +66,7 @@ nonisolated struct CrewsAPI: Sendable {
         await onPage(snapshot)
         var tiles = snapshot.tiles
         while snapshot.more {
-            guard let cursor = snapshot.cursor else { throw ConvexError.server("Missing crew snapshot cursor") }
+            guard let cursor = snapshot.cursor else { throw ConvexError.server("Missing team snapshot cursor") }
             snapshot = try await client.query("crews:crewSnapshot", Pull(crewId: id, since: since, cursor: cursor))
             await onPage(snapshot)
             tiles += snapshot.tiles
@@ -82,7 +82,7 @@ nonisolated struct CrewsAPI: Sendable {
     }
     func upload(_ data: Data) async throws -> String {
         guard data.count <= 2 * 1024 * 1024, let json = String(data: data, encoding: .utf8) else {
-            throw ConvexError.coded("INVALID_ARGUMENT", "Crew files must be valid JSON under 2 MiB.")
+            throw ConvexError.coded("INVALID_ARGUMENT", "Team files must be valid JSON under 2 MiB.")
         }
         return try await client.action("crews:uploadFile", ["json": json])
     }

@@ -35,21 +35,21 @@ function finite(value: number, label: string) {
 }
 async function requireUser(ctx: ReadCtx) {
   const userId = await currentUserId(ctx);
-  if (userId === null || await ctx.db.get("users", userId) === null) fail("UNAUTHENTICATED", "Sign in to use crew maps.");
+  if (userId === null || await ctx.db.get("users", userId) === null) fail("UNAUTHENTICATED", "Sign in to use team maps.");
   return userId;
 }
 async function requireMember(ctx: ReadCtx, crewId: Id<"crews">) {
   const userId = await requireUser(ctx);
   const member = await ctx.db.query("crewMembers")
     .withIndex("by_crew_user", (q) => q.eq("crewId", crewId).eq("userId", userId)).unique();
-  if (member === null) fail("NOT_A_MEMBER", "You are not a member of this crew map.");
+  if (member === null) fail("NOT_A_MEMBER", "You are not a member of this team map.");
   const crew = await ctx.db.get("crews", crewId);
-  if (crew === null) fail("CREW_NOT_FOUND", "This crew map no longer exists.");
+  if (crew === null) fail("CREW_NOT_FOUND", "This team map no longer exists.");
   return { userId, member, crew };
 }
 async function requireCreator(ctx: ReadCtx, crewId: Id<"crews">) {
   const access = await requireMember(ctx, crewId);
-  if (access.crew.createdBy !== access.userId) fail("CREATOR_ONLY", "Only the crew's creator can do that.");
+  if (access.crew.createdBy !== access.userId) fail("CREATOR_ONLY", "Only the team's creator can do that.");
   return access;
 }
 async function memberName(ctx: ReadCtx, userId: Id<"users">, name?: string) {
@@ -100,8 +100,8 @@ async function uploadClaim(ctx: ReadCtx, file: Id<"_storage">) {
 }
 async function consumeFile(ctx: MutationCtx, file: Id<"_storage">, userId: Id<"users">) {
   const claim = await uploadClaim(ctx, file);
-  if (claim === null || claim.userId !== userId || claim.used) fail("INVALID_UPLOAD", "Use a fresh crew upload belonging to your account.");
-  if (await ctx.db.system.get("_storage", file) === null) fail("FILE_NOT_FOUND", "Upload the crew JSON file before saving it.");
+  if (claim === null || claim.userId !== userId || claim.used) fail("INVALID_UPLOAD", "Use a fresh team upload belonging to your account.");
+  if (await ctx.db.system.get("_storage", file) === null) fail("FILE_NOT_FOUND", "Upload the team JSON file before saving it.");
   await ctx.db.patch("crewUploads", claim._id, { used: true });
 }
 // Legacy, unclaimed files may have personal/other-crew references. Never delete
@@ -144,7 +144,7 @@ export const uploadFile = action({
     // Authenticate before storing anything; registerUpload checks again atomically.
     await ctx.runQuery(internal.crews.uploadUser, {});
     const blob = new Blob([json], { type: "application/json" });
-    if (blob.size > 2 * 1024 * 1024) fail("INVALID_ARGUMENT", "Crew JSON must be at most 2 MiB.");
+    if (blob.size > 2 * 1024 * 1024) fail("INVALID_ARGUMENT", "Team JSON must be at most 2 MiB.");
     try { JSON.parse(json); } catch { fail("INVALID_ARGUMENT", "Upload valid JSON."); }
     const file = await ctx.storage.store(blob);
     try { await ctx.runMutation(internal.crews.registerUpload, { file }); }
@@ -208,7 +208,7 @@ export const createCrewRecord = internalMutation({
   args: { ...createArgs, candidates: v.array(v.string()) }, returns: v.object({ crewId: v.id("crews"), inviteCode: v.string() }),
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
-    const name = text(args.name, "Crew name"), colour = text(args.colour, "Colour", 64);
+    const name = text(args.name, "Team name"), colour = text(args.colour, "Colour", 64);
     const inviteCode = await availableCode(ctx, args.candidates);
     const now = Date.now();
     const crewId = await ctx.db.insert("crews", { name, createdBy: userId, inviteCode, inviteEpoch: 0, createdAt: now, tilesUpdatedAt: now });
@@ -274,7 +274,7 @@ export const leaveCrew = mutation({
 });
 export const renameCrew = mutation({
   args: { crewId: v.id("crews"), name: v.string() }, returns: v.null(),
-  handler: async (ctx, { crewId, name }) => { await requireCreator(ctx, crewId); await ctx.db.patch("crews", crewId, { name: text(name, "Crew name") }); return null; },
+  handler: async (ctx, { crewId, name }) => { await requireCreator(ctx, crewId); await ctx.db.patch("crews", crewId, { name: text(name, "Team name") }); return null; },
 });
 export const removeMember = action({
   args: { crewId: v.id("crews"), userId: v.id("users") }, returns: v.null(),
@@ -328,11 +328,11 @@ export const addPlaceRecord = internalMutation({
     const { minQ, maxQ, minR, maxR } = args.bounds;
     if (!Object.values(args.bounds).every((n) => Number.isSafeInteger(n) && Math.abs(n) <= 1_000_000) || minQ > maxQ || minR > maxR || maxQ - minQ > 10_000 || maxR - minR > 10_000) fail("INVALID_ARGUMENT", "Supply a valid, bounded axial grid extent.");
     const places = await ctx.db.query("crewPlaces").withIndex("by_crew_client", (q) => q.eq("crewId", args.crewId)).take(MAX_PLACES);
-    if (places.length >= MAX_PLACES) fail("PLACE_LIMIT", "A crew can contain at most 16 places.");
+    if (places.length >= MAX_PLACES) fail("PLACE_LIMIT", "A team can contain at most 16 places.");
     // A first-place upload must still be first when it commits. Later places
     // reference a grid they actually downloaded. No schema or file parsing needed.
     if (args.gridPlaceId !== undefined && (args.gridPlaceId === null ? places.length > 0 : !places.some((p) => p._id === args.gridPlaceId))) {
-      fail("GRID_CHANGED", "Refresh the crew and rebuild this place on its shared grid.");
+      fail("GRID_CHANGED", "Refresh the team and rebuild this place on its shared grid.");
     }
     await consumeFile(ctx, args.file, userId);
     return await ctx.db.insert("crewPlaces", { crewId: args.crewId, file: args.file, bounds: args.bounds, clientId, name: text(args.name, "Place name"), addedBy: userId, updatedAt: Date.now(), tileCount: 0 });
@@ -344,7 +344,7 @@ export const uploadCrewTiles = mutation({
     const { userId, crew, member } = await requireMember(ctx, crewId);
     if (!member.walksCount) fail("CONTRIBUTIONS_PAUSED", "Resume contributions before sharing discoveries.");
     const place = await ctx.db.get("crewPlaces", placeId);
-    if (place === null || place.crewId !== crewId) fail("PLACE_NOT_FOUND", "This place is not part of this crew map.");
+    if (place === null || place.crewId !== crewId) fail("PLACE_NOT_FOUND", "This place is not part of this team map.");
     finite(at, "Discovery time");
     if (discoveredAt !== undefined && (discoveredAt.length !== hexes.length || discoveredAt.some((time) => !Number.isFinite(time)))) fail("INVALID_ARGUMENT", "Supply one finite discovery time per tile.");
     if (hexes.length > 1000 || hexes.some((h) => h.length !== 2 || !h.every(Number.isSafeInteger))) fail("INVALID_ARGUMENT", "Send at most 1,000 integer [q, r] pairs.");
@@ -388,7 +388,7 @@ export const uploadTrailRecord = internalMutation({
     if (existing?.file === args.file) return null;
     if (existing !== null && args.updatedAt <= (existing.updatedAt ?? 0)) { await discardFile(ctx, args.file, userId); return null; }
     const trails = await ctx.db.query("crewTrails").withIndex("by_crew_user_walk", (q) => q.eq("crewId", args.crewId).eq("userId", userId)).take(MAX_TRAILS);
-    if (existing === null && trails.length >= MAX_TRAILS) fail("TRAIL_LIMIT", "A member can share at most 64 trails per crew.");
+    if (existing === null && trails.length >= MAX_TRAILS) fail("TRAIL_LIMIT", "A member can share at most 64 trails per team.");
     await consumeFile(ctx, args.file, userId);
     const fields = { file: args.file, at: Date.now(), updatedAt: args.updatedAt, memberId: member._id, epoch: member.trailEpoch ?? 0 };
     if (existing === null) await ctx.db.insert("crewTrails", { crewId: args.crewId, userId, walkClientId, ...fields });
@@ -407,7 +407,7 @@ export const recordCrewSecrets = mutation({
       const secretId = text(secret.secretId, "Secret id", 200); finite(secret.at, "Discovery time");
       const existing = await ctx.db.query("crewSecrets").withIndex("by_crew_secret", (q) => q.eq("crewId", crewId).eq("secretId", secretId)).unique();
       if (existing === null) {
-        if (count >= MAX_SECRETS) fail("SECRET_LIMIT", "A crew can contain at most 1,000 secrets.");
+        if (count >= MAX_SECRETS) fail("SECRET_LIMIT", "A team can contain at most 1,000 secrets.");
         await ctx.db.insert("crewSecrets", { crewId, secretId, by: userId, at: secret.at }); count++;
       }
     }
@@ -458,7 +458,7 @@ export const myCrews = query({
     const memberships = await ctx.db.query("crewMembers").withIndex("by_user", (q) => q.eq("userId", userId)).collect();
     return await Promise.all(memberships.map(async (m) => {
       const crew = await ctx.db.get("crews", m.crewId);
-      if (crew === null) fail("CREW_NOT_FOUND", "This crew map no longer exists.");
+      if (crew === null) fail("CREW_NOT_FOUND", "This team map no longer exists.");
       const members = await ctx.db.query("crewMembers").withIndex("by_crew_user", (q) => q.eq("crewId", m.crewId)).take(MAX_MEMBERS);
       return { crewId: crew._id, name: crew.name, memberCount: members.length, membership: { userId, name: m.name, colour: m.colour, sharing: m.sharing, walksCount: m.walksCount, joinedAt: m.joinedAt, isYou: true } };
     }));

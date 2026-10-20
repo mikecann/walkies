@@ -4,7 +4,7 @@ nonisolated enum CrewSharing: String, Codable, CaseIterable, Sendable {
     case tiles, tilesAndTrail
     var title: String { self == .tiles ? "Tiles only" : "Tiles and trail" }
     var detail: String {
-        self == .tiles ? "Share the tiles you uncover, without your route." : "Share tiles and your route inside this crew's places."
+        self == .tiles ? "Share the tiles you uncover, without your route." : "Share tiles and your route inside this team's places."
     }
 }
 
@@ -345,7 +345,7 @@ nonisolated struct CrewPlaceBounds: Encodable {
               let minR = hexes.map(\.r).min(), let maxR = hexes.map(\.r).max(),
               [minQ, maxQ, minR, maxR].allSatisfy({ abs(Int($0)) <= 1_000_000 }),
               Int(maxQ) - Int(minQ) <= 10_000, Int(maxR) - Int(minR) <= 10_000 else {
-            throw ConvexError.coded("INVALID_ARGUMENT", "This place is too large for a crew map. Choose a smaller place.")
+            throw ConvexError.coded("INVALID_ARGUMENT", "This place is too large for a team map. Choose a smaller place.")
         }
         self.minQ = minQ; self.maxQ = maxQ; self.minR = minR; self.maxR = maxR
     }

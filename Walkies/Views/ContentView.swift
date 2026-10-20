@@ -100,7 +100,7 @@ struct ContentView: View {
         } message: { place in
             Text("\(place.kind.capitalized) · \(Format.area(place.area)). It'll go under the clouds next to your other places, and any walks you've already done there count.")
         }
-        .alert("Crew membership changed", isPresented: Binding(get: { model.crewNotice != nil }, set: { if !$0 { model.crewNotice = nil } })) {
+        .alert("Team membership changed", isPresented: Binding(get: { model.crewNotice != nil }, set: { if !$0 { model.crewNotice = nil } })) {
             Button("OK") { model.crewNotice = nil }
         } message: { Text(model.crewNotice ?? "") }
         .alert("Couldn't add it", isPresented: Binding(get: { addingError != nil }, set: { if !$0 { addingError = nil } })) {
@@ -175,7 +175,7 @@ extension ContentView {
             } catch {
                 addingError = model.currentCrewID == nil
                     ? "Couldn't load the streets for \(place.name). OpenStreetMap might be busy, so try again in a minute."
-                    : "\(error.localizedDescription) Any prepared crew place is saved and will retry when there's signal."
+                    : "\(error.localizedDescription) Any prepared team place is saved and will retry when there's signal."
             }
             addingStatus = nil
         }
