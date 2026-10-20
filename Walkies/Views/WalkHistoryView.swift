@@ -262,13 +262,6 @@ struct WalkDetailView: View {
         .foregroundStyle(Color.ink)
         .navigationTitle("Your walk")
         .navigationBarTitleDisplayMode(.inline)
-        .fullScreenCover(item: Binding(get: { model.recap }, set: { model.recap = $0 })) { recap in
-            CelebrationView(
-                recap: recap,
-                others: model.cities.filter { city in !recap.after.contains { $0.id == city.id } },
-                tilted: model.tilted3D
-            )
-        }
         .sheet(item: $open) { entry in
             LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id])
         }

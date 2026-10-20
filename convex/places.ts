@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { action, internalAction, internalMutation, internalQuery, type ActionCtx, type MutationCtx } from "./_generated/server";
+import { action, internalAction, internalMutation, type ActionCtx, type MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { currentUserId } from "./users";
@@ -7,13 +7,24 @@ import { boundaryFromNominatim, walkableQuery, waysFromOverpass, type PlaceData 
 
 const version = 1;
 const maxAge = 60 * 24 * 60 * 60 * 1000;
-// Longer than Nominatim plus both 135-second Overpass attempts. A crashed action
-// cannot leave a place locked forever; completion also checks ownership.
-const leaseDuration = 6 * 60 * 1000;
+// Longer than Nominatim, the wait for the Overpass slot and both 135-second
+// Overpass attempts. A crashed action cannot leave a place locked forever;
+// completion also checks ownership.
+const leaseDuration = 10 * 60 * 1000;
 const requestSpacing = 1100;
 // The warm queue's worker keeps a heartbeat on this sentinel row, so only one
 // runs at a time. Overpass turns away callers that run several queries at once.
 const workerId = -1;
+// Every Overpass query, the worker's or someone opening a place, holds this slot
+// while it runs. Longer than both 135-second attempts, so a crash frees it.
+const overpassId = -2;
+const overpassLease = 5 * 60 * 1000;
+// Someone opening a place waits this long for the worker's query to finish, so
+// the whole call stays inside the app's 6-minute timeout. The worker waits longer.
+const overpassWait = 45_000;
+const workerOverpassWait = 3 * 60 * 1000;
+// Calls to places:get and places:warm, per user per minute.
+const callsPerMinute = 30;
 // A place that fails to warm is tried again after these waits, then left for
 // places:get to fetch when someone actually opens it.
 const retryDelays = [60_000, 5 * 60_000, 30 * 60_000];
@@ -45,10 +56,18 @@ async function claimPlace(ctx: MutationCtx, osmId: number, startAt = Date.now())
   return { kind: "fetch", lease: startAt };
 }
 
-export const requireUser = internalQuery({
+/** Signed in, and not calling too often. Counts one call. */
+export const allowCall = internalMutation({
   args: {}, returns: v.null(),
   handler: async (ctx) => {
-    if (await currentUserId(ctx) === null) throw new ConvexError("Not signed in");
+    const userId = await currentUserId(ctx);
+    if (userId === null) throw new ConvexError("Not signed in");
+    const row = await ctx.db.query("placeCalls").withIndex("by_user", (q) => q.eq("userId", userId)).unique();
+    const now = Date.now();
+    const current = row !== null && now < row.windowStart + 60_000;
+    if (current && row.count >= callsPerMinute) throw new ConvexError("Too many requests. Try again in a minute.");
+    if (row === null) await ctx.db.insert("placeCalls", { userId, windowStart: now, count: 1 });
+    else await ctx.db.patch("placeCalls", row._id, { windowStart: current ? row.windowStart : now, count: current ? row.count + 1 : 1 });
     return null;
   },
 });
@@ -63,7 +82,7 @@ export const get = action({
   args: { osmId: v.number() },
   returns: v.object({ url: v.string(), fetchedAt: v.number() }),
   handler: async (ctx, { osmId }): Promise<Cached> => {
-    await ctx.runQuery(internal.places.requireUser, {});
+    await ctx.runMutation(internal.places.allowCall, {});
     for (let attempt = 0; attempt <= 20; attempt++) {
       const state = await ctx.runMutation(internal.places.claim, { osmId });
       if (state.kind === "ready") {
@@ -71,7 +90,7 @@ export const get = action({
         if (!url) throw new ConvexError("Place data file is missing");
         return { url, fetchedAt: state.fetchedAt };
       }
-      if (state.kind === "fetch") return await fetchPlace(ctx, osmId, state.lease);
+      if (state.kind === "fetch") return await fetchPlace(ctx, osmId, state.lease, overpassWait);
       if (attempt < 20) await sleep(1000);
     }
     throw new ConvexError("This place is still getting ready");
@@ -165,7 +184,7 @@ export const drain = internalAction({
     if (next.kind === "done") return null;
     if (next.kind === "fetch") {
       // finish() records a failure and queues the retry, so carry on to the next place.
-      try { await fetchPlace(ctx, next.osmId, next.lease); } catch { /* retried later */ }
+      try { await fetchPlace(ctx, next.osmId, next.lease, workerOverpassWait); } catch { /* retried later */ }
     }
     await ctx.scheduler.runAfter(next.kind === "wait" ? next.ms : requestSpacing, internal.places.drain, {});
     return null;
@@ -174,7 +193,10 @@ export const drain = internalAction({
 
 export const warm = action({
   args: { osmIds: v.array(v.number()) }, returns: v.null(),
-  handler: async (ctx, args): Promise<null> => await ctx.runMutation(internal.places.enqueue, args),
+  handler: async (ctx, args): Promise<null> => {
+    await ctx.runMutation(internal.places.allowCall, {});
+    return await ctx.runMutation(internal.places.enqueue, args);
+  },
 });
 
 /** A sentinel (osmId 0) shares the Nominatim throttle across all users and jobs.
@@ -189,6 +211,28 @@ export const nominatimSlot = internalMutation({
     if (row) await ctx.db.patch("placeData", row._id, { fetchedAt: now });
     else await ctx.db.insert("placeData", { osmId: 0, name: "Nominatim throttle", fetchedAt: now, version });
     return 0;
+  },
+});
+
+/** Takes the Overpass slot, or says how long to wait before asking again. */
+export const takeOverpass = internalMutation({
+  args: { lease: v.number() }, returns: v.number(),
+  handler: async (ctx, { lease }) => {
+    const row = await rowFor(ctx, overpassId);
+    const now = Date.now();
+    if (row?.fetchingAt !== undefined && now - row.fetchingAt < overpassLease) return 500;
+    if (row) await ctx.db.patch("placeData", row._id, { fetchingAt: lease });
+    else await ctx.db.insert("placeData", { osmId: overpassId, name: "Overpass slot", fetchedAt: 0, version, fetchingAt: lease });
+    return 0;
+  },
+});
+
+export const releaseOverpass = internalMutation({
+  args: { lease: v.number() }, returns: v.null(),
+  handler: async (ctx, { lease }) => {
+    const row = await rowFor(ctx, overpassId);
+    if (row?.fetchingAt === lease) await ctx.db.patch("placeData", row._id, { fetchingAt: undefined });
+    return null;
   },
 });
 
@@ -234,7 +278,25 @@ async function fetchJSON(url: string, timeout: number, init?: RequestInit): Prom
   }
 }
 
-async function fetchPlace(ctx: ActionCtx, osmId: number, lease: number): Promise<Cached> {
+/** Runs `query` while holding the Overpass slot, waiting up to `wait` for it. */
+async function withOverpass<T>(ctx: ActionCtx, wait: number, query: () => Promise<T>): Promise<T> {
+  const deadline = Date.now() + wait;
+  let lease = Date.now();
+  while (true) {
+    const retry = await ctx.runMutation(internal.places.takeOverpass, { lease });
+    if (retry === 0) break;
+    if (Date.now() + retry > deadline) throw new Error("Overpass is busy");
+    await sleep(retry);
+    lease = Date.now();
+  }
+  try {
+    return await query();
+  } finally {
+    await ctx.runMutation(internal.places.releaseOverpass, { lease });
+  }
+}
+
+async function fetchPlace(ctx: ActionCtx, osmId: number, lease: number, overpassWait: number): Promise<Cached> {
   try {
     const deadline = Date.now() + 30_000;
     while (true) {
@@ -246,15 +308,15 @@ async function fetchPlace(ctx: ActionCtx, osmId: number, lease: number): Promise
     const params = new URLSearchParams({ osm_ids: `R${osmId}`, format: "jsonv2", polygon_geojson: "1", polygon_threshold: "0.0001" });
     const { name, boundary } = boundaryFromNominatim(await fetchJSON(`https://nominatim.openstreetmap.org/lookup?${params}`, 15_000), osmId);
     const body = new URLSearchParams({ data: walkableQuery(boundary) }).toString();
-    let ways: PlaceData["ways"] | undefined;
-    let lastError: unknown;
-    for (const endpoint of endpoints) {
-      try {
-        ways = waysFromOverpass(await fetchJSON(endpoint, 135_000, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body }));
-        break;
-      } catch (error) { lastError = error; }
-    }
-    if (!ways) throw lastError ?? new Error("No street data");
+    const ways = await withOverpass(ctx, overpassWait, async () => {
+      let lastError: unknown;
+      for (const endpoint of endpoints) {
+        try {
+          return waysFromOverpass(await fetchJSON(endpoint, 135_000, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body }));
+        } catch (error) { lastError = error; }
+      }
+      throw lastError ?? new Error("No street data");
+    });
     const file = await ctx.storage.store(new Blob([JSON.stringify({ boundary, ways } satisfies PlaceData)], { type: "application/json" }));
     const fetchedAt = Date.now();
     const saved = await ctx.runMutation(internal.places.finish, { osmId, lease, name, file, fetchedAt });

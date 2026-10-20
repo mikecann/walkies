@@ -84,13 +84,19 @@ final class Account {
     @ObservationIgnored private var automaticTestSignInRequested = false
     #endif
 
-    init() {
-        session = Keychain.load()
+    /// - Parameter waitForUnlock: the Keychain can't be read before the phone's first
+    ///   unlock, so leave the session for `loadSession()`.
+    init(waitForUnlock: Bool = false) {
+        session = waitForUnlock ? nil : Keychain.load()
         // didSet doesn't run in init.
         profile = Profile(session)
         #if DEBUG && targetEnvironment(simulator)
         automaticTestSignInRequested = session == nil && ProcessInfo.processInfo.arguments.contains("-testSignIn")
         #endif
+    }
+
+    func loadSession() {
+        session = Keychain.load()
     }
 
     // MARK: Signing in

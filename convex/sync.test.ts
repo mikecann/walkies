@@ -27,11 +27,11 @@ test("old clients cannot restore local-grid places, walks, secrets or ledgers", 
     await expect(client.mutation(fn, args as never)).rejects.toThrow();
     await expect(client.mutation(fn, { ...args, gridVersion: 1 } as never)).rejects.toThrow();
   }
-  expect((await client.query(api.sync.snapshot)).places).toEqual([]);
+  expect((await client.query(api.sync.snapshot, {})).places).toEqual([]);
   await client.mutation(api.sync.savePlace, { ...calls[0][1], gridVersion: 2 });
   await client.mutation(api.sync.saveSecrets, { secrets: [...calls[3][1].secrets], gridVersion: 2 });
   await client.mutation(api.sync.saveProgress, { ledger, gridVersion: 2 });
-  const snapshot = await client.query(api.sync.snapshot);
+  const snapshot = await client.query(api.sync.snapshot, {});
   expect(snapshot.places).toHaveLength(1);
   expect(snapshot.secrets).toHaveLength(1);
   expect(snapshot.progress).not.toBeNull();
@@ -53,4 +53,23 @@ test("world clients replace old walk blobs while keeping the walk identity and r
   expect(rows).toHaveLength(1);
   expect(rows[0]).toMatchObject({ clientId: "walk", newTiles: 2, file });
   expect(await t.run((ctx) => ctx.storage.get(oldFile))).toBeNull();
+});
+
+test("walk links can be left out of the snapshot and asked for just for missing walks", async () => {
+  const t = convexTest(schema, modules);
+  const userId = await t.run((ctx) => ctx.db.insert("users", { name: "Mike" }));
+  const client = t.withIdentity({ subject: userId });
+  const otherId = await t.run((ctx) => ctx.db.insert("users", { name: "Seth" }));
+  const file = await t.run((ctx) => ctx.storage.store(new Blob(["raw GPS"])));
+  for (const clientId of ["a", "b"]) {
+    await client.mutation(api.sync.saveWalk, { clientId, startedAt: 1, endedAt: 2, distance: 10, newTiles: 1, file, gridVersion: 2 });
+  }
+  await t.withIdentity({ subject: otherId }).mutation(api.sync.saveWalk, { clientId: "theirs", startedAt: 1, endedAt: 2, distance: 10, newTiles: 1, file, gridVersion: 2 });
+  // Older phones still get every link.
+  expect((await client.query(api.sync.snapshot, {})).walks.every((w) => w.url !== null)).toBe(true);
+  const lean = await client.query(api.sync.snapshot, { walkUrls: false });
+  expect(lean.walks.map((w) => [w.clientId, w.url]).sort()).toEqual([["a", null], ["b", null]]);
+  const links = await client.query(api.sync.walkUrls, { clientIds: ["b", "b", "theirs", "nope"] });
+  expect(links.map((w) => w.clientId)).toEqual(["b"]);
+  expect(links[0].url).toBeTruthy();
 });

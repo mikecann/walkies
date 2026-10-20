@@ -59,6 +59,33 @@ private enum NeighbourPill {
     }
 }
 
+/// Where a neighbour's label goes: where it is on the map, unless that's under one of
+/// the app's buttons or off the edge of the screen, when it's nudged the shortest way clear.
+enum LabelPlacement {
+    static func clear(_ frame: CGRect, of buttons: [CGRect], within bounds: CGRect) -> CGRect {
+        var frame = frame
+        frame.origin.x = max(bounds.minX, min(frame.minX, bounds.maxX - frame.width))
+        frame.origin.y = max(bounds.minY, min(frame.minY, bounds.maxY - frame.height))
+        let under = buttons.filter { $0.intersects(frame) }
+        guard !under.isEmpty else { return frame }
+        let start = frame
+        let moves = under.flatMap { button in [
+            start.offsetBy(dx: 0, dy: button.minY - start.maxY),
+            start.offsetBy(dx: 0, dy: button.maxY - start.minY),
+            start.offsetBy(dx: button.minX - start.maxX, dy: 0),
+            start.offsetBy(dx: button.maxX - start.minX, dy: 0),
+        ] }
+        let clear = moves.filter { move in
+            bounds.insetBy(dx: -0.5, dy: -0.5).contains(move) && !buttons.contains { $0.intersects(move) }
+        }
+        return clear.min { distance($0, start) < distance($1, start) } ?? frame
+    }
+
+    private static func distance(_ a: CGRect, _ b: CGRect) -> CGFloat {
+        hypot(a.midX - b.midX, a.midY - b.midY)
+    }
+}
+
 struct MapFocusRequest: Equatable {
     /// `arrive`: opening the app. Go to where you are, or the selected place if
     /// there's no fix yet.
@@ -93,6 +120,8 @@ struct FogMapView: UIViewRepresentable {
     var onSelectSticker: (String) -> Void = { _ in }
     var neighbours: [PlaceResult] = []
     var onPickNeighbour: (PlaceResult) -> Void = { _ in }
+    /// The app's buttons over the map, in window coordinates.
+    var buttons: [CGRect] = []
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -142,6 +171,7 @@ struct FogMapView: UIViewRepresentable {
         private var neighbourPins: [NeighbourAnnotation] = []
         private var showingNeighbours = false
         private var onPickNeighbour: (PlaceResult) -> Void = { _ in }
+        private var buttons: [CGRect] = []
 
         func update(_ map: MKMapView, with view: FogMapView) {
             if view.tilted != tilted {
@@ -179,6 +209,10 @@ struct FogMapView: UIViewRepresentable {
             }
 
             onPickNeighbour = view.onPickNeighbour
+            if view.buttons != buttons {
+                buttons = view.buttons
+                placeNeighbourLabels(on: map)
+            }
             if view.neighbours.map(\.id) != neighbourIDs {
                 neighbourIDs = view.neighbours.map(\.id)
                 neighbourPins = view.neighbours.map(NeighbourAnnotation.init)
@@ -297,6 +331,34 @@ struct FogMapView: UIViewRepresentable {
             map.addAnnotations(neighbourPins)
         }
 
+        /// Keeps each neighbour's label out from under the buttons and inside the screen,
+        /// so it can always be read and tapped.
+        private func placeNeighbourLabels(on map: MKMapView) {
+            guard showingNeighbours else { return }
+            let bounds = map.bounds.inset(by: map.safeAreaInsets)
+            let blocked = buttons.map { map.convert($0, from: nil).insetBy(dx: -6, dy: -6) }
+            for pin in neighbourPins {
+                guard let view = map.view(for: pin) else { continue }
+                let centre = map.convert(pin.coordinate, toPointTo: map)
+                var offset = CGPoint.zero
+                if map.bounds.contains(centre) {
+                    let size = view.bounds.size
+                    let frame = CGRect(x: centre.x - size.width / 2, y: centre.y - size.height / 2, width: size.width, height: size.height)
+                    let placed = LabelPlacement.clear(frame, of: blocked, within: bounds)
+                    offset = CGPoint(x: placed.midX - centre.x, y: placed.midY - centre.y)
+                }
+                if view.centerOffset != offset { view.centerOffset = offset }
+            }
+        }
+
+        func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
+            placeNeighbourLabels(on: mapView)
+        }
+
+        func mapView(_ mapView: MKMapView, didAdd views: [MKAnnotationView]) {
+            if views.contains(where: { $0.annotation is NeighbourAnnotation }) { placeNeighbourLabels(on: mapView) }
+        }
+
         private func drawPath(_ path: [Coordinate], on map: MKMapView) {
             if let line { map.removeOverlay(line) }
             line = nil
@@ -410,6 +472,7 @@ struct FogMapView: UIViewRepresentable {
                     ?? MKAnnotationView(annotation: annotation, reuseIdentifier: "neighbour")
                 view.annotation = annotation
                 view.image = NeighbourPill.image(for: neighbour.place.name)
+                view.centerOffset = .zero
                 view.canShowCallout = false
                 // Let MapKit hide labels that would overlap, rather than pile them up.
                 view.collisionMode = .rectangle

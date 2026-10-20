@@ -523,10 +523,13 @@ private actor TestSyncServer {
             if pauseSnapshot { await withCheckedContinuation { snapshotResume = $0 } }
             value = [
                 "places": cities.map { ["clientId": $0.id.uuidString, "updatedAt": $0.lastChanged.ms, "url": "https://files.walkies.test/\($0.id.uuidString)"] },
-                "walks": walks.map { ["clientId": $0.id.uuidString, "url": "https://files.walkies.test/\($0.id.uuidString)"] },
+                "walks": walks.map { ["clientId": $0.id.uuidString, "url": args["walkUrls"] as? Bool == false ? NSNull() : "https://files.walkies.test/\($0.id.uuidString)"] as [String: Any] },
                 "secrets": dates.map { ["secretId": $0.key, "foundAt": $0.value] },
                 "progress": String(decoding: try JSONEncoder().encode(ledger), as: UTF8.self),
             ] as [String: Any]
+        case "sync:walkUrls":
+            let ids = Set(walks.map(\.id.uuidString))
+            value = (args["clientIds"] as! [String]).filter(ids.contains).map { ["clientId": $0, "url": "https://files.walkies.test/\($0)"] }
         default: break
         }
         return try JSONSerialization.data(withJSONObject: ["status": "success", "value": value])

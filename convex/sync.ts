@@ -132,10 +132,11 @@ export const saveProgress = mutation({
 
 /**
  * Everything the server has for the signed-in user, without the walk and city
- * contents. The phone downloads only the files it's missing.
+ * contents. The phone downloads only the files it's missing. With `walkUrls: false`
+ * walks come without links, and the phone asks `walkUrls` for the ones it hasn't got.
  */
 export const snapshot = query({
-  args: {},
+  args: { walkUrls: v.optional(v.boolean()) },
   returns: v.object({
     walks: v.array(v.object({ clientId: v.string(), url: v.union(v.string(), v.null()) })),
     places: v.array(
@@ -144,7 +145,7 @@ export const snapshot = query({
     secrets: v.array(v.object({ secretId: v.string(), foundAt: v.number() })),
     progress: v.union(v.string(), v.null()),
   }),
-  handler: async (ctx) => {
+  handler: async (ctx, { walkUrls }) => {
     const userId = await requireUser(ctx);
     const [walks, places, secrets, progress] = await Promise.all([
       ctx.db.query("walks").withIndex("by_user_client", (q) => q.eq("userId", userId)).collect(),
@@ -153,12 +154,30 @@ export const snapshot = query({
       ctx.db.query("progress").withIndex("by_user", (q) => q.eq("userId", userId)).unique(),
     ]);
     return {
-      walks: await Promise.all(walks.map(async (w) => ({ clientId: w.clientId, url: await ctx.storage.getUrl(w.file) }))),
+      walks: await Promise.all(walks.map(async (w) => ({
+        clientId: w.clientId, url: walkUrls === false ? null : await ctx.storage.getUrl(w.file),
+      }))),
       places: await Promise.all(
         places.map(async (p) => ({ clientId: p.clientId, updatedAt: p.updatedAt, url: await ctx.storage.getUrl(p.file) })),
       ),
       secrets: secrets.map((s) => ({ secretId: s.secretId, foundAt: s.foundAt })),
       progress: progress?.ledger ?? null,
     };
+  },
+});
+
+/** Download links for these walks, for the ones the phone hasn't got. */
+export const walkUrls = query({
+  args: { clientIds: v.array(v.string()) },
+  returns: v.array(v.object({ clientId: v.string(), url: v.union(v.string(), v.null()) })),
+  handler: async (ctx, { clientIds }) => {
+    const userId = await requireUser(ctx);
+    if (clientIds.length > 100) throw new ConvexError("Too many walks");
+    const found = [];
+    for (const clientId of new Set(clientIds)) {
+      const walk = await ctx.db.query("walks").withIndex("by_user_client", (q) => q.eq("userId", userId).eq("clientId", clientId)).unique();
+      if (walk) found.push({ clientId, url: await ctx.storage.getUrl(walk.file) });
+    }
+    return found;
   },
 });

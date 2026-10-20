@@ -80,8 +80,13 @@ export default defineSchema({
   teamInviteAttempts: defineTable({ userId: v.id("users"), windowStart: v.number(), count: v.number() })
     .index("by_user", ["userId"]),
 
+  // Calls to places:get and places:warm in the current minute, per user.
+  placeCalls: defineTable({ userId: v.id("users"), windowStart: v.number(), count: v.number() })
+    .index("by_user", ["userId"]),
+
   // Shared OSM data. Missing files are short-lived fetching markers; osmId 0
-  // is the shared Nominatim throttle, so every server request observes its limit.
+  // is the shared Nominatim throttle, so every server request observes its limit,
+  // and osmId -2 is the one Overpass slot every street fetch takes turns with.
   placeData: defineTable({
     osmId: v.number(),
     name: v.string(),

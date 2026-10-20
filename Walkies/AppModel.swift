@@ -44,7 +44,7 @@ final class AppModel {
     /// Record walks by themselves in the background, so there's no Start walk to press.
     var alwaysOn = false {
         didSet {
-            guard alwaysOn != oldValue else { return }
+            guard alwaysOn != oldValue, !loading, !locked else { return }
             UserDefaults.standard.set(alwaysOn, forKey: "alwaysOn")
             alwaysOn ? turnOnAlwaysOn() : turnOffAlwaysOn()
         }
@@ -95,9 +95,33 @@ final class AppModel {
     @ObservationIgnored private var questTileCounts: [UUID: [UUID: Int]] = [:]
     @ObservationIgnored private var addedTiles: [UUID: Set<Hex>] = [:]
 
-    init(store: Store = Store(), servicesEnabled: Bool = true, alwaysOn: Bool? = nil) {
+    /// True when iOS launched the app in the background before the phone's first unlock
+    /// since it started. Saved files can't be read yet, so nothing is loaded or saved
+    /// until `loadSaved()`, or empty data would overwrite them.
+    @ObservationIgnored private(set) var locked = false
+    /// Loading sets these as they were saved, which isn't turning them on or off.
+    @ObservationIgnored private var loading = false
+
+    init(store: Store = Store(), servicesEnabled: Bool = true, alwaysOn: Bool? = nil, waitForUnlock: Bool = false) {
         self.store = store
         self.servicesEnabled = servicesEnabled
+        tracker.onLocation = { [weak self] in self?.record($0) }
+        tracker.onAuthorizationChange = { [weak self] in self?.authorizationChanged() }
+        locked = waitForUnlock
+        if !waitForUnlock { load(alwaysOn: alwaysOn) }
+    }
+
+    /// Loads what was saved, once the phone's been unlocked.
+    func loadSaved() {
+        guard locked else { return }
+        setupDone = UserDefaults.standard.bool(forKey: "setupDone")
+        load(alwaysOn: nil)
+        locked = false
+    }
+
+    private func load(alwaysOn: Bool?) {
+        loading = true
+        defer { loading = false }
         do { try store.prepareWorldGridReset() }
         catch { Self.log.error("Couldn't prepare world grid reset: \(error)") }
         worldGridResetPending = store.needsWorldGridReset
@@ -127,8 +151,6 @@ final class AppModel {
         let saved = UserDefaults.standard.string(forKey: "selectedCity").flatMap(UUID.init)
         selectedCityID = cities.first { $0.id == saved }?.id ?? cities.first?.id
 
-        tracker.onLocation = { [weak self] in self?.record($0) }
-        tracker.onAuthorizationChange = { [weak self] in self?.authorizationChanged() }
         if servicesEnabled { fetchMissingRoads() }
         foundStickers = worldGridResetPending ? [:] : store.loadStickers()
         placeStickers()
@@ -202,6 +224,7 @@ final class AppModel {
         walks = replayed.walks
         foundStickers = replayed.secrets
         stickerQueue = []
+        secretsAlreadyWalked = 0
         // Remove the retry marker only after all rebuilt files are on disk.
         try store.finishWorldGridReset(cities: cities, walks: walks, stickers: foundStickers, progress: ledger)
         worldGridResetPending = false
@@ -330,7 +353,7 @@ final class AppModel {
     // MARK: Walks
 
     func startWalk() {
-        guard !worldGridResetPending, activeWalk == nil, !alwaysOn else { return }
+        guard !locked, !worldGridResetPending, activeWalk == nil, !alwaysOn else { return }
         if servicesEnabled {
             switch tracker.authorization {
             case .notDetermined:
@@ -431,6 +454,7 @@ final class AppModel {
 
     /// - Parameter waiting: finish writing before returning, for when the app is about to be suspended.
     func saveNow(waiting: Bool = false) {
+        guard !locked else { return }
         if var walk = activeWalk {
             finishCoverage(of: &walk)
             activeWalk = walk
@@ -444,7 +468,7 @@ final class AppModel {
 
     private func record(_ location: CLLocation) {
         // iOS can hand over a cached fix from wherever you last were when tracking starts.
-        guard !worldGridResetPending, location.timestamp.timeIntervalSinceNow > -10 else { return }
+        guard !locked, !worldGridResetPending, location.timestamp.timeIntervalSinceNow > -10 else { return }
         lastLocation = location
         var point = TrackPoint(location)
         if motion.onWheels { point.wheels = true }
@@ -489,17 +513,24 @@ final class AppModel {
     private func recordAlwaysOn(_ point: TrackPoint) {
         if let last = activeWalk?.points.last, point.time - last.time > Self.autoWalkGap {
             finishAutoWalk()
+            // Still waiting on history to finish it. Leave these fixes out rather than
+            // run the next outing onto the end of this one.
+            if activeWalk != nil { return }
         }
+        let anchor = tracer.anchor
         let step = tracer.add(point)
         guard !step.samples.isEmpty else { return }
         if activeWalk == nil {
-            activeWalk = Walk(startedAt: Date(timeIntervalSince1970: point.time), newTilesByPlace: [:], newTileHexesByPlace: [:], addedTilesByPlace: [:], automatic: true)
+            activeWalk = Walk(startedAt: Date(timeIntervalSince1970: anchor?.time ?? point.time), newTilesByPlace: [:], newTileHexesByPlace: [:], addedTilesByPlace: [:], automatic: true)
             activePath = []
             freshTiles = [:]
             addedTiles = [:]
             autoWalkPending = true
         }
         guard var walk = activeWalk else { return }
+        // The fix this step started from, so replaying the points gives the same
+        // route, distance and tiles as recording them did.
+        if let anchor, walk.points.last != anchor { walk.points.append(anchor) }
         walk.points.append(point)
         if autoWalkPending {
             walk.distance += step.distance
@@ -533,6 +564,7 @@ final class AppModel {
     private func apply(_ step: CoverageTracer.Step, at point: TrackPoint, to walk: inout Walk) {
         walk.distance += step.distance
         guard !step.samples.isEmpty else { return }
+        if let origin = step.origin, activePath.last != origin { activePath.append(origin) }
         activePath.append(point.coordinate)
         let uncovered = visit(step.samples)
         if uncovered > 0 {
@@ -560,7 +592,9 @@ final class AppModel {
     ///   Otherwise it ended by itself, at its last fix, and only counts if it's long enough.
     private func finishAutoWalk(byYou: Bool = false) {
         guard historyReady else {
-            Task { await historyTask?.value; if historyReady { finishAutoWalk(byYou: byYou) } }
+            // Only the walk that was due to end. A later one may have started by then.
+            let id = activeWalk?.id
+            Task { await historyTask?.value; if historyReady, id != nil, activeWalk?.id == id { finishAutoWalk(byYou: byYou) } }
             return
         }
         guard var walk = activeWalk, walk.isAutomatic else { return }
@@ -614,7 +648,7 @@ final class AppModel {
 
     /// Called at launch, including when iOS relaunches the app in the background.
     func resumeAlwaysOn() {
-        guard !worldGridResetPending else { return }
+        guard !locked, !worldGridResetPending else { return }
         // Starting motion asks for permission, so leave that to the setup the first time.
         if setupDone { motion.start() }
         if alwaysOn {
@@ -672,6 +706,9 @@ final class AppModel {
     private var secretsRevision = 0
     /// Stickers just found, waiting to pop up.
     var stickerQueue: [LoreEntry] = []
+    /// Secrets that turned up under tiles you'd already walked, say from an update or
+    /// a newly added place. Too many to pop up one by one, so the map just says how many.
+    var secretsAlreadyWalked = 0
 
     /// Every sticker hidden in the selected city, found or not.
     var stickersHere: [(entry: LoreEntry, hex: Hex)] {
@@ -708,7 +745,7 @@ final class AppModel {
             cities[i].stickers = placed.merging(cities[i].placeStickers(missing, avoiding: Set(placed.values))) { old, _ in old }
             cities[i].updatedAt = .now
             changed = true
-            unlockStickers(in: cities[i], on: cities[i].visited, notify: false, popUp: true)
+            secretsAlreadyWalked += unlockStickers(in: cities[i], on: cities[i].visited, notify: false, popUp: false)
         }
         if changed {
             tilesRevision += 1
@@ -716,10 +753,12 @@ final class AppModel {
         }
     }
 
-    private func unlockStickers(in city: City, on hexes: Set<Hex>, notify: Bool, popUp: Bool) {
-        guard let placed = city.stickers else { return }
+    /// Returns how many were found.
+    @discardableResult
+    private func unlockStickers(in city: City, on hexes: Set<Hex>, notify: Bool, popUp: Bool) -> Int {
+        guard let placed = city.stickers else { return 0 }
         let ids = placed.filter { hexes.contains($0.value) && foundStickers[$0.key] == nil }.map(\.key)
-        guard !ids.isEmpty else { return }
+        guard !ids.isEmpty else { return 0 }
         let entries = ids.sorted().compactMap(LoreLibrary.entry(id:))
         for entry in entries { foundStickers[entry.id] = notify ? .now : Progression.exploredSecretDate }
         store.save(stickers: foundStickers)
@@ -727,6 +766,7 @@ final class AppModel {
         if notify { Notifier.stickersFound(entries) }
         refreshProgressPicks()
         requestSync?()
+        return entries.count
     }
 
     private func authorizationChanged() {
@@ -753,6 +793,11 @@ final class AppModel {
         refreshNeighbours()
     }
 
+    func deleteCity(_ id: UUID) {
+        guard let i = cities.firstIndex(where: { $0.id == id }) else { return }
+        deleteCities(at: IndexSet(integer: i))
+    }
+
     func deleteCities(at offsets: IndexSet) {
         let removed = offsets.map { cities[$0].id }
         placesDeleted?(removed)
@@ -761,7 +806,7 @@ final class AppModel {
         rebuildCountingTiles()
         for id in removed { shapes[id] = nil }
         if let selectedCityID, removed.contains(selectedCityID) {
-            self.selectedCityID = cities.first?.id
+            if let next = cities.first?.id { select(next) } else { self.selectedCityID = nil }
         }
         tilesRevision += 1
         placeStickers()
@@ -809,7 +854,7 @@ final class AppModel {
     /// Nominatim point by point when it isn't. Tries again a few times if both fail,
     /// and again whenever the app comes back.
     func refreshNeighbours() {
-        guard servicesEnabled, !fetchingNearby, let wanted = box(around: Self.neighbourhood), let fetch = box(around: Self.neighbourhood * 2) else { return }
+        guard servicesEnabled, !locked, !fetchingNearby, let wanted = box(around: Self.neighbourhood), let fetch = box(around: Self.neighbourhood * 2) else { return }
         if let saved = store.loadNearby(),
            saved.covers(south: wanted.south, west: wanted.west, north: wanted.north, east: wanted.east),
            saved.fetchedAt.timeIntervalSinceNow > -30 * 24 * 3600 {
@@ -1137,6 +1182,7 @@ final class AppModel {
         historyRevision += 1
         placesRevision += 1
         stickerQueue = []
+        secretsAlreadyWalked = 0
         nearby = []
         selectedCityID = nil
         tilesRevision += 1

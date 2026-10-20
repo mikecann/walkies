@@ -102,7 +102,7 @@ nonisolated struct CoverageTracer: Sendable {
 
     /// The last spot that counted. New fixes are measured from here, not from the
     /// previous fix, so lots of tiny wobbles never add up.
-    private var anchor: TrackPoint?
+    private(set) var anchor: TrackPoint?
 
     mutating func add(_ point: TrackPoint) -> Step {
         guard point.accuracy >= 0, point.accuracy <= Self.maxAccuracy else { return .none }

@@ -256,9 +256,13 @@ actor SafetyServer {
         case "sync:snapshot":
             value = [
                 "places": places.map { ["clientId": $0.key, "updatedAt": $0.value.updatedAt, "url": "https://files.walkies.test/\($0.value.file)"] },
-                "walks": walks.map { ["clientId": $0.key, "url": "https://files.walkies.test/\($0.value)"] },
+                "walks": walks.map { ["clientId": $0.key, "url": args["walkUrls"] as? Bool == false ? NSNull() : "https://files.walkies.test/\($0.value)"] as [String: Any] },
                 "secrets": [] as [String],
             ] as [String: Any]
+        case "sync:walkUrls":
+            value = (args["clientIds"] as! [String]).compactMap { id in
+                walks[id].map { ["clientId": id, "url": "https://files.walkies.test/\($0)"] }
+            }
         default: break
         }
         return (200, try JSONSerialization.data(withJSONObject: ["status": "success", "value": value]))

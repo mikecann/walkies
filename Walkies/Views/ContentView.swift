@@ -18,10 +18,12 @@ struct ContentView: View {
     /// What's happening while a suburb from the map is being added.
     @State private var addingStatus: String?
     @State private var addingError: String?
+    /// Where the buttons over the map are, so the neighbour labels keep out from under them.
+    @State private var buttonFrames: [String: CGRect] = [:]
+    /// The recap on screen. Every recap plays from here, once any sheet is out of the way.
+    @State private var shownRecap: WalkRecap?
 
     var body: some View {
-        @Bindable var model = model
-
         FogMapView(
             cities: model.cities,
             selectedID: model.selectedCityID,
@@ -35,7 +37,8 @@ struct ContentView: View {
             stickers: stickerPins,
             onSelectSticker: { openSticker = LoreLibrary.entry(id: $0) },
             neighbours: addingStatus == nil ? model.neighbours : [],
-            onPickNeighbour: { pickedNeighbour = $0 }
+            onPickNeighbour: { pickedNeighbour = $0 },
+            buttons: Array(buttonFrames.values)
         )
         .overlay {
             CloudLayer(field: model.cloudField, key: model.cloudKey, handle: mapHandle, walkTiles: walkTiles)
@@ -53,6 +56,7 @@ struct ContentView: View {
                     PlaceChip(city: model.selectedCity, secrets: secretsCount) { showingCities = true }
                     ShellsChip { showingProgress = true }
                 }
+                .mapButton("top leading", in: $buttonFrames)
                 Spacer(minLength: 12)
                 VStack(spacing: 10) {
                     HexBadge(icon: .art("icon-gear"), label: "Settings") { showingSettings = true }
@@ -62,17 +66,33 @@ struct ContentView: View {
                         ChefKit.present()
                     }
                 }
+                .mapButton("top trailing", in: $buttonFrames)
             }
             .padding(.horizontal)
         }
         .safeAreaInset(edge: .bottom) {
-            HStack(alignment: .bottom, spacing: 10) {
-                WalkControls {
-                    model.startWalk()
-                    focus.send(.user)
+            VStack(alignment: .leading, spacing: 10) {
+                if model.secretsAlreadyWalked > 0 {
+                    NewSecretsBadge(count: model.secretsAlreadyWalked) {
+                        model.secretsAlreadyWalked = 0
+                        showingStickers = true
+                    } onClose: {
+                        model.secretsAlreadyWalked = 0
+                    }
+                    .mapButton("secrets", in: $buttonFrames)
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
                 }
-                HexBadge(icon: .symbol("location.fill"), fill: .badgeTeal, label: "Where am I") { focus.send(.user) }
+                HStack(alignment: .bottom, spacing: 10) {
+                    WalkControls {
+                        model.startWalk()
+                        focus.send(.user)
+                    }
+                    .mapButton("walk", in: $buttonFrames)
+                    HexBadge(icon: .symbol("location.fill"), fill: .badgeTeal, label: "Where am I") { focus.send(.user) }
+                        .mapButton("where am I", in: $buttonFrames)
+                }
             }
+            .animation(.snappy, value: model.secretsAlreadyWalked > 0)
             .padding(.horizontal)
             .padding(.bottom, 8)
         }
@@ -108,19 +128,19 @@ struct ContentView: View {
         } message: {
             Text(addingError ?? "")
         }
-        .sheet(isPresented: $showingCities) {
+        .sheet(isPresented: $showingCities, onDismiss: showRecapIfReady) {
             MapsAndPlacesView()
         }
-        .sheet(isPresented: $showingSettings) {
+        .sheet(isPresented: $showingSettings, onDismiss: showRecapIfReady) {
             SettingsView()
         }
-        .sheet(isPresented: $showingProgress) {
+        .sheet(isPresented: $showingProgress, onDismiss: showRecapIfReady) {
             ProgressionSheet()
         }
-        .sheet(isPresented: $showingStickers) {
+        .sheet(isPresented: $showingStickers, onDismiss: showRecapIfReady) {
             StickerBookView()
         }
-        .sheet(item: $openSticker) { entry in
+        .sheet(item: $openSticker, onDismiss: showRecapIfReady) { entry in
             LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id])
         }
         .overlay {
@@ -132,14 +152,29 @@ struct ContentView: View {
                 }
         }
         .sensoryFeedback(.success, trigger: model.stickerQueue.count) { old, new in new > old }
-        .fullScreenCover(item: $model.recap) { recap in
+        .fullScreenCover(item: Binding(get: { shownRecap }, set: { shownRecap = $0; if $0 == nil { model.recap = nil } })) { recap in
             CelebrationView(
                 recap: recap,
                 others: model.cities.filter { city in !recap.after.contains { $0.id == city.id } },
                 tilted: model.tilted3D
             )
         }
-        .sheet(isPresented: Binding(get: { model.pendingTeamInvite != nil }, set: { if !$0 { model.pendingTeamInvite = nil } })) {
+        .onChange(of: model.recap?.id, initial: true) {
+            // A cover can't go over a sheet from here. A walk that's just ended waits for
+            // the sheet to close; rewatching one from Settings closes it and plays over the map.
+            if model.recap == nil {
+                shownRecap = nil
+            } else if !sheetOpen {
+                shownRecap = model.recap
+            } else if model.recap?.isRewatch == true {
+                showingCities = false
+                showingSettings = false
+                showingProgress = false
+                showingStickers = false
+                openSticker = nil
+            }
+        }
+        .sheet(isPresented: Binding(get: { model.pendingTeamInvite != nil }, set: { if !$0 { model.pendingTeamInvite = nil } }), onDismiss: showRecapIfReady) {
             JoinTeamView(initialCode: model.pendingTeamInvite ?? "")
         }
         .task { await account.refreshProfile() }
@@ -177,6 +212,16 @@ extension ContentView {
             }
             addingStatus = nil
         }
+    }
+
+    private var sheetOpen: Bool {
+        showingCities || showingSettings || showingProgress || showingStickers || openSticker != nil || model.pendingTeamInvite != nil
+    }
+
+    /// Plays a recap that arrived while a sheet was up, now it's gone.
+    private func showRecapIfReady() {
+        guard !sheetOpen, shownRecap == nil, let recap = model.recap else { return }
+        shownRecap = recap
     }
 
     private var secretsCount: (found: Int, total: Int)? {
@@ -345,6 +390,52 @@ struct WalkControls: View {
             }
             .buttonStyle(StickerButtonStyle())
         }
+    }
+}
+
+/// Secrets that turned up under tiles you'd already walked, all at once. Tap to see
+/// them in the book.
+private struct NewSecretsBadge: View {
+    let count: Int
+    let onOpen: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Button(action: onOpen) {
+                HStack(spacing: 8) {
+                    Image("icon-book").resizable().scaledToFit().frame(width: 26, height: 26)
+                    Text(count == 1 ? "A new secret in places you've walked" : "\(count) new secrets in places you've walked")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.ink)
+                        .multilineTextAlignment(.leading)
+                }
+                .padding(.leading, 8)
+                .padding(.vertical, 7)
+                .contentShape(.rect)
+            }
+            .buttonStyle(PressScale())
+            .accessibilityHint("Opens your secrets book")
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color.ink.opacity(0.5))
+                    .frame(width: 32, height: 32)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+        }
+        .padding(.trailing, 4)
+        .stickerCard(in: .rect(cornerRadius: 20))
+    }
+}
+
+private extension View {
+    /// Tells the map where this button sits, so the labels on the map keep clear of it.
+    func mapButton(_ key: String, in frames: Binding<[String: CGRect]>) -> some View {
+        onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frames.wrappedValue[key] = $0 }
+            .onDisappear { frames.wrappedValue[key] = nil }
     }
 }
 

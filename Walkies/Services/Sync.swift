@@ -64,6 +64,14 @@ final class SyncEngine {
         countWaiting()
     }
 
+    /// Reads what was synced again, for when the app started before the phone's first
+    /// unlock and couldn't.
+    func reload() {
+        state = store.loadSyncState()
+        lastSynced = UserDefaults.standard.object(forKey: "lastSynced") as? Date
+        countWaiting()
+    }
+
     /// Syncs a moment from now. Several requests in a row become one sync.
     func schedule() {
         countWaiting()
@@ -262,7 +270,7 @@ final class SyncEngine {
     private static let batchSize = 25
 
     private func pull(_ client: ConvexClient, revision: Int) async throws {
-        let snapshot: Snapshot = try await client.query("sync:snapshot")
+        let snapshot: Snapshot = try await client.query("sync:snapshot", ["walkUrls": false])
         try check(revision)
 
         var progress = try snapshot.progress.map { try JSONDecoder().decode(Ledger.self, from: Data($0.utf8)) }
@@ -293,8 +301,16 @@ final class SyncEngine {
             batch.cities.append(city)
             if batch.count >= Self.batchSize { try await flush() }
         }
+        // Links only for the walks this phone hasn't got, so a sync doesn't sign one per walk.
         let have = Set(model.walks.map(\.id))
-        for remote in snapshot.walks {
+        let missing = snapshot.walks.map(\.clientId).filter { UUID(uuidString: $0).map { !have.contains($0) } ?? false }
+        var links: [Snapshot.RemoteWalk] = []
+        for start in stride(from: 0, to: missing.count, by: 100) {
+            let chunk = Array(missing[start..<min(start + 100, missing.count)])
+            links += try await client.query("sync:walkUrls", ["clientIds": chunk]) as [Snapshot.RemoteWalk]
+            try check(revision)
+        }
+        for remote in links {
             guard let id = UUID(uuidString: remote.clientId), !have.contains(id),
                   let url = remote.url.flatMap(URL.init(string:)) else { continue }
             guard var walk = try await fetch(Walk.self, from: url, client, revision: revision, failure: &failure) else { continue }
