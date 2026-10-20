@@ -107,6 +107,7 @@ final class AppModel {
         self.servicesEnabled = servicesEnabled
         tracker.onLocation = { [weak self] in self?.record($0) }
         tracker.onAuthorizationChange = { [weak self] in self?.authorizationChanged() }
+        tracker.isWalking = { [weak self] in self?.activeWalk != nil }
         locked = waitForUnlock
         if !waitForUnlock { load(alwaysOn: alwaysOn) }
     }
@@ -653,6 +654,8 @@ final class AppModel {
         if setupDone { motion.start() }
         if alwaysOn {
             tracker.startAlwaysOn()
+        } else {
+            tracker.removeFence()
         }
     }
 
@@ -1163,6 +1166,7 @@ final class AppModel {
         alwaysOn = false
         setupDone = false
         tracker.stop()
+        tracker.stopAlwaysOn()
         activeWalk = nil
         activePath = []
         freshTiles = [:]

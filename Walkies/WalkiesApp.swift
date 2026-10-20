@@ -22,6 +22,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // Chef (Seth's feedback board): opened from Settings rather than floating over the map.
         ChefKit.install(client: ChefConnection(account: account))
         ChefKit.isHidden = true
+        // Straight away, even before the first unlock, so the exit that relaunched us arrives.
+        model.tracker.openFence()
         if model.locked {
             unlockObserver = NotificationCenter.default.addObserver(
                 forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main
