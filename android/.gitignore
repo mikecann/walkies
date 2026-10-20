@@ -8,3 +8,7 @@ captures/
 *.iml
 .cxx/
 .externalNativeBuild/
+# The release signing key and its passwords. Never commit them.
+keystore.properties
+*.jks
+*.keystore

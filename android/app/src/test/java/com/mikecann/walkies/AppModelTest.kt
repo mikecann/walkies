@@ -27,9 +27,10 @@ import kotlin.math.abs
 
 /**
  * Always-on and button walks through the model: ModelFixesTests.swift and the walk
- * parts of ProgressionIntegrationTests.swift. The iPhone defers finishing a walk
- * until history is ready; there's no history backfill on Android yet, so it's
- * always ready and finishes straight away.
+ * parts of ProgressionIntegrationTests.swift. Both phones put off finishing a walk
+ * until the saved history's tile counts are worked out; these models work them out
+ * before the constructor returns, so walks finish straight away. The progression
+ * parts are in ProgressionModelTest.
  */
 class AppModelTest {
     private var now = 1_790_000_000.0

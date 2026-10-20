@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Always the light cream look, as on the iPhone: no dark mode, and the system's
+         force-dark (including Android 16's "make more apps dark") is turned off. -->
     <style name="Theme.Walkies" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">#FF2F3B34</item>
+        <item name="android:forceDarkAllowed">false</item>
     </style>
 </resources>

@@ -18,8 +18,8 @@ import kotlin.math.sin
  * A handful of cumulus puffs drawn once at launch. Each is a few big soft circles,
  * split into a blue-grey underside and a sunlit white top nudged towards the
  * north-west. Also a blurred silhouette of each for its shadow, and a soft eraser.
- * A port of CloudSprites in Clouds.swift (the classic theme). Slow-ish: build it
- * off the main thread.
+ * A port of CloudSprites in Clouds.swift, with the shop's cloud colours. Slow-ish:
+ * build it off the main thread. Each look is built once and kept.
  */
 class CloudSprites private constructor(
     val bases: List<Bitmap>,
@@ -37,8 +37,25 @@ class CloudSprites private constructor(
 
         private val classic = Palette(rgb(1.0, 1.0, 1.0), rgb(1.0, 1.0, 1.0), rgb(0.93, 0.945, 0.97), rgb(0.76, 0.8, 0.87))
 
-        fun build(): CloudSprites {
-            val palette = classic
+        private fun palette(theme: String) = when (theme) {
+            "clouds.sunset" -> Palette(rgb(1.0, 0.86, 0.74), rgb(1.0, 0.78, 0.84), rgb(0.96, 0.73, 0.8), rgb(0.66, 0.57, 0.79))
+            "clouds.storm" -> Palette(rgb(0.69, 0.75, 0.83), rgb(0.69, 0.75, 0.83), rgb(0.54, 0.62, 0.73), rgb(0.32, 0.39, 0.51))
+            "clouds.candy" -> Palette(rgb(1.0, 0.82, 0.92), rgb(0.78, 0.9, 1.0), rgb(0.84, 0.79, 0.94), rgb(0.65, 0.68, 0.85))
+            else -> classic
+        }
+
+        private val built = HashMap<String, CloudSprites>()
+
+        /** The sprites for an equipped cloud look, built the first time it's asked for. */
+        fun forTheme(theme: String): CloudSprites {
+            val key = if (theme in setOf("clouds.sunset", "clouds.storm", "clouds.candy")) theme else "clouds.classic"
+            synchronized(built) { built[key]?.let { return it } }
+            val sprites = build(key)
+            synchronized(built) { return built.getOrPut(key) { sprites } }
+        }
+
+        fun build(theme: String = "clouds.classic"): CloudSprites {
+            val palette = palette(theme)
             val bases = ArrayList<Bitmap>()
             val tops = ArrayList<Bitmap>()
             val shadows = ArrayList<Bitmap>()

@@ -3,6 +3,7 @@ package com.mikecann.walkies.sync
 import com.mikecann.walkies.convex.Backend
 import com.mikecann.walkies.convex.Http
 import com.mikecann.walkies.model.Codec
+import com.mikecann.walkies.model.Ledger
 import com.mikecann.walkies.model.Walk
 import com.mikecann.walkies.model.uuidString
 import com.mikecann.walkies.place.City
@@ -47,6 +48,8 @@ class FakeServer : Http {
     private var gate: CountDownLatch? = null
     val downloadStarted = CountDownLatch(1)
     @Volatile var offline = false
+    /** The account's ledger, merged with each one pushed as the server does (mergeLedgers in convex/progression.ts). */
+    var ledger: Ledger? = null
 
     val paths: List<String> @Synchronized get() = calls.map { it.path }
 
@@ -119,6 +122,10 @@ class FakeServer : Http {
             "sync:generateUploadUrl" -> value = JsonPrimitive("https://sync.walkies.test/upload")
             "sync:savePlace" -> places[string("clientId")] = args.getValue("updatedAt").jsonPrimitive.doubleOrNull!! to string("file")
             "sync:saveWalk" -> walks[string("clientId")] = string("file")
+            "sync:saveProgress" -> {
+                val incoming = Codec.ledger(Codec.parse(string("ledger")))
+                ledger = ledger?.merged(incoming) ?: incoming
+            }
             "sync:deletePlace" -> {
                 deleted.add(string("clientId"))
                 places.remove(string("clientId"))
@@ -140,7 +147,7 @@ class FakeServer : Http {
                         })
                     })
                     put("secrets", JsonArray(emptyList()))
-                    put("progress", JsonNull)
+                    put("progress", ledger?.let { JsonPrimitive(SyncEngine.progressJSON(it)) } ?: JsonNull)
                 }
             }
             "sync:walkUrls" -> value = buildJsonArray {

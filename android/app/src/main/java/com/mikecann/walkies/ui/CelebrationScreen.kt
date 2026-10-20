@@ -3,6 +3,8 @@ package com.mikecann.walkies.ui
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -85,6 +87,7 @@ import com.mikecann.walkies.map.Projection
 import com.mikecann.walkies.map.SplitMix64
 import com.mikecann.walkies.map.StandInMap
 import com.mikecann.walkies.map.YouAreHere
+import com.mikecann.walkies.model.LevelMeter
 import com.mikecann.walkies.model.WalkRecap
 import com.mikecann.walkies.place.City
 import com.mikecann.walkies.place.percentText
@@ -105,19 +108,25 @@ import kotlin.math.sin
  * map: the route draws itself, the clouds clear tile by tile with a pop and a puff of
  * sparkles, and it stops for a moment on any secret you found. Then a summary of what
  * the walk did for each place, and roughly how many more it'll take to finish.
- * Rewatched from history it's just the walk: no rewards, and nothing changes.
- *
- * [progressionSummary] is the shells, XP and quests panel, which comes with
- * progression (stage 5b). It only shows when there is one, and never on a rewatch.
+ * The summary also shows the shells and XP the walk earned and its quest progress,
+ * filling the level bar a level at a time. Rewatched from history it's just the walk:
+ * no rewards, and nothing changes.
  */
 @Composable
 fun CelebrationScreen(
     recap: WalkRecap,
     /** Your other places, unchanged by this walk, so they're still under cloud. */
     others: List<City>,
+    /** The equipped celebration (confetti, bubbles or fireworks) and clouds. */
+    style: String,
+    clouds: String,
+    /** Your lifetime XP now, after this walk. */
+    endingXP: Int,
+    /** A level-up reward is waiting to be chosen. */
+    hasReward: Boolean,
+    onReward: () -> Unit,
     onSecret: (LoreEntry) -> Unit,
     onDone: () -> Unit,
-    progressionSummary: (@Composable () -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
@@ -138,7 +147,7 @@ fun CelebrationScreen(
 
     DisposableEffect(sounds) { onDispose { sounds.release() } }
     LaunchedEffect(Unit) {
-        sprites = withContext(Dispatchers.Default) { CloudSprites.build() }
+        sprites = withContext(Dispatchers.Default) { CloudSprites.forTheme(clouds) }
         withContext(Dispatchers.Default) { sounds.prepare() }
     }
     LaunchedEffect(player.runs) { player.run() }
@@ -172,7 +181,7 @@ fun CelebrationScreen(
             StandInMap(state, onTap = {}, onReady = { mapReady = true })
         }
         CloudLayer(player.field, state, sprites, EMPTY_ROUTE, emptyList(), remember { YouAreHere() })
-        ReplayEffects(recap, player, state, reduceMotion)
+        ReplayEffects(recap, player, state, reduceMotion, style)
 
         Row(
             verticalAlignment = Alignment.Top,
@@ -183,7 +192,7 @@ fun CelebrationScreen(
             Capsule {
                 BasicText(
                     Format.duration(player.elapsed),
-                    style = heavyRounded(22).copy(fontFeatureSettings = "tnum"),
+                    style = heavyRounded(22).copy(fontFamily = roundedFont(), fontFeatureSettings = "tnum"),
                     modifier = Modifier.semantics { contentDescription = "Time walked" },
                 )
             }
@@ -222,9 +231,8 @@ fun CelebrationScreen(
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             SummaryCard(
-                recap, sounds, reduceMotion,
-                progressionSummary = progressionSummary.takeIf { !recap.isRewatch },
-                onSecret = onSecret, onReplay = player::replay, onDone = onDone,
+                recap, sounds, reduceMotion, endingXP, hasReward = hasReward && !recap.isRewatch,
+                onReward = onReward, onSecret = onSecret, onReplay = player::replay, onDone = onDone,
             )
         }
     }
@@ -433,7 +441,7 @@ class ReplayPlayer(private val recap: WalkRecap, private val others: List<City>)
 
 /** The route drawing itself, a walker at its head, and the bursts: sparkles where a tile clears, confetti for a secret. */
 @Composable
-private fun ReplayEffects(recap: WalkRecap, player: ReplayPlayer, state: MapState, reduceMotion: Boolean) {
+private fun ReplayEffects(recap: WalkRecap, player: ReplayPlayer, state: MapState, reduceMotion: Boolean, style: String) {
     val route = remember(recap) {
         DoubleArray(recap.route.size * 2) { i ->
             val p = recap.route[i / 2]
@@ -463,7 +471,11 @@ private fun ReplayEffects(recap: WalkRecap, player: ReplayPlayer, state: MapStat
                 projection.point(burst.x, burst.y)
                 sparkles(Offset(projection.x, projection.y), t, burst.seed)
             } else if (!reduceMotion) {
-                confetti(t, burst.seed)
+                when (style) {
+                    "celebration.bubbles" -> bubbles(t, burst.seed)
+                    "celebration.fireworks" -> fireworks(t, burst.seed)
+                    else -> confetti(t, burst.seed)
+                }
             }
         }
     }
@@ -554,6 +566,63 @@ private fun DrawScope.confetti(t: Double, seed: Long) {
     }
 }
 
+/** Soft bubbles drift up, then leave a brief expanding ring as they pop. */
+private fun DrawScope.bubbles(t: Double, seed: Long) {
+    if (t < 0 || t >= 2.5) return
+    val pt = density
+    val rng = SplitMix64(seed)
+    val colours = listOf(Color.White, Walkies.badgeTeal, Walkies.badgeGreen, SystemColours.pink)
+    for (i in 0 until 30) {
+        val delay = rng.unit() * 0.55
+        val life = 1.1 + rng.unit() * 0.85
+        val age = t - delay
+        val x = size.width * rng.unit() + sin(age * 2 + i) * 18 * pt
+        val bottom = size.height * (0.75 + rng.unit() * 0.2)
+        val speed = (100 + rng.unit() * 150) * pt
+        val radius = (7 + rng.unit() * 18) * pt
+        if (age < 0 || age >= life + 0.18) continue
+        val popping = max(0.0, (age - life) / 0.18)
+        val r = (radius * (1 + popping * 0.5)).toFloat()
+        val y = bottom - speed * min(age, life)
+        val centre = Offset(x.toFloat(), y.toFloat())
+        val colour = colours[i % colours.size]
+        val fade = (min(1.0, age * 6) * (1 - popping)).toFloat()
+        if (popping == 0.0) {
+            drawCircle(colour.copy(alpha = 0.16f * fade), r, centre)
+            drawOval(
+                Color.White.copy(alpha = 0.65f * fade),
+                topLeft = Offset(centre.x - r * 0.45f, centre.y - r * 0.5f),
+                size = Size(r * 0.4f, r * 0.25f),
+            )
+        }
+        drawCircle(colour.copy(alpha = 0.65f * fade), r, centre, style = Stroke(1.5f * pt))
+    }
+}
+
+/** Three staggered bursts, with short glowing trails falling under gravity. */
+private fun DrawScope.fireworks(t: Double, seed: Long) {
+    if (t < 0 || t >= 2.5) return
+    val pt = density
+    val rng = SplitMix64(seed)
+    val colours = listOf(Walkies.orange, Walkies.badgeTeal, SystemColours.pink, SystemColours.yellow, Color.White)
+    for (burst in 0 until 3) {
+        val ox = size.width * (0.2 + burst * 0.3)
+        val oy = size.height * (0.2 + rng.unit() * 0.2)
+        val age = t - burst * 0.35
+        for (i in 0 until 32) {
+            val angle = i / 32.0 * 2 * PI + rng.unit() * 0.1
+            val speed = (70 + rng.unit() * 140) * pt
+            if (age < 0 || age >= 1.5) continue
+            val fade = (min(1.0, age * 12) * max(0.0, 1 - age / 1.5)).toFloat()
+            fun point(time: Double) = Offset(
+                (ox + cos(angle) * speed * time).toFloat(),
+                (oy + sin(angle) * speed * time + 70 * pt * time * time).toFloat(),
+            )
+            drawLine(colours[(i + burst) % colours.size].copy(alpha = fade), point(max(0.0, age - 0.08)), point(age), 2.5f * pt, StrokeCap.Round)
+        }
+    }
+}
+
 /** A found secret, held up big with a slow sunburst behind it. */
 @Composable
 private fun SecretPop(entry: LoreEntry) {
@@ -597,24 +666,42 @@ private fun SummaryCard(
     recap: WalkRecap,
     sounds: SoundFX,
     reduceMotion: Boolean,
-    progressionSummary: (@Composable () -> Unit)?,
+    endingXP: Int,
+    hasReward: Boolean,
+    onReward: () -> Unit,
     onSecret: (LoreEntry) -> Unit,
     onReplay: () -> Unit,
     onDone: () -> Unit,
 ) {
     var counted by remember { mutableIntStateOf(0) }
+    var countedShells by remember { mutableIntStateOf(0) }
     var filled by remember { mutableStateOf(false) }
+    val before = max(0, endingXP - recap.xp)
+    var xpLevel by remember { mutableIntStateOf(LevelMeter(before).level) }
+    val xpFill = remember { Animatable(LevelMeter(before).fraction.toFloat()) }
     val rounded = roundedFont()
-    // Count the tiles up, ticking as they go, then fill each place's bar.
+    // Count tiles and shells up together, ticking as they go, then fill each place's
+    // bar, then each level this walk crossed. A rewatch only counts the tiles.
     LaunchedEffect(recap) {
-        val total = recap.newTiles
+        val total = max(recap.newTiles, recap.shells)
         val steps = if (reduceMotion) 1 else min(max(total, 1), 30)
         for (i in 1..steps) {
             delay(max(18, 700 / steps).toLong())
             counted = (recap.newTiles.toDouble() * i / steps).toInt()
+            countedShells = (recap.shells.toDouble() * i / steps).toInt()
             if (total > 0 && (i % 2 == 0 || steps == 1)) sounds.play(SoundFX.Sound.Tick)
         }
         filled = true
+        if (recap.isRewatch) return@LaunchedEffect
+        val fills = LevelMeter.fills(before, endingXP)
+        val duration = if (reduceMotion) 0 else (min(0.65, 1.8 / fills.size) * 1000).toInt()
+        for (fill in fills) {
+            // Start each level's bar again without animating backwards.
+            xpLevel = fill.level
+            xpFill.snapTo(fill.from.toFloat())
+            delay(30)
+            xpFill.animateTo(fill.to.toFloat(), tween(duration, easing = EaseOut))
+        }
     }
 
     Column(
@@ -643,7 +730,9 @@ private fun SummaryCard(
             SummaryStat("${recap.secrets.size}", if (recap.secrets.size == 1) "Secret" else "Secrets")
         }
 
-        progressionSummary?.invoke()
+        if (!recap.isRewatch) {
+            ProgressionSummary(recap, countedShells, xpLevel, xpFill.value.toDouble(), endingXP, filled, hasReward, onReward)
+        }
 
         if (recap.secrets.isNotEmpty()) {
             Row(
@@ -716,6 +805,60 @@ private fun SummaryCard(
             }
             StickerButton(onClick = onDone, modifier = Modifier.weight(1f)) {
                 BasicText("Done", style = Type.headline.copy(color = Color.White))
+            }
+        }
+    }
+}
+
+/** The shells and XP the walk earned, the level bar, and the quests it moved on (progressionSummary). */
+@Composable
+private fun ProgressionSummary(
+    recap: WalkRecap,
+    shells: Int,
+    level: Int,
+    fill: Double,
+    endingXP: Int,
+    filled: Boolean,
+    hasReward: Boolean,
+    onReward: () -> Unit,
+) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.fillMaxWidth().background(Walkies.sand.copy(alpha = 0.35f), RoundedCornerShape(16.dp)).padding(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) { ShellBalance(shells, prefix = "+") }
+            BasicText("+${recap.xp} XP", style = Type.subheadline.copy(fontWeight = FontWeight.Bold))
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            BasicText("Level $level", style = Type.headline, modifier = Modifier.weight(1f))
+            BasicText("$endingXP total XP", style = Type.caption)
+        }
+        ProgressBar(
+            fill, Modifier.fillMaxWidth().semantics { contentDescription = "Level $level progress, ${(fill * 100).toInt()} percent" },
+            animated = false,
+        )
+        for (quest in recap.questProgress) {
+            val done = filled && quest.completed
+            val bounce by animateFloatAsState(if (filled) 1f else 0.85f, spring(dampingRatio = 0.4f, stiffness = 600f), label = "bounce")
+            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CheckCircle(
+                    Modifier.size(20.dp).scale(bounce),
+                    if (filled) Walkies.badgeTeal else Walkies.ink.copy(alpha = 0.4f),
+                    filled = done,
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp), modifier = Modifier.weight(1f)) {
+                    val progress = if (filled) quest.after else quest.before
+                    BasicText(quest.kind.title, style = Type.caption.copy(fontWeight = FontWeight.SemiBold))
+                    BasicText(questProgressText(progress, quest.kind), style = Type.caption.copy(fontSize = 11.sp, color = Walkies.ink.copy(alpha = 0.65f)))
+                    ProgressBar(min(1.0, progress / quest.target), Modifier.fillMaxWidth())
+                }
+                if (done) BasicText("+40 shells", style = Type.caption.copy(fontWeight = FontWeight.SemiBold))
+            }
+        }
+        if (hasReward) {
+            StickerButton(onClick = onReward) {
+                BasicText("Level up, choose a reward", style = Type.headline.copy(color = Color.White))
             }
         }
     }

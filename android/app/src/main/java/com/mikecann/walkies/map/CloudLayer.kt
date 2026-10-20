@@ -58,6 +58,8 @@ fun CloudLayer(
     fresh: List<DoubleArray>,
     you: YouAreHere,
     modifier: Modifier = Modifier,
+    /** What's equipped from the shop: the trail, the marker and the spyglass's ring. */
+    cosmetics: MapCosmetics = MapCosmetics.none,
 ) {
     val density = LocalDensity.current.density
     val painter = remember(density) { CloudPainter(density) }
@@ -94,7 +96,7 @@ fun CloudLayer(
             drawIntoCanvas { canvas ->
                 painter.draw(
                     canvas.nativeCanvas, field, reveal.leaving, reveal.freshClearings, progress,
-                    projection, sprites, size.width, size.height, now, state.honeycomb(nanos), route, fresh, you,
+                    projection, sprites, size.width, size.height, now, state.honeycomb(nanos), route, fresh, you, cosmetics,
                 )
             }
         },

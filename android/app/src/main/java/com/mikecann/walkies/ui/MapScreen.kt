@@ -55,6 +55,11 @@ import com.mikecann.walkies.location.LocationTracker
 import com.mikecann.walkies.map.CloudField
 import com.mikecann.walkies.map.CloudLayer
 import com.mikecann.walkies.map.CloudSprites
+import com.mikecann.walkies.map.MapCosmetics
+import com.mikecann.walkies.map.SpyglassRing
+import com.mikecann.walkies.model.Progression
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalContext
 import com.mikecann.walkies.map.MapPoints
 import com.mikecann.walkies.map.MapState
 import com.mikecann.walkies.map.MapboxMap
@@ -94,6 +99,8 @@ fun MapScreen(
     onShowPlaces: () -> Unit,
     onFixPermissions: () -> Unit,
     onShowSecrets: () -> Unit,
+    /** The shells chip: your progress, the shop and the wardrobe. */
+    onShowProgress: () -> Unit,
     /** A found secret's pin on the map, tapped to read it again. */
     onOpenSecret: (LoreEntry) -> Unit,
 ) {
@@ -120,7 +127,20 @@ fun MapScreen(
     val you = remember { YouAreHere() }
     state.onUserMove = { following = false }
 
-    LaunchedEffect(Unit) { sprites = withContext(Dispatchers.Default) { CloudSprites.build() } }
+    // The equipped look from the shop: the clouds' colours, the trail, the marker.
+    val equipped = model.equipped
+    LaunchedEffect(equipped.clouds) { sprites = withContext(Dispatchers.Default) { CloudSprites.forTheme(equipped.clouds) } }
+    // The spyglass's ring, checked every second so it goes when it runs out.
+    var ring by remember { mutableStateOf(model.activeSpyglassRing) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            val now = model.activeSpyglassRing
+            if (now != ring) ring = now
+            delay(1000)
+        }
+    }
+    val context = LocalContext.current
+    val cosmetics = remember(equipped.trail, equipped.marker, ring) { mapCosmetics(context, equipped.trail, equipped.marker, ring) }
 
     /** A suburb next door you've tapped, waiting for you to confirm adding it. */
     var pickedNeighbour by remember { mutableStateOf<PlaceResult?>(null) }
@@ -225,7 +245,7 @@ fun MapScreen(
         } else {
             StandInMap(state, onTap = {}, onReady = { mapReady = true })
         }
-        CloudLayer(field, state, sprites, route, freshOutlines, you)
+        CloudLayer(field, state, sprites, route, freshOutlines, you, cosmetics = cosmetics)
         StickerPinLayer(pins, state, onPick = onOpenSecret)
         NeighbourLayer(
             neighbours = if (addingStatus == null) model.neighbours else emptyList(),
@@ -249,16 +269,19 @@ fun MapScreen(
                 .statusBarsPadding()
                 .padding(horizontal = 16.dp),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.mapButton("top leading", buttonFrames)) {
-                val hidden = model.stickersHere
-                val secrets = if (hidden.isEmpty()) null else hidden.count { model.foundStickers[it.first.id] != null } to hidden.size
-                PlaceChip(model.selectedCity, name, picture, secrets, onChangePlace = onShowPlaces)
+            // The badges are measured first, so a long place name on a small phone
+            // shortens the chip rather than pushing them off the screen.
+            Box(Modifier.weight(1f).padding(end = 12.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.mapButton("top leading", buttonFrames)) {
+                    val hidden = model.stickersHere
+                    val secrets = if (hidden.isEmpty()) null else hidden.count { model.foundStickers[it.first.id] != null } to hidden.size
+                    PlaceChip(model.selectedCity, name, picture, secrets, onChangePlace = onShowPlaces)
+                    LiveShellsChip(model, onShowProgress)
+                }
             }
-            Spacer(Modifier.weight(1f).widthIn(min = 12.dp))
             Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.mapButton("top trailing", buttonFrames)) {
                 HexBadge(BadgeIcon.Art("icon-gear"), "Settings", onClick = onShowSettings)
                 HexBadge(BadgeIcon.Art("icon-book"), "Secrets", onClick = onShowSecrets)
-                HexBadge(BadgeIcon.Art("icon-idea"), "Suggest a feature") {}
             }
         }
 
@@ -323,6 +346,38 @@ fun MapScreen(
     addingError?.let {
         WalkiesDialog("Couldn't add it", it, listOf(DialogButton("OK", bold = true)), onDismiss = { addingError = null })
     }
+}
+
+/** The shells chip, read again every 30 seconds so a new week's quests or a new day show. */
+@Composable
+private fun LiveShellsChip(model: AppModel, onClick: () -> Unit) {
+    var tick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000)
+            tick++
+        }
+    }
+    @Suppress("UNUSED_EXPRESSION") tick
+    ShellsChip(model.balance, model.level, model.pendingPicks.isNotEmpty(), onClick)
+}
+
+/** The map's cosmetics, with the equipped marker's art and the trail's footprint loaded from the assets. */
+fun mapCosmetics(context: android.content.Context, trail: String, marker: String, ring: Progression.Ring?): MapCosmetics {
+    val art = when (marker) {
+        "marker.sneaker" -> "progress-marker-sneaker"
+        "marker.boat" -> "progress-marker-boat"
+        "marker.hat" -> "progress-marker-hat"
+        "marker.lighthouse" -> "progress-marker-lighthouse"
+        else -> null
+    }
+    return MapCosmetics(
+        trail = trail,
+        marker = art?.let { loadAssetImage(context, it)?.asAndroidBitmap() },
+        footprint = if (trail == "trail.footprints") loadAssetImage(context, "progress-footprint")?.asAndroidBitmap() else null,
+        spyglass = ring?.let { loadAssetImage(context, "progress-spyglass")?.asAndroidBitmap() },
+        ring = ring?.let { SpyglassRing(it.centre.lat, it.centre.lon, it.radius) },
+    )
 }
 
 /**

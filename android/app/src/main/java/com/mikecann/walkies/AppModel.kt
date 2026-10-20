@@ -8,6 +8,7 @@ import com.mikecann.walkies.lore.LoreLibrary
 import com.mikecann.walkies.lore.placeStickers
 import com.mikecann.walkies.model.CoverageTracer
 import com.mikecann.walkies.model.Ledger
+import com.mikecann.walkies.model.Progression
 import com.mikecann.walkies.model.SwiftDate
 import com.mikecann.walkies.model.TrackPoint
 import com.mikecann.walkies.model.Walk
@@ -22,6 +23,7 @@ import com.mikecann.walkies.place.OSMClient
 import com.mikecann.walkies.place.PlaceResult
 import com.mikecann.walkies.store.Store
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -80,8 +82,13 @@ interface Settings {
  * (a pop-up with the app open, a notification with it closed), and the recap the
  * end-of-walk celebration plays.
  *
- * Not ported yet: progression (stage 5b). There's no world-grid rebuild: Android
- * never wrote the old grid.
+ * Also progression (the progression part of AppModel.swift): shells, XP and quests
+ * worked out from the walks, places and secrets, and the ledger of what's been bought,
+ * claimed and equipped. Saved walks have their first-discovery tile counts worked out
+ * once at launch ([historyScope], off the main thread on the phone, straight away in
+ * tests), and kept up to date as walks end.
+ *
+ * There's no world-grid rebuild: Android never wrote the old grid.
  */
 class AppModel(
     private val store: Store,
@@ -91,6 +98,8 @@ class AppModel(
     /** Seconds since 1970. */
     private val clock: () -> Double = { System.currentTimeMillis() / 1000.0 },
     private val osm: OSMClient = OSMClient(),
+    /** Where the launch history backfill runs. Null works it out before the constructor returns. */
+    private val historyScope: CoroutineScope? = null,
 ) {
     private val listeners = ArrayList<() -> Unit>()
 
@@ -146,7 +155,10 @@ class AppModel(
         private set
     /** When each sticker was found, by lore id. */
     var foundStickers: Map<String, SwiftDate> = emptyMap()
-        private set
+        private set(value) {
+            field = value
+            secretsRevision++
+        }
     /** Stickers just found, waiting to pop up. */
     var stickerQueue: List<LoreEntry> = emptyList()
         private set
@@ -176,8 +188,26 @@ class AppModel(
     /** Bumps when the phone's data is wiped, so work that started before can't put anything back. */
     private var dataGeneration = 0
 
-    /** The shop and level-reward ledger, kept and synced for the iPhone. The shop itself comes in stage 5. */
+    /** The shop and level-reward ledger: what's been bought, claimed and equipped. */
     var ledger = Ledger()
+        private set
+
+    /** The saved walks' tile counts have been worked out, so rewards can be trusted. */
+    var historyReady = false
+        private set
+    private var historyDone = CompletableDeferred<Unit>()
+    /** Walk endings waiting for the history, run as soon as it's ready. */
+    private val afterHistory = ArrayList<() -> Unit>()
+    private var batchingProgress = false
+    private var historyRevision = 0
+    private var placesRevision = 0
+    private var secretsRevision = 0
+    private var countingTilesByPlace: Map<UUID, Int> = emptyMap()
+    private var questTileCounts: Map<UUID, Map<UUID, Int>> = emptyMap()
+    private var cachedProgression: Pair<String, Progression.State>? = null
+    private var cachedHistoricalRewards: Pair<String, Progression.HistoricalRewards>? = null
+    /** How many times past weeks and streaks have been worked out, for tests. */
+    var progressionHistoryBuilds = 0
         private set
 
     /** Asks sync to push and pull shortly. Set by the app. */
@@ -246,6 +276,67 @@ class AppModel(
         selectedCityId = cities.firstOrNull { it.id.uuidString == saved }?.id ?: cities.firstOrNull()?.id
         foundStickers = store.loadStickers()
         placeStickers()
+        rebuildCountingTiles()
+        // Never trace saved routes while opening the app or handling a location fix.
+        prepareHistory()
+    }
+
+    private fun rebuildCountingTiles() {
+        countingTilesByPlace = Progression.countingTiles(cities)
+    }
+
+    /** Waits until the saved walks' tile counts are worked out. */
+    suspend fun waitForHistory() = historyDone.await()
+
+    private fun prepareHistory() {
+        val generation = dataGeneration
+        val savedCities = cities
+        val resumed = activeWalk?.takeIf { !autoWalkPending }?.let { active ->
+            active.copy(endedAt = active.points.lastOrNull()?.let { SwiftDate.epoch(it.time) } ?: now())
+        }
+        val routes = walks + listOfNotNull(resumed)
+        fun install(repaired: Progression.Backfill) {
+            // Signed out meanwhile: there's no history left to install.
+            if (generation == dataGeneration) installBackfill(repaired)
+            historyReady = true
+            historyRevision++
+            historyDone.complete(Unit)
+            refreshProgressPicks()
+            val waiting = afterHistory.toList()
+            afterHistory.clear()
+            for (run in waiting) run()
+            onChange()
+        }
+        val scope = historyScope
+        if (scope == null) {
+            install(Progression.backfill(routes, savedCities))
+        } else {
+            scope.launch { install(withContext(Dispatchers.Default) { Progression.backfill(routes, savedCities) }) }
+        }
+    }
+
+    /** Saves walks whose tile identities were recovered, and keeps the counts for rewards. */
+    private fun installBackfill(repaired: Progression.Backfill) {
+        val byId = HashMap<UUID, Walk>()
+        for (walk in repaired.walks) byId.putIfAbsent(walk.id, walk)
+        walks = walks.map { walk ->
+            val recovered = byId[walk.id] ?: return@map walk
+            val newTiles = recovered.newTileHexesByPlace?.values?.sumOf { it.size } ?: recovered.newTiles
+            if (walk.newTiles == newTiles && walk.newTilesByPlace == recovered.newTilesByPlace && walk.newTileHexesByPlace == recovered.newTileHexesByPlace) {
+                walk
+            } else {
+                walk.copy(newTiles = newTiles, newTilesByPlace = recovered.newTilesByPlace, newTileHexesByPlace = recovered.newTileHexesByPlace)
+                    .also { store.save(it) }
+            }
+        }
+        val counts = HashMap(repaired.counts)
+        for (walk in walks) if (walk.id !in counts) counts[walk.id] = Progression.countsByPlaceId(walk.newTilesByPlace)
+        questTileCounts = counts
+    }
+
+    /** Runs [action] now if the history's ready, otherwise as soon as it is. */
+    private fun whenHistoryReady(action: () -> Unit) {
+        if (historyReady) action() else afterHistory.add(action)
     }
 
     val selectedCity: City? get() = cities.firstOrNull { it.id == selectedCityId }
@@ -272,11 +363,19 @@ class AppModel(
     }
 
     fun endWalk() {
+        if (!historyReady) {
+            val id = activeWalk?.id ?: return
+            whenHistoryReady { if (activeWalk?.id == id) endWalk() }
+            return
+        }
         var walk = activeWalk ?: return
         walk = finishCoverage(walk.copy(endedAt = now()))
         val history = walks
         val fresh = freshTiles
+        val counts = questTileCounts
         walks = walks + walk
+        questTileCounts = questTileCounts + (walk.id to fresh.mapValues { it.value.size })
+        historyRevision++
         activeWalk = null
         activePath = emptyList()
         freshTiles = emptyMap()
@@ -285,7 +384,8 @@ class AppModel(
         store.save(walk)
         store.save(cities)
         recapRequest++
-        recap = WalkRecap.make(walk, cities, fresh, foundStickers, history, clock())
+        recap = WalkRecap.make(walk, cities, fresh, foundStickers, history, clock(), counts)
+        refreshProgressPicks()
         requestSync?.invoke()
         onChange()
     }
@@ -300,11 +400,12 @@ class AppModel(
     /**
      * Plays an old walk's replay again, from walk history. Which tiles were new on it
      * is worked out again: the tiles under its route that no earlier walk crossed.
-     * It's marked as a rewatch, so it only recaps the walk and changes nothing.
+     * It's marked as a rewatch, so it only recaps the walk and awards nothing.
      */
     fun replay(walk: Walk) {
         val earlier = walks.filter { it.id != walk.id && it.startedAt < walk.startedAt }
         val savedCities = cities
+        val counts = questTileCounts
         val found = foundStickers
         val generation = dataGeneration
         val request = ++recapRequest
@@ -319,7 +420,8 @@ class AppModel(
                 if (new.isNotEmpty()) fresh[city.id] = new
                 after
             }
-            return WalkRecap.make(walk, before, fresh, found, earlier, now).copy(isRewatch = true)
+            return WalkRecap.make(walk, before, fresh, found, earlier, now, counts)
+                .copy(isRewatch = true, earnings = Progression.WalkEarnings())
         }
         fun show(result: WalkRecap) {
             if (generation != dataGeneration || request != recapRequest) return
@@ -488,6 +590,12 @@ class AppModel(
      * Otherwise it ended by itself, at its last fix, and only counts if it's long enough.
      */
     private fun finishAutoWalk(byYou: Boolean = false) {
+        if (!historyReady) {
+            // Only the walk that was due to end. A later one may have started by then.
+            val id = activeWalk?.id ?: return
+            whenHistoryReady { if (activeWalk?.id == id) finishAutoWalk(byYou) }
+            return
+        }
         var walk = activeWalk ?: return
         if (!walk.isAutomatic) return
         val wasPending = autoWalkPending
@@ -506,12 +614,15 @@ class AppModel(
         walk = walk.copy(distance = CoverageTracer.distance(walk.points))
         if (!wasPending && (byYou || walk.distance >= MINIMUM_AUTO_WALK)) {
             val history = walks
+            val counts = questTileCounts
             walks = walks + walk
+            questTileCounts = questTileCounts + (walk.id to fresh.mapValues { it.value.size })
+            historyRevision++
             store.save(walk)
             // If it ended by itself while the phone was in your pocket, this plays the
             // next time you open the app.
             recapRequest++
-            recap = WalkRecap.make(walk, cities, fresh, foundStickers, history, clock())
+            recap = WalkRecap.make(walk, cities, fresh, foundStickers, history, clock(), counts)
         } else {
             // Keep the dated tile credit even though this outing doesn't qualify
             // for walk history, distance/day quests or streak rewards.
@@ -523,9 +634,14 @@ class AppModel(
                     updatedAt = now(),
                 )
             }
+            if (fresh.isNotEmpty()) {
+                questTileCounts = questTileCounts + (walk.id to fresh.mapValues { it.value.size })
+                historyRevision++
+            }
             store.delete(walk)
         }
         store.save(cities)
+        refreshProgressPicks()
         requestSync?.invoke()
         onChange()
     }
@@ -564,11 +680,13 @@ class AppModel(
             updated[i] = city
             freshTiles = freshTiles + (city.id to (freshTiles[city.id].orEmpty() + fresh))
             addedTiles = addedTiles + (city.id to (addedTiles[city.id].orEmpty() + (fresh - original.tiles)))
+            countingTilesByPlace = countingTilesByPlace + (city.id to ((countingTilesByPlace[city.id] ?: 0) + fresh.size))
             tilesRevision++
             uncovered += fresh.size
             unlockStickers(city, fresh, notify = true, popUp = true)
         }
         cities = updated.toList()
+        if (uncovered > 0) refreshProgressPicks()
         return uncovered
     }
 
@@ -649,6 +767,7 @@ class AppModel(
         store.saveStickers(foundStickers)
         if (popUp) stickerQueue = stickerQueue + entries
         if (notify && entries.isNotEmpty()) secretsFound?.invoke(entries)
+        refreshProgressPicks()
         requestSync?.invoke()
         return entries.size
     }
@@ -658,11 +777,14 @@ class AppModel(
     fun add(city: City) {
         val added = city.copy(updatedAt = now())
         cities = cities + added
+        placesRevision++
+        rebuildCountingTiles()
         shapes[added.id] = added.shape()
         select(added.id)
         placeStickers()
         tilesRevision++
         store.save(cities)
+        refreshProgressPicks()
         requestSync?.invoke()
         refreshNeighbours()
         onChange()
@@ -685,6 +807,8 @@ class AppModel(
         if (cities.none { it.id == id }) return
         placesDeleted?.invoke(listOf(id))
         cities = cities.filter { it.id != id }
+        placesRevision++
+        rebuildCountingTiles()
         shapes.remove(id)
         if (selectedCityId == id) {
             val next = cities.firstOrNull()?.id
@@ -698,6 +822,7 @@ class AppModel(
         tilesRevision++
         placeStickers()
         store.save(cities)
+        refreshProgressPicks()
         requestSync?.invoke()
         onChange()
     }
@@ -851,6 +976,115 @@ class AppModel(
         return points
     }
 
+    // Progression
+
+    /** Shells, XP and this week's quests, worked out again only when something they depend on changes. */
+    val progression: Progression.State
+        get() {
+            val now = now()
+            val day = Progression.localDate(now, Progression.zone)
+            val historyKey = "$historyRevision-$placesRevision-$secretsRevision-$day"
+            val key = "$tilesRevision-$historyKey"
+            cachedProgression?.let { (k, state) -> if (k == key) return state }
+            var inputs = Progression.Inputs(
+                cities = cities, walks = walks, foundSecrets = foundStickers, now = now,
+                newTilesByWalk = questTileCounts, countingTilesByPlace = countingTilesByPlace,
+                unrecordedTilesByPlace = if (activeWalk == null) emptyMap() else freshTiles.mapValues { it.value.size },
+            )
+            if (cachedHistoricalRewards?.first != historyKey) {
+                progressionHistoryBuilds++
+                cachedHistoricalRewards = historyKey to Progression.historicalRewards(inputs)
+            }
+            inputs = inputs.copy(historicalRewards = cachedHistoricalRewards?.second)
+            val state = Progression.state(inputs)
+            cachedProgression = key to state
+            return state
+        }
+
+    val earnedBreakdown: Progression.Earned get() = progression.earned
+    val balance: Int get() = ledger.balance(progression.earned.total)
+    val xp: Int get() = progression.xp
+    val level: Int get() = progression.level
+    val nextLevelXP: Int get() = progression.nextLevelXP
+    val xpToNextLevel: Int get() = nextLevelXP - xp
+    /** Levels reached whose reward hasn't been chosen yet. */
+    val pendingPicks: List<Int> get() = if (historyReady && !batchingProgress) Progression.pendingLevels(xp, ledger) else emptyList()
+    val weeklyQuests: List<Progression.Quest> get() = progression.quests
+    val owned: Set<String> get() = ledger.owned
+    val equipped: Ledger.Equipped get() = ledger.resolvedEquipment
+    val spyglasses: Int get() = ledger.spyglassesLeft
+
+    /** Read again on a timer while the map's showing, so the ring goes when it expires. */
+    val activeSpyglassRing: Progression.Ring?
+        get() {
+            val city = selectedCity ?: return null
+            return Progression.activeRing(city, ledger, foundStickers, now())
+        }
+
+    fun picks(level: Int): List<String> = ledger.picks(level)
+
+    /**
+     * False means unknown item, already owned, or too few shells. Concurrent offline
+     * spending is kept on merge; the resulting debt blocks purchases.
+     */
+    fun buy(itemId: String): Boolean {
+        val item = Progression.item(itemId) ?: return false
+        if (!historyReady || item.isFree || (item.group != null && itemId in owned) || balance < item.price) return false
+        // Include levels reached since the last refresh before ownership changes.
+        ledger = ledger.preparedPicks(xp)
+        ledger = ledger.copy(purchases = ledger.purchases + Ledger.Purchase(item = itemId, cost = item.price, at = clock()))
+        item.group?.let { setEquipped(itemId, it) }
+        saveProgress()
+        return true
+    }
+
+    fun equip(itemId: String): Boolean {
+        val group = Progression.item(itemId)?.group ?: return false
+        if (itemId !in owned) return false
+        setEquipped(itemId, group)
+        saveProgress()
+        return true
+    }
+
+    fun claim(level: Int, choice: String): Boolean {
+        if (level !in pendingPicks || choice !in picks(level)) return false
+        // A frozen offer may have been bought in the meantime. Give the bag instead of
+        // taking a level pick for something already owned.
+        val reward = if (choice in owned) Progression.SHELL_BAG else choice
+        ledger = ledger.copy(claims = ledger.claims + Ledger.Claim(level, reward))
+        Progression.item(reward)?.group?.let { setEquipped(reward, it) }
+        saveProgress()
+        return true
+    }
+
+    fun useSpyglass(): Boolean {
+        val city = selectedCity ?: return false
+        if (spyglasses <= 0 || activeSpyglassRing != null) return false
+        val use = Progression.spyglass(city, lastLocation?.coordinate, foundStickers, now()) ?: return false
+        ledger = ledger.copy(spyglasses = ledger.spyglasses + use)
+        saveProgress()
+        return true
+    }
+
+    private fun setEquipped(itemId: String, group: Progression.Group) {
+        val equipped = ledger.equipped.with(group, itemId)
+        ledger = ledger.copy(equipped = equipped.copy(updatedAt = max(clock(), Math.nextUp(equipped.updatedAt))))
+    }
+
+    private fun refreshProgressPicks() {
+        if (!historyReady || batchingProgress) return
+        val old = ledger
+        ledger = ledger.preparedPicks(xp)
+        if (ledger != old) saveProgress()
+    }
+
+    private fun saveProgress() {
+        if (historyReady && !batchingProgress) ledger = ledger.preparedPicks(xp)
+        store.saveProgress(ledger)
+        requestSync?.invoke()
+        onChange()
+    }
+
     // Sync
 
     /**
@@ -861,6 +1095,22 @@ class AppModel(
      */
     suspend fun addRemote(remoteCities: List<City>, remoteWalks: List<Walk>, progress: Ledger?, secrets: Map<String, SwiftDate>) {
         val generation = dataGeneration
+        waitForHistory()
+        if (generation != dataGeneration) return
+        // Merge ownership before preparing any level menu, and refresh once at the end.
+        batchingProgress = true
+        try {
+            addRemoteBatch(generation, remoteCities, remoteWalks, progress, secrets)
+        } finally {
+            batchingProgress = false
+            if (generation == dataGeneration) {
+                refreshProgressPicks()
+                onChange()
+            }
+        }
+    }
+
+    private suspend fun addRemoteBatch(generation: Int, remoteCities: List<City>, remoteWalks: List<Walk>, progress: Ledger?, secrets: Map<String, SwiftDate>) {
         progress?.let(::addRemoteProgress)
         addRemoteSecrets(secrets)
         val changedCities = HashSet<UUID>()
@@ -894,11 +1144,10 @@ class AppModel(
         val missing = remoteWalks.filter { it.endedAt != null && it.id != activeWalk?.id && it.id !in have }
         walks = (walks + missing).sortedBy { it.startedAt }
         for (walk in missing) store.save(walk)
-        if (changedCities.isEmpty() && missing.isEmpty()) {
-            onChange()
-            return
-        }
+        if (changedCities.isEmpty() && missing.isEmpty()) return
+        placesRevision++
         tilesRevision++
+        rebuildCountingTiles()
         onChange()
 
         val snapshotCities = cities
@@ -913,28 +1162,35 @@ class AppModel(
                 val samples = CoverageTracer.samples(walk.points)
                 for (i in targets) out[i] = out[i].visit(samples, shapes[i]).first
             }
-            out
+            out to Progression.backfill(snapshotWalks, out)
         }
         if (generation != dataGeneration) return
         // Location fixes can arrive while the worker runs. Union its result so no
         // live coverage is overwritten by the snapshot it started with.
         cities = cities.map { city ->
-            val again = restored.firstOrNull { it.id == city.id } ?: return@map city
+            val again = restored.first.firstOrNull { it.id == city.id } ?: return@map city
             city.copy(visited = city.visited + again.visited, tiles = city.tiles + again.tiles)
         }
+        installBackfill(restored.second)
+        historyRevision++
+        placesRevision++
         tilesRevision++
+        rebuildCountingTiles()
         placeStickers()
         for (city in cities) unlockStickers(city, city.visited, notify = false, popUp = false)
         store.save(cities)
         refreshNeighbours()
-        onChange()
     }
 
-    /** Another phone's ledger, merged so both converge. The server's copy goes first. */
+    /**
+     * Another phone's ledger, merged so both converge. The server accepted its first
+     * claim for a level, so its copy goes first and two offline choices settle on one.
+     */
     fun addRemoteProgress(remote: Ledger) {
         val merged = remote.merged(ledger)
         if (merged == ledger) return
         ledger = merged
+        if (historyReady && !batchingProgress) ledger = ledger.preparedPicks(xp)
         store.saveProgress(ledger)
         requestSync?.invoke()
     }
@@ -956,6 +1212,7 @@ class AppModel(
         if (changed) {
             foundStickers = found
             store.saveStickers(foundStickers)
+            refreshProgressPicks()
         }
     }
 
@@ -980,6 +1237,12 @@ class AppModel(
         recap = null
         recapRequest++
         ledger = Ledger()
+        cachedProgression = null
+        cachedHistoricalRewards = null
+        questTileCounts = emptyMap()
+        countingTilesByPlace = emptyMap()
+        afterHistory.clear()
+        historyRevision++
         nearby = emptyList()
         warmedNeighbourIds = null
         nearbyRetries = 0

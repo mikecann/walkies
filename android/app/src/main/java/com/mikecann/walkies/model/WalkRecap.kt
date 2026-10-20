@@ -13,10 +13,9 @@ import kotlin.math.min
 /**
  * Everything the end-of-walk celebration needs: the order tiles and secrets turned
  * up along the route, how each place moved on, and a guess at how long until
- * you've finished. Worked out once, the moment the walk ends. WalkRecap.swift.
- *
- * The iPhone's recap also carries the walk's shells, XP and quest progress. Those
- * come with progression (stage 5b); until then there's nothing to award.
+ * you've finished, and the shells, XP and quest progress the walk earned. Worked
+ * out once, the moment the walk ends, so the animation never recalculates rewards.
+ * WalkRecap.swift.
  */
 data class WalkRecap(
     val walk: Walk,
@@ -35,7 +34,13 @@ data class WalkRecap(
     val after: List<City>,
     /** Watching an old walk again from history: just the walk, no rewards. */
     val isRewatch: Boolean = false,
+    /** Computed with the recap, so the animation never recalculates rewards. */
+    val earnings: Progression.WalkEarnings = Progression.WalkEarnings(),
 ) {
+    val shells: Int get() = earnings.shells
+    val xp: Int get() = earnings.xp
+    val questProgress: List<Progression.QuestGain> get() = earnings.quests
+
     /** A tile uncovered on the walk. [at] is how far along the route (0 to 1) you got to it. */
     data class Reveal(val place: UUID, val hex: Hex, val coordinate: Coordinate, val at: Double)
 
@@ -84,7 +89,8 @@ data class WalkRecap(
         /**
          * [cities]: every place, as it is now the walk's over. [fresh]: the tiles this
          * walk uncovered, per place. [found]: when each secret was found. [history]:
-         * your other finished walks. [now] is seconds since 1970.
+         * your other finished walks. [now] is seconds since 1970. [counts]: the model's
+         * cached first-discovery tile counts per walk, before this one.
          */
         fun make(
             walk: Walk,
@@ -93,6 +99,7 @@ data class WalkRecap(
             found: Map<String, SwiftDate>,
             history: List<Walk>,
             now: Double = System.currentTimeMillis() / 1000.0,
+            counts: Map<UUID, Map<UUID, Int>>? = null,
             lookUp: (String) -> LoreEntry? = LoreLibrary::entry,
         ): WalkRecap {
             val timed = CoverageTracer.timedSamples(walk.points)
@@ -144,12 +151,30 @@ data class WalkRecap(
             }.sortedByDescending { it.newTiles }
 
             val finished = history.filter { it.endedAt != null && it.id != walk.id }
+            val beforeCities = cities.map { city ->
+                city.copy(
+                    visited = city.visited - fresh[city.id].orEmpty(),
+                    tiles = city.tiles - walk.addedTilesByPlace?.get(city.id.uuidString).orEmpty(),
+                )
+            }
+            val beforeFound = found.filterValues { it < walk.startedAt }
+            val afterFound = found.filterValues { it <= end }
+            // Secret timestamps are assigned while processing the last fix, slightly
+            // after its GPS timestamp. Use the same inclusive window as the list above.
+            val rewardDate = end
+            val beforeCounts = counts ?: Progression.placeTileCounts(Progression.Inputs(cities = beforeCities, walks = finished))
+            val walkCounts = walk.newTilesByPlace ?: fresh.entries.associate { it.key.uuidString to it.value.size }
+            val afterCounts = beforeCounts + (walk.id to Progression.countsByPlaceId(walkCounts))
+            val earnings = Progression.walkEarnings(
+                Progression.Inputs(cities = beforeCities, walks = finished, foundSecrets = beforeFound, now = rewardDate, newTilesByWalk = beforeCounts),
+                Progression.Inputs(cities = cities, walks = finished + walk, foundSecrets = afterFound, now = rewardDate, newTilesByWalk = afterCounts),
+            )
             val elapsedTimes = timed.times.map { it - walk.startedAt.epochSeconds }
             return WalkRecap(
                 walk = walk, route = route, routeTimes = elapsedTimes, reveals = reveals, secrets = secrets, places = places,
                 prediction = prediction(places.firstOrNull(), walk, finished, now),
                 isBest = finished.isNotEmpty() && reveals.size > (finished.maxOfOrNull { it.newTiles } ?: 0),
-                before = before, after = touched,
+                before = before, after = touched, earnings = earnings,
             )
         }
 

@@ -198,7 +198,7 @@ fun PlaceChip(
                 },
         ) {
             Avatar(initials = initials(name), colour = Walkies.orange, image = rememberHeadImage(picture))
-            BasicText(city?.name ?: "Places", style = Type.headline, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            BasicText(city?.name ?: "Places", style = Type.headline, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             if (city != null) {
                 BasicText(city.progress.percentText, style = Type.headline.copy(color = Walkies.orange, fontFeatureSettings = "tnum"))
             }
@@ -240,9 +240,11 @@ private fun Chevron(modifier: Modifier) {
     }
 }
 
+/** [animated] springs to a new value, like SwiftUI's; off when the caller animates it. */
 @Composable
-fun ProgressBar(value: Double, modifier: Modifier = Modifier) {
-    val shown by animateFloatAsState(value.toFloat(), label = "progress")
+fun ProgressBar(value: Double, modifier: Modifier = Modifier, animated: Boolean = true) {
+    val sprung by animateFloatAsState(value.toFloat(), label = "progress")
+    val shown = if (animated) sprung else value.toFloat()
     Canvas(modifier.height(6.dp)) {
         val r = size.height / 2
         drawRoundRect(Walkies.sand, cornerRadius = androidx.compose.ui.geometry.CornerRadius(r))

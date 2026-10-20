@@ -1,10 +1,13 @@
 package com.mikecann.walkies.map
 
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Shader
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
@@ -15,6 +18,42 @@ import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
+
+/**
+ * What's equipped from the shell shop that shows on the map: the trail's style, the
+ * marker's art, and the spyglass's ring while a hint's running. The art's loaded once
+ * by whoever makes this.
+ */
+class MapCosmetics(
+    val trail: String = "trail.teal",
+    /** The equipped marker's picture, or null for the classic orange dot. */
+    val marker: Bitmap? = null,
+    val footprint: Bitmap? = null,
+    val spyglass: Bitmap? = null,
+    val ring: SpyglassRing? = null,
+) {
+    companion object {
+        val none = MapCosmetics()
+    }
+}
+
+/** A spyglass hint's gold ring on the ground, as 96 points round it in map points. */
+class SpyglassRing(lat: Double, lon: Double, metres: Double) {
+    val circle = DoubleArray(RING_POINTS * 2).also { out ->
+        val cx = MapPoints.x(lon)
+        val cy = MapPoints.y(lat)
+        val r = metres * MapPoints.perMetre(lat)
+        for (i in 0 until RING_POINTS) {
+            val angle = i.toDouble() / RING_POINTS * 2 * Math.PI
+            out[i * 2] = cx + cos(angle) * r
+            out[i * 2 + 1] = cy + sin(angle) * r
+        }
+    }
+
+    companion object {
+        const val RING_POINTS = 96
+    }
+}
 
 /**
  * Draws the clouds, the honeycomb and the bits of map that sit under the clouds
@@ -69,6 +108,18 @@ class CloudPainter(private val density: Float) {
     private val centrePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = rgb(1.0, 0.47, 0.18) }
     private val honeycombFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val honeycombStroke = stroke(1.2f, Color.WHITE)
+    // The shop's trails, marker and spyglass ring (CosmeticTrail, YouAreHere and SpyglassRing in Clouds.swift).
+    private val rainbowPaint = stroke(4f, Color.WHITE)
+    private val sparklePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val markerPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG).apply {
+        setShadowLayer(3 * density, 0f, 2 * density, rgb(0.0, 0.0, 0.0, 0.25))
+    }
+    private val ringFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = rgb(1.0, 0.79, 0.3, 0.09) }
+    private val ringEdge = stroke(2f, rgb(1.0, 0.79, 0.3, 0.85), floatArrayOf(6f, 6f)).apply {
+        setShadowLayer(4 * density, 0f, 0f, rgb(1.0, 0.79, 0.3, 0.5))
+    }
+    private val star = Path()
+    private var run = FloatArray(256)
 
     // Where each cloud is this frame: its rect, its top's rect, its fade and its sprite.
     private var placedRect = FloatArray(0)
@@ -100,11 +151,14 @@ class CloudPainter(private val density: Float) {
         /** Tiles uncovered this walk, six corners each as interleaved x, y map points. */
         fresh: List<DoubleArray>,
         you: YouAreHere,
+        cosmetics: MapCosmetics = MapCosmetics.none,
     ) {
         val scale = projection.centreScale / density
         drawBoundary(canvas, field, projection)
         drawFresh(canvas, fresh, projection)
-        drawRoute(canvas, route, projection, width, height)
+        // Footprints and the rainbow replace the teal line; sparkles go along it.
+        if (cosmetics.trail != "trail.footprints" && cosmetics.trail != "trail.rainbow") drawRoute(canvas, route, projection, width, height)
+        drawCosmeticTrail(canvas, route, projection, width, height, clock, cosmetics)
 
         val visibleL = -width * 0.2f
         val visibleT = -height * 0.2f
@@ -192,7 +246,163 @@ class CloudPainter(private val density: Float) {
         }
 
         if (honeycomb > 0) drawHoneycomb(canvas, field, projection, width, height, honeycomb)
-        drawYouAreHere(canvas, you, projection, clock)
+        cosmetics.ring?.let { drawRing(canvas, it, cosmetics.spyglass, projection) }
+        drawYouAreHere(canvas, you, projection, clock, cosmetics.marker)
+    }
+
+    /**
+     * The decorated trails, a fixed size on screen: footprints, twinkling sparkles, or
+     * a rainbow line. Projected into runs of screen points, split where the route
+     * goes behind the camera.
+     */
+    private fun drawCosmeticTrail(canvas: Canvas, route: DoubleArray, projection: Projection, width: Float, height: Float, clock: Double, cosmetics: MapCosmetics) {
+        val style = cosmetics.trail
+        if (style != "trail.footprints" && style != "trail.sparkles" && style != "trail.rainbow") return
+        if (route.size < 4) return
+        val pad = 16 * density
+        val left = -pad.toDouble()
+        val top = -pad.toDouble()
+        val right = (width + pad).toDouble()
+        val bottom = (height + pad).toDouble()
+        if (style == "trail.rainbow") path.rewind()
+        var minX = Float.POSITIVE_INFINITY
+        var minY = Float.POSITIVE_INFINITY
+        var maxX = Float.NEGATIVE_INFINITY
+        var maxY = Float.NEGATIVE_INFINITY
+        var n = 0
+        fun flush() {
+            if (n < 2) {
+                n = 0
+                return
+            }
+            if (style == "trail.rainbow") {
+                for (i in 1 until n) {
+                    val ax = run[(i - 1) * 2].toDouble()
+                    val ay = run[(i - 1) * 2 + 1].toDouble()
+                    val bx = run[i * 2].toDouble()
+                    val by = run[i * 2 + 1].toDouble()
+                    val low = TrailLayout.visibleLow(ax, ay, bx, by, left, top, right, bottom)
+                    if (low.isNaN()) continue
+                    val high = TrailLayout.visibleHigh(ax, ay, bx, by, left, top, right, bottom)
+                    val sx = (ax + (bx - ax) * low).toFloat()
+                    val sy = (ay + (by - ay) * low).toFloat()
+                    val ex = (ax + (bx - ax) * high).toFloat()
+                    val ey = (ay + (by - ay) * high).toFloat()
+                    path.moveTo(sx, sy)
+                    path.lineTo(ex, ey)
+                    minX = min(minX, min(sx, ex)); maxX = max(maxX, max(sx, ex))
+                    minY = min(minY, min(sy, ey)); maxY = max(maxY, max(sy, ey))
+                }
+            } else {
+                val footprints = style == "trail.footprints"
+                TrailLayout.forEachStamp(run, n, (if (footprints) 12 else 26) * density.toDouble(), left, top, right, bottom) { x, y, angle, index ->
+                    if (footprints) drawFootprint(canvas, cosmetics.footprint, x, y, angle, index % 2 == 0)
+                    else drawSparkle(canvas, x, y, clock, index)
+                }
+            }
+            n = 0
+        }
+        var j = 2
+        while (j < route.size) {
+            if (projection.segment(route[j - 2], route[j - 1], route[j], route[j + 1])) {
+                if (n == 0 || run[(n - 1) * 2] != projection.x || run[(n - 1) * 2 + 1] != projection.y) {
+                    flush()
+                    add(projection.x, projection.y, n++)
+                }
+                add(projection.x2, projection.y2, n++)
+            } else {
+                flush()
+            }
+            j += 2
+        }
+        flush()
+        if (style == "trail.rainbow" && minX.isFinite()) {
+            // One gradient stroke keeps even a long route cheap to paint. Along its longest
+            // screen axis, so a north-south or diagonal walk gets every colour.
+            val horizontal = maxX - minX >= maxY - minY
+            if (max(maxX - minX, maxY - minY) <= 0f) return
+            rainbowPaint.shader = LinearGradient(
+                minX, minY, if (horizontal) maxX else minX, if (horizontal) minY else maxY,
+                RAINBOW, null, Shader.TileMode.CLAMP,
+            )
+            canvas.drawPath(path, rainbowPaint)
+        }
+    }
+
+    private fun add(x: Float, y: Float, i: Int) {
+        if (run.size < (i + 1) * 2) run = run.copyOf(run.size * 2)
+        run[i * 2] = x
+        run[i * 2 + 1] = y
+    }
+
+    private fun drawFootprint(canvas: Canvas, footprint: Bitmap?, x: Double, y: Double, angle: Double, isLeft: Boolean) {
+        footprint ?: return
+        canvas.save()
+        canvas.translate(x.toFloat(), y.toFloat())
+        canvas.rotate(Math.toDegrees(angle).toFloat())
+        canvas.translate(0f, (if (isLeft) -2.5f else 2.5f) * density)
+        // The toes in the art point up. Turn them forwards, then mirror every other
+        // print for a left and a right foot.
+        canvas.rotate(90f)
+        if (!isLeft) canvas.scale(-1f, 1f)
+        rect.set(-3.5f * density, -5f * density, 3.5f * density, 5f * density)
+        canvas.drawBitmap(footprint, null, rect, bitmapPaint)
+        canvas.restore()
+    }
+
+    private fun drawSparkle(canvas: Canvas, x: Double, y: Double, clock: Double, index: Int) {
+        val twinkle = 0.5 + 0.5 * sin(clock * 2.4 + index * 2.399)
+        val r = ((2 + twinkle * 1.8) * density).toFloat()
+        val inner = r * 0.3f
+        val cx = x.toFloat()
+        val cy = y.toFloat()
+        star.rewind()
+        star.moveTo(cx, cy - r)
+        star.lineTo(cx + inner, cy - inner)
+        star.lineTo(cx + r, cy)
+        star.lineTo(cx + inner, cy + inner)
+        star.lineTo(cx, cy + r)
+        star.lineTo(cx - inner, cy + inner)
+        star.lineTo(cx - r, cy)
+        star.lineTo(cx - inner, cy - inner)
+        star.close()
+        sparklePaint.color = rgb(1.0, 0.81, 0.25, 0.5 + twinkle * 0.5)
+        canvas.drawPath(star, sparklePaint)
+    }
+
+    /**
+     * The spyglass's gold ring. The circle itself is projected, so the camera's heading
+     * and tilt both show in it, rather than an upright oval on screen.
+     */
+    private fun drawRing(canvas: Canvas, ring: SpyglassRing, spyglass: Bitmap?, projection: Projection) {
+        val circle = ring.circle
+        path.rewind()
+        var points = 0
+        projection.polygon(circle) { x, y, first ->
+            if (first) path.moveTo(x, y) else path.lineTo(x, y)
+            points++
+        }
+        if (points < 3) return
+        path.close()
+        canvas.drawPath(path, ringFill)
+        path.rewind()
+        val n = circle.size / 2
+        var lastX = Float.NaN
+        var lastY = Float.NaN
+        for (i in 0 until n) {
+            val k = (i + 1) % n
+            if (!projection.segment(circle[i * 2], circle[i * 2 + 1], circle[k * 2], circle[k * 2 + 1])) continue
+            if (projection.x != lastX || projection.y != lastY) path.moveTo(projection.x, projection.y)
+            path.lineTo(projection.x2, projection.y2)
+            lastX = projection.x2
+            lastY = projection.y2
+        }
+        canvas.drawPath(path, ringEdge)
+        if (spyglass != null && projection.isInFront(circle[24], circle[25])) {
+            projection.point(circle[24], circle[25])
+            rect.set(projection.x - 12 * density, projection.y - 12 * density, projection.x + 12 * density, projection.y + 12 * density)
+            canvas.drawBitmap(spyglass, null, rect, bitmapPaint)
+        }
     }
 
     private fun drawFresh(canvas: Canvas, fresh: List<DoubleArray>, projection: Projection) {
@@ -206,8 +416,8 @@ class CloudPainter(private val density: Float) {
         canvas.drawPath(path, freshStroke)
     }
 
-    /** An orange dot in a white ring with a slow pulse, drawn over the clouds. */
-    private fun drawYouAreHere(canvas: Canvas, you: YouAreHere, projection: Projection, clock: Double) {
+    /** An orange dot in a white ring with a slow pulse, drawn over the clouds, or the equipped marker. */
+    private fun drawYouAreHere(canvas: Canvas, you: YouAreHere, projection: Projection, clock: Double, marker: Bitmap?) {
         if (!you.visible || !projection.isInFront(you.x, you.y)) return
         // How sure the GPS is, as a faint patch on the ground.
         if (you.radius > 0 && projection.ellipse(you.x, you.y, you.radius) && projection.rx * 2 > 30 * density) {
@@ -221,6 +431,14 @@ class CloudPainter(private val density: Float) {
         pulsePaint.alpha = alpha((0.55 * (1 - pulse)).toFloat())
         canvas.drawCircle(cx, cy, ((11 + 22 * pulse) * density).toFloat(), pulsePaint)
         canvas.drawCircle(cx, cy, 11 * density, dotPaint)
+        if (marker != null) {
+            val scale = 34 * density / max(marker.width, marker.height)
+            val w = marker.width * scale
+            val h = marker.height * scale
+            rect.set(cx - w / 2, cy - h / 2 - 3 * density, cx + w / 2, cy + h / 2 - 3 * density)
+            canvas.drawBitmap(marker, null, rect, markerPaint)
+            return
+        }
         canvas.drawCircle(cx, cy, 7.5f * density, centrePaint)
     }
 
@@ -412,6 +630,12 @@ class CloudPainter(private val density: Float) {
 
         fun rgb(r: Double, g: Double, b: Double, a: Double = 1.0) =
             Color.argb((a * 255).roundToInt(), (r * 255).roundToInt(), (g * 255).roundToInt(), (b * 255).roundToInt())
+
+        /** SwiftUI's red, orange, yellow, green, cyan, blue and purple. */
+        private val RAINBOW = intArrayOf(
+            rgb(1.0, 0.231, 0.188), rgb(1.0, 0.584, 0.0), rgb(1.0, 0.8, 0.0), rgb(0.204, 0.78, 0.349),
+            rgb(0.196, 0.678, 0.902), rgb(0.0, 0.478, 1.0), rgb(0.686, 0.322, 0.871),
+        )
 
         private val green = rgb(0.36, 0.72, 0.4)
         private val grey = rgb(0.35, 0.37, 0.42)

@@ -800,7 +800,7 @@ nonisolated final class CloudSprites: @unchecked Sendable {
     private static let cache = Cache()
 
     static func sprites(for theme: String) -> CloudSprites {
-        let key = ["clouds.sunset", "clouds.storm", "clouds.cottoncandy"].contains(theme) ? theme : "clouds.classic"
+        let key = ["clouds.sunset", "clouds.storm", "clouds.candy"].contains(theme) ? theme : "clouds.classic"
         cache.lock.lock()
         defer { cache.lock.unlock() }
         if let sprites = cache.themes[key] { return sprites }
@@ -838,7 +838,7 @@ nonisolated final class CloudSprites: @unchecked Sendable {
             return (rgb(1, 0.86, 0.74), rgb(1, 0.78, 0.84), rgb(0.96, 0.73, 0.8), rgb(0.66, 0.57, 0.79))
         case "clouds.storm":
             return (rgb(0.69, 0.75, 0.83), rgb(0.69, 0.75, 0.83), rgb(0.54, 0.62, 0.73), rgb(0.32, 0.39, 0.51))
-        case "clouds.cottoncandy":
+        case "clouds.candy":
             return (rgb(1, 0.82, 0.92), rgb(0.78, 0.9, 1), rgb(0.84, 0.79, 0.94), rgb(0.65, 0.68, 0.85))
         default:
             return (rgb(1, 1, 1), rgb(1, 1, 1), rgb(0.93, 0.945, 0.97), rgb(0.76, 0.8, 0.87))

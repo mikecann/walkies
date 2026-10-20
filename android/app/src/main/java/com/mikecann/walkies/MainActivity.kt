@@ -38,6 +38,8 @@ import com.mikecann.walkies.ui.WalkHistoryScreen
 import com.mikecann.walkies.ui.AddPlaceScreen
 import com.mikecann.walkies.ui.MapScreen
 import com.mikecann.walkies.ui.PlacesScreen
+import com.mikecann.walkies.ui.ProgressSection
+import com.mikecann.walkies.ui.ProgressionSheet
 import com.mikecann.walkies.ui.SettingsSheet
 import com.mikecann.walkies.ui.SetupScreen
 import com.mikecann.walkies.ui.SignInProvider
@@ -59,6 +61,10 @@ class MainActivity : ComponentActivity() {
     private var screen by mutableStateOf(Screen.Map)
     /** The walk open in walk history. */
     private var walkDetail by mutableStateOf<UUID?>(null)
+    /** The progression sheet, and where it opened, while it's up. */
+    private var progress by mutableStateOf<ProgressSection?>(null)
+    /** Opened from the celebration's "Level up", so it sits over the celebration. */
+    private var progressOverCelebration = false
     /** A secret being read again: from a pin, the book, a past walk or the celebration. */
     private var openSecret by mutableStateOf<LoreEntry?>(null)
     /** Bumps whenever permissions might have changed, so the warnings check again. */
@@ -149,6 +155,8 @@ class MainActivity : ComponentActivity() {
                         app.model.alwaysOn = it
                         permissionsRevision++
                     },
+                    locationWarning = app.model.alwaysOn && !Permissions.backgroundLocation(this),
+                    onOpenSettings = ::openSettings,
                     permissionsMissing = Permissions.anythingMissing(this),
                     onFixPermissions = { screen = Screen.FixPermissions },
                     walkCount = app.model.walks.size,
@@ -209,19 +217,45 @@ class MainActivity : ComponentActivity() {
                 onShowPlaces = { screen = Screen.Places },
                 onFixPermissions = { screen = Screen.FixPermissions },
                 onShowSecrets = { screen = Screen.Secrets },
+                onShowProgress = {
+                    progressOverCelebration = false
+                    progress = ProgressSection.Level
+                },
                 onOpenSecret = { openSecret = it },
             )
         }
         if (screen == Screen.FixPermissions) BackHandler { finishSetup() }
 
         // The celebration plays over the map. One that's ready while another screen's
-        // open waits for you to come back to the map.
+        // open, or the progression sheet, waits for you to come back to the map.
         val recap = app.model.recap
-        val celebrating = recap != null && screen == Screen.Map
+        val celebrating = recap != null && screen == Screen.Map && (progress == null || progressOverCelebration)
         if (recap != null && celebrating) {
             key(recap.id, recap.isRewatch) {
-                val others = remember { app.model.cities.filter { city -> recap.after.none { it.id == city.id } } }
-                CelebrationScreen(recap, others, onSecret = { openSecret = it }, onDone = app.model::dismissRecap)
+                val model = app.model
+                val others = remember { model.cities.filter { city -> recap.after.none { it.id == city.id } } }
+                val equipped = model.equipped
+                CelebrationScreen(
+                    recap, others,
+                    style = equipped.celebration, clouds = equipped.clouds,
+                    endingXP = model.xp, hasReward = model.pendingPicks.isNotEmpty(),
+                    onReward = {
+                        progressOverCelebration = true
+                        progress = ProgressSection.Level
+                    },
+                    onSecret = { openSecret = it },
+                    onDone = model::dismissRecap,
+                )
+            }
+        }
+        progress?.let { section ->
+            if (screen == Screen.Map) {
+                key(section) {
+                    ProgressionSheet(app.model, section, onClose = {
+                        progress = null
+                        progressOverCelebration = false
+                    })
+                }
             }
         }
 

@@ -14,6 +14,19 @@ Kotlin and Jetpack Compose, following the iPhone app in `../Walkies`. See `../de
 3. `./gradlew assembleDebug testDebugUnitTest`
 4. `./gradlew testDebugUnitTest -PwriteFixtures` also writes `shared/fixtures/android` for the iPhone's tests (see `shared/fixtures/README.md`).
 
+## Release builds
+
+`./gradlew assembleRelease` makes a shrunk (R8) build that talks to the prod deployment (savory-bee-296), with no test sign-in. To sign it, put the key's details in `android/keystore.properties`, which git ignores:
+
+```
+storeFile=/Users/you/keys/walkies.jks
+storePassword=…
+keyAlias=walkies
+keyPassword=…
+```
+
+Without that file the build still works and comes out unsigned (`app/build/outputs/apk/release/app-release-unsigned.apk`). Keep the keystore safe: updates to Dad's phone have to be signed with the same key. The keep rules for R8 are in `app/proguard-rules.pro`.
+
 The first build downloads Nunito (the rounded heading font) into `app/src/main/assets/fonts/`. Commit it so builds don't need to fetch it again.
 
 ## Where things are
@@ -24,6 +37,7 @@ The first build downloads Nunito (the rounded heading font) into `app/src/main/a
 - `sync/`: `SyncEngine`, a port of `Sync.swift`: push, explicit place deletions, incremental pull, the owner check.
 - `place/OSMClient.kt`: Nominatim search and the suburbs nearby. Adding a place gets its streets from the server's cache (`places:get`), falling back to Overpass like the iPhone.
 - `model/`: `Walk`, `TrackPoint`, `CoverageTracer`, `Ledger`, `SyncState`, and `Codec`, which reads and writes exactly the iPhone's JSON (`Walk.swift`, `Progression.swift`, `Sync.swift`).
+- `model/Progression.kt`: shells, XP, levels, weekly quests (in Perth weeks), level-up picks, the shop's catalogue and the spyglass, ported from `Progression.swift` and `LevelMeter.swift` with the same seeds, so both phones agree for the same data. `ProgressionTest` pins it to values printed by the iPhone's own code. `AppModel` works out the saved walks' first-discovery tile counts once at launch (off the main thread), keeps the shells and quests cached, and buys, equips and claims through the ledger.
 - `store/`: the save files, laid out like `Store.swift` (`cities.json` with streets in `roads.json`, `walks/<id>.json`, ...), under the app's files folder in `Walkies/`.
 - `location/`: always-on tracking (`LocationTracker.swift`, `StationaryFence.swift`, `MotionMonitor.swift`). `AlwaysOnTracking` decides where the stationary fence goes and how hard the GPS works, as plain tested Kotlin; `LocationTracker` (fused location), `Wakeups.kt` (Geofencing, Activity Recognition, boot/update receivers) and `TrackingService` (the foreground service and its notification) are the thin Android parts. `WalkiesApplication.refreshTracking()` keeps them in line with the one `AppModel`.
 - `ui/SetupScreen.kt`: the first-run setup (`SetupView.swift`): location, all the time, physical activity, notifications, battery, and Samsung's sleeping apps. Settings' "Fix permissions" reruns just what's missing.
@@ -32,9 +46,11 @@ The first build downloads Nunito (the rounded heading font) into `app/src/main/a
 - `map/`: Mapbox, the cloud field, the homography and the cloud painter (`Clouds.swift`, `FogMapView.swift`).
 - `lore/`: the secrets (`Lore.swift`, `SecretsBook.swift`). `LoreLibrary` reads the lore JSON (from assets on the phone, straight from `../Walkies/Lore` in tests), `assign` and `City.placeStickers` hide each secret under the same tile the iPhone would, and `SecretsBook` sorts and filters the book. `SecretNotifier` pings you when you walk over one with the app closed (`Notifier.swift`), on a "Secrets found" channel of its own.
 - `model/WalkRecap.kt`: what the end-of-walk celebration plays (`WalkRecap.swift`). `AppModel` makes one when a walk ends, and `replay(walk)` makes a rewatch from history that changes nothing.
-- `ui/`: colours, the sticker cards, hex badges and the place chip (`Theme.swift`, `ContentView.swift`), sign-in (`SignInView.swift`), Places and Add a place (`MapsAndPlacesView.swift`, `AddCityView.swift`), Settings. Also the secrets: `Stickers.kt` (sticker art, the story card with its photos, and the slide-up `Sheet`), `SecretsBookScreen.kt`, and the pins on the map (`map/StickerPins.kt`); the celebration and replay (`CelebrationScreen.kt`, with `SoundFX.kt` making its sounds in code like `SoundFX.swift`); and Settings > Past walks (`WalkHistoryScreen.kt`).
+- `ui/`: colours, the sticker cards, hex badges and the place chip (`Theme.swift`, `ContentView.swift`), sign-in (`SignInView.swift`), Places and Add a place (`MapsAndPlacesView.swift`, `AddCityView.swift`), Settings. Also the secrets: `Stickers.kt` (sticker art, the story card with its photos, and the slide-up `Sheet`), `SecretsBookScreen.kt`, and the pins on the map (`map/StickerPins.kt`); the celebration and replay (`CelebrationScreen.kt`, with `SoundFX.kt` making its sounds in code like `SoundFX.swift`); and Settings > Past walks (`WalkHistoryScreen.kt`). Progression is `ProgressScreen.kt` (`ProgressView.swift`): the shells chip under the place chip, and the sheet with your level, rewards to choose, quests, the shop, the wardrobe and the spyglass. What's equipped changes the map's marker, trail and clouds (`CloudPainter`, `CloudSprites`, `TrailLayout`), the secrets book's cover and the celebration's confetti, bubbles or fireworks.
 
-Lore, icons, stickers and the secrets' photos are copied from the iOS sources into the app's assets at build time (`copyIosAssets` in `app/build.gradle.kts`). The iPhone ships no sound files: the celebration's pops, chime and fanfare are synthesised on both.
+Not on Android: Chef ("Suggest a feature"), which is iPhone-only, and teams.
+
+Lore, icons, stickers, the secrets' photos and the shop's art are copied from the iOS sources into the app's assets at build time (`copyIosAssets` in `app/build.gradle.kts`). The iPhone ships no sound files: the celebration's pops, chime and fanfare are synthesised on both.
 
 ## Signing in on the emulator
 

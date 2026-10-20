@@ -72,8 +72,10 @@ fun syncText(status: SyncEngine.Status, waiting: Int, lastSynced: Double?): Stri
 }
 
 /**
- * Settings (SettingsView.swift): the account and sync, past walks, the Always on switch, and a way
- * back into the setup when something's missing. Laid out like the iPhone's grouped Form.
+ * Settings (SettingsView.swift): the account and sync, past walks, the Always on switch,
+ * a warning when location isn't allowed all the time, and a way back into the setup
+ * when something's missing. Laid out like the iPhone's grouped Form. The iPhone's
+ * "Suggest a feature" (Chef) is iPhone-only, so it isn't here.
  */
 @Composable
 fun SettingsSheet(
@@ -83,6 +85,10 @@ fun SettingsSheet(
     onSignOut: () -> Unit,
     alwaysOn: Boolean,
     onAlwaysOn: (Boolean) -> Unit,
+    /** Always on is on but location isn't allowed all the time, so walks won't record with the app closed. */
+    locationWarning: Boolean,
+    /** The app's page in the phone's Settings. */
+    onOpenSettings: () -> Unit,
     /** Something the setup asks for is missing. */
     permissionsMissing: Boolean,
     onFixPermissions: () -> Unit,
@@ -99,19 +105,8 @@ fun SettingsSheet(
             .systemBarsPadding()
             .padding(horizontal = 16.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
-            Spacer(Modifier.weight(1f))
-            BasicText(
-                "Done",
-                style = Type.body.copy(fontWeight = FontWeight.SemiBold, color = Walkies.burnt),
-                modifier = Modifier.clickable(role = Role.Button, onClick = onClose).padding(6.dp),
-            )
-        }
-        BasicText(
-            "Settings",
-            style = Type.headline.copy(fontFamily = roundedFont(), fontWeight = FontWeight.Black, fontSize = 34.sp),
-            modifier = Modifier.padding(start = 4.dp, bottom = 16.dp),
-        )
+        SheetBar("Settings", leading = null, onLeading = {}, trailing = "Done", onTrailing = onClose)
+        Spacer(Modifier.height(12.dp))
         var confirmingSignOut by remember { mutableStateOf(false) }
         var cantSignOut by remember { mutableStateOf<String?>(null) }
         var notUploaded by remember { mutableStateOf<Int?>(null) }
@@ -165,21 +160,26 @@ fun SettingsSheet(
                     Toggle(alwaysOn)
                 }
             }
-            if (permissionsMissing) {
+            if (locationWarning) {
                 Section(footer = null) {
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(role = Role.Button, onClick = onFixPermissions)
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                    Row(
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 11.dp),
                     ) {
+                        WarningTriangle(Modifier.padding(top = 2.dp).size(18.dp, 16.dp))
                         BasicText(
-                            "⚠︎ Walkies is missing a permission or two, so walks may not record with it closed.",
-                            style = Type.subheadline.copy(color = Walkies.orange),
+                            "Set Location to \"Allow all the time\" so walks record when the app's closed.",
+                            style = Type.body.copy(color = SYSTEM_ORANGE),
                         )
-                        BasicText("Fix permissions", style = Type.body.copy(color = Walkies.burnt, fontWeight = FontWeight.SemiBold))
                     }
+                    Divider()
+                    RowButton("Open Settings", Walkies.burnt, enabled = true, onClick = onOpenSettings)
+                }
+            }
+            if (permissionsMissing) {
+                Section(footer = if (locationWarning) null else "Walkies is missing a permission or two, so walks may not record with it closed.") {
+                    RowButton("Fix permissions", Walkies.burnt, enabled = true, onClick = onFixPermissions)
                 }
             }
         }
@@ -206,6 +206,29 @@ fun SettingsSheet(
 }
 
 private val red = Color(0.85f, 0.2f, 0.17f)
+
+/** SwiftUI's .orange, which the iPhone's warning uses. */
+private val SYSTEM_ORANGE = Color(1f, 0.584f, 0f)
+
+/** SF Symbols' exclamationmark.triangle.fill, in orange. */
+@Composable
+private fun WarningTriangle(modifier: Modifier) {
+    androidx.compose.foundation.Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        val triangle = androidx.compose.ui.graphics.Path().apply {
+            moveTo(w / 2, 0f)
+            lineTo(w, h)
+            lineTo(0f, h)
+            close()
+        }
+        drawPath(triangle, SYSTEM_ORANGE, style = androidx.compose.ui.graphics.drawscope.Fill)
+        drawPath(triangle, SYSTEM_ORANGE, style = androidx.compose.ui.graphics.drawscope.Stroke(w * 0.12f, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+        val stroke = w * 0.12f
+        drawLine(Color.White, androidx.compose.ui.geometry.Offset(w / 2, h * 0.36f), androidx.compose.ui.geometry.Offset(w / 2, h * 0.66f), stroke, androidx.compose.ui.graphics.StrokeCap.Round)
+        drawCircle(Color.White, stroke * 0.6f, androidx.compose.ui.geometry.Offset(w / 2, h * 0.84f))
+    }
+}
 
 /** A row with its value on the right in grey (LabeledContent). */
 @Composable

@@ -13,6 +13,19 @@ val localProperties = Properties().apply {
 }
 val mapboxToken = localProperties.getProperty("MAPBOX_ACCESS_TOKEN").orEmpty().trim()
 
+/**
+ * The release signing key, from android/keystore.properties (never committed):
+ *     storeFile=/path/to/walkies.jks
+ *     storePassword=…
+ *     keyAlias=walkies
+ *     keyPassword=…
+ * Without it, release builds come out unsigned, so CI and tests still build.
+ */
+val keystoreProperties = Properties().apply {
+    rootProject.file("keystore.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+val hasReleaseKey = listOf("storeFile", "storePassword", "keyAlias", "keyPassword").all { !keystoreProperties.getProperty(it).isNullOrBlank() }
+
 /** The iPhone app and the shared fixtures, so iOS stays the single source of truth. */
 val repoRoot = rootProject.projectDir.parentFile
 
@@ -29,15 +42,30 @@ android {
         buildConfigField("String", "MAPBOX_ACCESS_TOKEN", "\"${mapboxToken.replace("\"", "")}\"")
     }
 
+    signingConfigs {
+        if (hasReleaseKey) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     // The Convex deployments, both in Sydney (Backend in Convex.swift). Debug builds talk
-    // to dev, which also allows test sign-in; release builds to the real walks on prod.
+    // to dev, which also allows test sign-in; release builds to the real walks on prod,
+    // with no test sign-in (src/release has a stand-in that does nothing).
     buildTypes {
         debug {
             buildConfigField("String", "CONVEX_CLOUD_URL", "\"https://resolute-pig-177.ap-southeast-2.convex.cloud\"")
             buildConfigField("String", "CONVEX_SITE_URL", "\"https://resolute-pig-177.ap-southeast-2.convex.site\"")
         }
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (hasReleaseKey) signingConfig = signingConfigs.getByName("release")
             buildConfigField("String", "CONVEX_CLOUD_URL", "\"https://savory-bee-296.ap-southeast-2.convex.cloud\"")
             buildConfigField("String", "CONVEX_SITE_URL", "\"https://savory-bee-296.ap-southeast-2.convex.site\"")
         }
@@ -134,7 +162,8 @@ val copyIosAssets = tasks.register<CopyIosAssets>("copyIosAssets") {
     lore.set(File(repoRoot, "Walkies/Lore"))
     xcassets.set(File(repoRoot, "Walkies/Assets.xcassets"))
     // Photos are the secrets' Wikimedia Commons pictures, shown under each story.
-    groups.set(listOf("Icons", "Stickers", "Photos"))
+    // Progression is the shop's art: shells, markers, book covers, the spyglass.
+    groups.set(listOf("Icons", "Stickers", "Photos", "Progression"))
 }
 
 // Plain source dir plus preBuild, so the copy always runs before resources and assets merge.

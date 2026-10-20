@@ -207,7 +207,12 @@ fun Modifier.pressScale(onClick: () -> Unit, enabled: Boolean = true, label: Str
  * down to close. Tap outside or go back to close.
  */
 @Composable
-fun Sheet(onDismiss: () -> Unit, medium: Boolean = false, content: @Composable ColumnScope.(close: () -> Unit) -> Unit) {
+fun Sheet(
+    onDismiss: () -> Unit,
+    medium: Boolean = false,
+    background: Color = Walkies.cream,
+    content: @Composable ColumnScope.(close: () -> Unit) -> Unit,
+) {
     val scope = rememberCoroutineScope()
     val hidden = remember { Animatable(1f) }
     var large by remember { mutableStateOf(!medium) }
@@ -239,7 +244,7 @@ fun Sheet(onDismiss: () -> Unit, medium: Boolean = false, content: @Composable C
                 .height(height)
                 .graphicsLayer { translationY = size.height * hidden.value }
                 .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                .background(Walkies.cream)
+                .background(background)
                 .clickable(remember { MutableInteractionSource() }, indication = null) {},
         ) {
             var dragged by remember { mutableFloatStateOf(0f) }

@@ -36,6 +36,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.foundation.border
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
@@ -137,7 +140,7 @@ fun SecretsBookScreen(model: AppModel, onOpen: (LoreEntry) -> Unit, onClose: () 
                 item(key = "cover") {
                     Column(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth().stickerCard(RoundedCornerShape(24.dp)).padding(20.dp),
+                        modifier = Modifier.fillMaxWidth().secretsCover(model.equipped.cover).padding(20.dp),
                     ) {
                         BasicText("$found of ${entries.size} secrets found", style = heavy(22))
                         ProgressBar(if (entries.isEmpty()) 0.0 else found.toDouble() / entries.size, Modifier.fillMaxWidth())
@@ -188,6 +191,39 @@ fun SecretsBookScreen(model: AppModel, onOpen: (LoreEntry) -> Unit, onClose: () 
 }
 
 private fun heavy(size: Int) = Type.headline.copy(fontWeight = FontWeight.Black, fontSize = size.sp)
+
+/**
+ * The book's cover card in the equipped cover (SecretsCover in CosmeticArt.swift). The
+ * free red cover is the plain sticker card; the shop's covers show their art under a
+ * cream wash, so the writing on it stays easy to read.
+ */
+@Composable
+private fun Modifier.secretsCover(equipped: String): Modifier {
+    val shape = RoundedCornerShape(24.dp)
+    val art = when (equipped) {
+        "cover.seashell" -> "progress-cover-seashell"
+        "cover.map" -> "progress-cover-map"
+        "cover.gold" -> "progress-cover-gold"
+        else -> null
+    }
+    val image = art?.let { assetImage(it) } ?: return stickerCard(shape)
+    return this
+        .softShadow(shape, 8.dp, 3.dp, 0.18f, Walkies.cream)
+        .clip(shape)
+        .drawBehind {
+            // Fill the card, cropping the art's overflow, as scaledToFill does.
+            val scale = maxOf(size.width / image.width, size.height / image.height)
+            val w = image.width * scale
+            val h = image.height * scale
+            drawImage(
+                image,
+                dstOffset = androidx.compose.ui.unit.IntOffset(((size.width - w) / 2).toInt(), ((size.height - h) / 2).toInt()),
+                dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()),
+            )
+            drawRect(Walkies.cream.copy(alpha = 0.68f))
+        }
+        .border(3.dp, Color.White, shape)
+}
 
 @Composable
 private fun AreaSection(

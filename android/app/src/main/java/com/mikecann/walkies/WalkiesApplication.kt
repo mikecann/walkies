@@ -84,7 +84,7 @@ class WalkiesApplication : Application() {
         LoreLibrary.reader = { name -> runCatching { assets.open("lore/$name.json").bufferedReader().use { it.readText() } }.getOrNull() }
         // Application Support/Walkies on the iPhone.
         val store = Store(File(filesDir, "Walkies"))
-        model = AppModel(store, prefs, tracker, motion)
+        model = AppModel(store, prefs, tracker, motion, historyScope = scope)
         // With the app open the secret pops up instead.
         model.secretsFound = { if (!onScreen) SecretNotifier.stickersFound(this, it) }
         model.services = scope
