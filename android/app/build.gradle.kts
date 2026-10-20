@@ -48,6 +48,8 @@ android {
     testOptions {
         unitTests.all {
             it.systemProperty("walkies.fixtures", File(repoRoot, "shared/fixtures").absolutePath)
+            // ./gradlew testDebugUnitTest -PwriteFixtures writes shared/fixtures/android for the iPhone's tests.
+            it.systemProperty("walkies.writeFixtures", providers.gradleProperty("writeFixtures").map { "true" }.getOrElse(""))
         }
     }
 }
@@ -69,6 +71,7 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     implementation(libs.mapbox.maps)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.play.services.location)
     testImplementation(libs.junit)
 }
 

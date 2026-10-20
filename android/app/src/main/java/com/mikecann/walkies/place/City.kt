@@ -3,16 +3,19 @@ package com.mikecann.walkies.place
 import com.mikecann.walkies.grid.Coordinate
 import com.mikecann.walkies.grid.Hex
 import com.mikecann.walkies.grid.HexGrid
+import com.mikecann.walkies.model.SwiftDate
+import com.mikecann.walkies.model.uuidString
 import java.util.UUID
 import kotlin.math.floor
 
-/** A place you're exploring. Only what the map needs so far; City.swift has the rest. */
+/** A place you're exploring (City.swift). Saved in the same JSON as the iPhone app. */
 data class City(
     val id: UUID = UUID.randomUUID(),
     val name: String,
     /** The rest of the place name, e.g. "Busselton, Western Australia, Australia". */
     val detail: String,
     val osmId: Long? = null,
+    val gridVersion: Int? = HexGrid.VERSION,
     val boundary: Boundary,
     /**
      * Tiles that count towards completion: every tile in the boundary with a street or
@@ -20,9 +23,41 @@ data class City(
      */
     val tiles: Set<Hex>,
     val visited: Set<Hex>,
-    /** Streets and paths drawn as dotted lines over the clouds. */
+    /**
+     * Streets and paths drawn as dotted lines over the clouds. Null for cities
+     * saved before we kept them.
+     */
     val roads: List<RoadLine>? = null,
+    /** Which tile each lore sticker is hidden under, by lore id. */
+    val stickers: Map<String, Hex>? = null,
+    val createdAt: SwiftDate = SwiftDate.now(),
+    /** When anything about it last changed on this phone, so sync knows to send it. */
+    val updatedAt: SwiftDate? = null,
+    /**
+     * Coverage from confirmed automatic outings too short to keep in walk history.
+     * These records travel with the place so tile quests retain their date and identity.
+     */
+    val tileCredits: List<TileCredit>? = null,
 ) {
+    data class TileCredit(val id: UUID, val at: SwiftDate, val hexes: Set<Hex>)
+
+    fun mergeTileCredits(other: City): City {
+        val credits = LinkedHashMap<UUID, TileCredit>()
+        for (credit in tileCredits.orEmpty()) credits.putIfAbsent(credit.id, credit)
+        for (credit in other.tileCredits.orEmpty()) {
+            val old = credits[credit.id]
+            credits[credit.id] = if (old != null) {
+                old.copy(hexes = old.hexes + credit.hexes, at = minOf(old.at, credit.at))
+            } else {
+                credit
+            }
+        }
+        if (credits.isEmpty()) return this
+        return copy(tileCredits = credits.values.sortedBy { it.id.uuidString })
+    }
+
+    val lastChanged: SwiftDate get() = updatedAt ?: createdAt
+
     /** All places and all users use the world grid. */
     val grid get() = HexGrid
 

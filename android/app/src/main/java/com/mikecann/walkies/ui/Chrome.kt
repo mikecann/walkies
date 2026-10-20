@@ -36,7 +36,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -202,25 +201,5 @@ fun ProgressBar(value: Double, modifier: Modifier = Modifier) {
         drawRoundRect(Walkies.sand, cornerRadius = androidx.compose.ui.geometry.CornerRadius(r))
         val w = maxOf(6.dp.toPx(), size.width * minOf(1f, shown))
         drawRoundRect(Walkies.orange, size = size.copy(width = w), cornerRadius = androidx.compose.ui.geometry.CornerRadius(r))
-    }
-}
-
-/** A small cream pill, for the spike's debug switch. */
-@Composable
-fun StickerPill(text: String, on: Boolean, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(20.dp)
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier
-            .stickerCard(shape)
-            .clip(shape)
-            .clickable(role = Role.Switch, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-    ) {
-        Canvas(Modifier.size(10.dp)) {
-            drawCircle(if (on) Walkies.orange else Walkies.sand, center = Offset(size.width / 2, size.height / 2))
-        }
-        BasicText(text, style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold))
     }
 }

@@ -54,6 +54,9 @@ fun CloudLayer(
     sprites: CloudSprites?,
     /** The walk's route, interleaved x, y map points. */
     route: DoubleArray,
+    /** Tiles uncovered this walk, six corners each as interleaved x, y map points. */
+    fresh: List<DoubleArray>,
+    you: YouAreHere,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current.density
@@ -91,7 +94,7 @@ fun CloudLayer(
             drawIntoCanvas { canvas ->
                 painter.draw(
                     canvas.nativeCanvas, field, reveal.leaving, reveal.freshClearings, progress,
-                    projection, sprites, size.width, size.height, now, state.honeycomb(nanos), route,
+                    projection, sprites, size.width, size.height, now, state.honeycomb(nanos), route, fresh, you,
                 )
             }
         },

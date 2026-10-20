@@ -7,7 +7,6 @@ import com.mikecann.walkies.grid.LocalProjection
 import com.mikecann.walkies.grid.Vec2
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -151,17 +150,6 @@ class PlaceDataTest {
         assertTrue(city.roads!!.isNotEmpty())
         assertEquals(inside, city.cloudCover().clouded)
         assertTrue(city.boundary.labelPoint.let { city.shape().contains(HexGrid.projection.project(it)) })
-    }
-
-    @Test
-    fun theSpikeWalkClearsAStripAlongTheStreets() {
-        val data = PlaceData.parse(fixture("geographe.json"))
-        val city = CityBuilder.build("Geographe", "", null, data.boundary, data.ways)
-        val (walked, route) = SpikeWalk.walk(city)
-        assertTrue(route.size > 2)
-        assertTrue(walked.visited.size > 10)
-        assertTrue(walked.progress > 0 && walked.progress < 0.5)
-        assertNotEquals(city.cloudCover().clouded, walked.cloudCover().clouded)
     }
 
     @Test(expected = PlaceData.Invalid::class)

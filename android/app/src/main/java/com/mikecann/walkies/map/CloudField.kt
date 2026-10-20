@@ -147,7 +147,8 @@ class CloudField(cities: List<City>, walkTiles: Set<Hex> = emptySet()) {
             return doubleArrayOf(MapPoints.x(c.lon), MapPoints.y(c.lat))
         }
 
-        private fun corners(tile: Hex): DoubleArray {
+        /** The six corners of a tile, interleaved x, y map points. */
+        fun corners(tile: Hex): DoubleArray {
             val corners = HexGrid.corners(tile)
             return DoubleArray(12) { i ->
                 val c = corners[i / 2]

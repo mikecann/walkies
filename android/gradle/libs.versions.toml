@@ -6,6 +6,7 @@ activityCompose = "1.10.1"
 composeBom = "2025.08.00"
 mapbox = "11.14.0"
 kotlinxSerialization = "1.9.0"
+playServicesLocation = "21.3.0"
 junit = "4.13.2"
 
 [libraries]
@@ -19,6 +20,7 @@ androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "u
 androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 mapbox-maps = { group = "com.mapbox.maps", name = "android-ndk27", version.ref = "mapbox" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "playServicesLocation" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]

@@ -55,6 +55,18 @@ class CloudPainter(private val density: Float) {
     private val boundaryPaint = stroke(2f, rgb(1.0, 1.0, 1.0, 0.85), floatArrayOf(6f, 5f), round = false)
     /** Teal, so the route stands apart from this walk's orange tiles. */
     private val routePaint = stroke(4f, rgb(0.16, 0.72, 0.78))
+    /** Tiles uncovered this walk: MapKit's orange polygons under the clouds. */
+    private val freshFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = rgb(1.0, 0.47, 0.18, 0.18) }
+    private val freshStroke = stroke(2f, rgb(1.0, 0.47, 0.18), round = false)
+    // Where you are (YouAreHere in Clouds.swift).
+    private val accuracyFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = rgb(1.0, 0.47, 0.18, 0.12) }
+    private val pulsePaint = stroke(3f, rgb(1.0, 0.47, 0.18))
+    private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.WHITE
+        setShadowLayer(4 * density, 0f, 2 * density, rgb(0.0, 0.0, 0.0, 0.3))
+    }
+    private val centrePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = rgb(1.0, 0.47, 0.18) }
     private val honeycombFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val honeycombStroke = stroke(1.2f, Color.WHITE)
 
@@ -85,9 +97,13 @@ class CloudPainter(private val density: Float) {
         clock: Double,
         honeycomb: Float,
         route: DoubleArray,
+        /** Tiles uncovered this walk, six corners each as interleaved x, y map points. */
+        fresh: List<DoubleArray>,
+        you: YouAreHere,
     ) {
         val scale = projection.centreScale / density
         drawBoundary(canvas, field, projection)
+        drawFresh(canvas, fresh, projection)
         drawRoute(canvas, route, projection, width, height)
 
         val visibleL = -width * 0.2f
@@ -176,6 +192,36 @@ class CloudPainter(private val density: Float) {
         }
 
         if (honeycomb > 0) drawHoneycomb(canvas, field, projection, width, height, honeycomb)
+        drawYouAreHere(canvas, you, projection, clock)
+    }
+
+    private fun drawFresh(canvas: Canvas, fresh: List<DoubleArray>, projection: Projection) {
+        if (fresh.isEmpty()) return
+        path.rewind()
+        for (tile in fresh) {
+            projection.polygon(tile) { x, y, first -> if (first) path.moveTo(x, y) else path.lineTo(x, y) }
+            path.close()
+        }
+        canvas.drawPath(path, freshFill)
+        canvas.drawPath(path, freshStroke)
+    }
+
+    /** An orange dot in a white ring with a slow pulse, drawn over the clouds. */
+    private fun drawYouAreHere(canvas: Canvas, you: YouAreHere, projection: Projection, clock: Double) {
+        if (!you.visible || !projection.isInFront(you.x, you.y)) return
+        // How sure the GPS is, as a faint patch on the ground.
+        if (you.radius > 0 && projection.ellipse(you.x, you.y, you.radius) && projection.rx * 2 > 30 * density) {
+            rect.set(projection.ex - projection.rx, projection.ey - projection.ry, projection.ex + projection.rx, projection.ey + projection.ry)
+            canvas.drawOval(rect, accuracyFill)
+        }
+        projection.point(you.x, you.y)
+        val cx = projection.x
+        val cy = projection.y
+        val pulse = ((clock / 2) % 1 + 1) % 1
+        pulsePaint.alpha = alpha((0.55 * (1 - pulse)).toFloat())
+        canvas.drawCircle(cx, cy, ((11 + 22 * pulse) * density).toFloat(), pulsePaint)
+        canvas.drawCircle(cx, cy, 11 * density, dotPaint)
+        canvas.drawCircle(cx, cy, 7.5f * density, centrePaint)
     }
 
     private fun place(i: Int, phase: Double, fade: Float, variant: Int, clock: Double) {

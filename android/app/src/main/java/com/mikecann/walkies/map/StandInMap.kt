@@ -91,6 +91,18 @@ class StandInCamera(private val density: Float) : MapController {
         onChange()
     }
 
+    override val cameraDistance: Double
+        get() = CameraMath.distance(zoom, MapPoints.lat(centreY), height / density)
+
+    override fun lookAt(coordinate: Coordinate, distance: Double?, animated: Boolean) {
+        if (width <= 0f) return
+        centreX = MapPoints.x(coordinate.lon)
+        centreY = MapPoints.y(coordinate.lat)
+        if (distance != null) zoom = CameraMath.zoom(distance, coordinate.lat, height / density)
+        pitch = CameraMath.PITCH
+        onChange()
+    }
+
     override fun show(city: City, animated: Boolean) {
         if (width <= 0f) return
         val fit = CameraMath.fit(city, width / density, height / density)

@@ -1,5 +1,6 @@
 #!/bin/bash
 # Runs model and app/sync regression tests on macOS, without CoreSimulator or ChefKit.
+# Extra arguments go to swift test, e.g. --filter FixtureExportTests.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 - <<'PY'
@@ -37,11 +38,11 @@ for name in ['Store', 'Sync', 'Convex', 'OSMClient', 'CachedPlaceData', 'CityBui
     shutil.copy(f'Walkies/Services/{name}.swift', root / 'Sources/Walkies')
 shutil.copy('Walkies/AppModel.swift', root / 'Sources/Walkies')
 shutil.copy('scripts/progression-test-support/Platform.swift', root / 'Sources/Walkies')
-for name in ['ProgressionTests', 'WalkRecapTests', 'LevelMeterTests', 'ProgressionIntegrationTests', 'TeamTests', 'CloudTests', 'TrailLayoutTests', 'CoverageTests', 'HexGridTests', 'WorldGridResetTests', 'LoreTests', 'SecretsBookTests', 'SyncSafetyTests']:
+for name in ['ProgressionTests', 'WalkRecapTests', 'LevelMeterTests', 'ProgressionIntegrationTests', 'TeamTests', 'CloudTests', 'TrailLayoutTests', 'CoverageTests', 'HexGridTests', 'WorldGridResetTests', 'LoreTests', 'SecretsBookTests', 'SyncSafetyTests', 'FixtureExportTests']:
     shutil.copy(f'WalkiesTests/{name}.swift', root / 'Tests/WalkiesTests')
 PY
 export WALKIES_TEST_ROOT="$PWD/build/progression-test-data"
 export CLANG_MODULE_CACHE_PATH="$PWD/build/module-cache"
 swift test --disable-sandbox --package-path build/progression-model-tests \
     --scratch-path build/progression-model-tests/.build \
-    -Xswiftc -default-isolation -Xswiftc MainActor -Xswiftc -strict-concurrency=complete
+    -Xswiftc -default-isolation -Xswiftc MainActor -Xswiftc -strict-concurrency=complete "$@"

@@ -75,6 +75,30 @@ class MapboxController(private val view: MapView) : MapController {
             map.setCamera(camera)
         }
     }
+
+    override val cameraDistance: Double
+        get() {
+            val heightDp = view.height / view.resources.displayMetrics.density
+            val state = map.cameraState
+            return CameraMath.distance(state.zoom, state.center.latitude(), heightDp)
+        }
+
+    override fun lookAt(coordinate: Coordinate, distance: Double?, animated: Boolean) {
+        val heightDp = view.height / view.resources.displayMetrics.density
+        if (heightDp <= 0) return
+        val state = map.cameraState
+        val camera = CameraOptions.Builder()
+            .center(Point.fromLngLat(coordinate.lon, coordinate.lat))
+            .zoom(distance?.let { CameraMath.zoom(it, coordinate.lat, heightDp) } ?: state.zoom)
+            .pitch(CameraMath.PITCH)
+            .bearing(state.bearing)
+            .build()
+        if (animated) {
+            view.camera.easeTo(camera, MapAnimationOptions.mapAnimationOptions { duration(800L) })
+        } else {
+            map.setCamera(camera)
+        }
+    }
 }
 
 @Composable

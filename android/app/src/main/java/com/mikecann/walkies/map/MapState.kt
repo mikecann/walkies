@@ -1,6 +1,7 @@
 package com.mikecann.walkies.map
 
 import androidx.compose.runtime.mutableLongStateOf
+import com.mikecann.walkies.grid.Coordinate
 import com.mikecann.walkies.place.City
 import kotlin.math.PI
 import kotlin.math.cos
@@ -19,6 +20,15 @@ interface MapController {
 
     /** Fits the place on screen, tilted, like zoomToCity in FogMapView.swift. */
     fun show(city: City, animated: Boolean)
+
+    /**
+     * Puts this spot mid-screen, tilted, with the camera [distance] metres from it
+     * (MKMapCamera's centerCoordinateDistance), or at the same zoom when null.
+     */
+    fun lookAt(coordinate: Coordinate, distance: Double?, animated: Boolean)
+
+    /** How far the camera is from the middle of the screen, in metres. */
+    val cameraDistance: Double
 }
 
 /**
@@ -31,12 +41,16 @@ class MapState {
     /** Bumped on every camera change, so the clouds redraw every frame while the map moves. */
     val cameraTick = mutableLongStateOf(0L)
 
+    /** Called when your finger starts moving the map, so following you stops. */
+    var onUserMove: () -> Unit = {}
+
     /** True while your finger's moving the map, for the colour-coded honeycomb. */
     var dragging = false
         set(value) {
             if (value != field) {
                 field = value
                 draggingChangedAt = System.nanoTime()
+                if (value) onUserMove()
             }
         }
     private var draggingChangedAt = System.nanoTime() - 10_000_000_000L
@@ -87,6 +101,12 @@ object CameraMath {
     fun zoom(distance: Double, latitude: Double, heightDp: Float): Double {
         val metresPerPointAtZoom0 = 40_075_016.686 * cos(latitude * PI / 180) / TILE
         return ln(metresPerPointAtZoom0 * CAMERA_HEIGHTS * heightDp / distance) / ln(2.0)
+    }
+
+    /** The inverse of [zoom]: how far the camera is from the ground at this zoom. */
+    fun distance(zoom: Double, latitude: Double, heightDp: Float): Double {
+        val metresPerPointAtZoom0 = 40_075_016.686 * cos(latitude * PI / 180) / TILE
+        return metresPerPointAtZoom0 * CAMERA_HEIGHTS * heightDp / Math.pow(2.0, zoom)
     }
 
     /** Points on screen per map point at this zoom, mid-screen. */
