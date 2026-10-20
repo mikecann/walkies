@@ -1,6 +1,6 @@
 # Team backend API
 
-Implemented in `convex/crews.ts`; product decisions are in [coop.md](coop.md).
+Implemented in `convex/teams.ts`; product decisions are in [coop.md](coop.md).
 Team contributions are separate from personal walking and progression records.
 
 ## Calling conventions
@@ -24,21 +24,21 @@ throwing, so transaction rollback cannot bypass the limit. Convex documents thes
 
 | Function | Kind | Args | Returns |
 | --- | --- | --- | --- |
-| `createCrew` | action | `{ name, colour, sharing }` | `{ crewId, inviteCode }` |
-| `crewForInvite` | mutation | `{ code }` | `{ name, memberNames: [] }` or `null` |
-| `joinCrew` | action | `{ code, colour, sharing, name?: string }` | `crewId` |
-| `newInviteCode` | action | `{ crewId }` | New invite code string |
-| `updateMembership` | mutation | `{ crewId, colour?: string, sharing?: Sharing, walksCount?: boolean }` | `null` |
-| `leaveCrew` | mutation | `{ crewId }` | `null` |
-| `renameCrew` | mutation | `{ crewId, name }` | `null` |
-| `removeMember` | action | `{ crewId, userId }` | `null` |
+| `createTeam` | action | `{ name, colour, sharing }` | `{ teamId, inviteCode }` |
+| `teamForInvite` | mutation | `{ code }` | `{ name, memberNames: [] }` or `null` |
+| `joinTeam` | action | `{ code, colour, sharing, name?: string }` | `teamId` |
+| `newInviteCode` | action | `{ teamId }` | New invite code string |
+| `updateMembership` | mutation | `{ teamId, colour?: string, sharing?: Sharing, walksCount?: boolean }` | `null` |
+| `leaveTeam` | mutation | `{ teamId }` | `null` |
+| `renameTeam` | mutation | `{ teamId, name }` | `null` |
+| `removeMember` | action | `{ teamId, userId }` | `null` |
 | `uploadFile` | action | `{ json: string }` | `Id<"_storage">` |
-| `addCrewPlace` | action | `{ crewId, clientId, name, file, bounds: { minQ, maxQ, minR, maxR }, gridPlaceId?: Id | null }` | `Id<"crewPlaces">` |
-| `uploadCrewTiles` | mutation | `{ crewId, placeId, hexes: [q, r][], at, discoveredAt?: number[] }` | Number of new tiles |
-| `uploadCrewTrail` | action | `{ crewId, walkClientId, file, updatedAt }` | `null` |
-| `recordCrewSecrets` | mutation | `{ crewId, secrets: { secretId, at }[] }` | `null` |
-| `crewSnapshot` | query | `{ crewId, since?: number, cursor?: TileCursor }` | Snapshot below |
-| `myCrews` | query | `{}` | `{ crewId, name, memberCount, membership: Member }[]` |
+| `addTeamPlace` | action | `{ teamId, clientId, name, file, bounds: { minQ, maxQ, minR, maxR }, gridPlaceId?: Id | null }` | `Id<"teamPlaces">` |
+| `uploadTeamTiles` | mutation | `{ teamId, placeId, hexes: [q, r][], at, discoveredAt?: number[] }` | Number of new tiles |
+| `uploadTeamTrail` | action | `{ teamId, walkClientId, file, updatedAt }` | `null` |
+| `recordTeamSecrets` | mutation | `{ teamId, secrets: { secretId, at }[] }` | `null` |
+| `teamSnapshot` | query | `{ teamId, since?: number, cursor?: TileCursor }` | Snapshot below |
+| `myTeams` | query | `{}` | `{ teamId, name, memberCount, membership: Member }[]` |
 
 ## Invites and memberships
 
@@ -54,7 +54,7 @@ an empty array. Names of members are available only after joining.
 
 A team holds at most **eight members, including its creator**. A repeated join
 returns the team without changing preferences, even when the team is full.
-`createCrew` uses the account name; `joinCrew` uses its optional override, then the
+`createTeam` uses the account name; `joinTeam` uses its optional override, then the
 account name, then `"Explorer"`.
 
 The original creator must still be a member to rename, remove members or issue an
@@ -88,9 +88,9 @@ the corrected user IDs in their next delta.
 
 1. Prepare dedicated team JSON. Place JSON contains the boundary, streets and grid
    without personal progress. Trail JSON contains only the route inside team places.
-2. Call the **`crews:uploadFile({ json })` action**, which accepts valid JSON up to
+2. Call the **`teams:uploadFile({ json })` action**, which accepts valid JSON up to
    2 MiB and returns a storage ID already claimed by the authenticated account.
-3. Pass that ID to `addCrewPlace` or `uploadCrewTrail`.
+3. Pass that ID to `addTeamPlace` or `uploadTeamTrail`.
 
 Do not use `sync:generateUploadUrl` for team files. There is no public API to claim
 an existing storage ID: only the server's upload action can establish ownership.
@@ -121,7 +121,7 @@ exists. Refresh, rebuild on the shared grid, and re-upload before retrying. This
 prevents simultaneous first additions from establishing incompatible grids. The
 argument is optional for older clients; those clients cannot guarantee this check.
 
-Adding the same `(crewId, clientId)` returns its original place ID and preserves
+Adding the same `(teamId, clientId)` returns its original place ID and preserves
 its first file, bounds and metadata. There is no place editing/removal API.
 
 Trail `updatedAt` is a required, finite client version for that logical walk. Persist
@@ -142,8 +142,8 @@ An earlier offline discovery cannot replace another member's existing credit.
 Limits and uniqueness are checked transactionally, including concurrent uploads.
 
 Besides the errors above, codes include `UNAUTHENTICATED`, `NOT_A_MEMBER`,
-`CREW_NOT_FOUND`, `CREATOR_ONLY`, `INVALID_INVITE`, `INVITE_CODE_EXHAUSTED`,
-`MEMBER_REMOVED`, `CREW_FULL`, `INVALID_ARGUMENT`, `PLACE_NOT_FOUND`, `PLACE_LIMIT`,
+`TEAM_NOT_FOUND`, `CREATOR_ONLY`, `INVALID_INVITE`, `INVITE_CODE_EXHAUSTED`,
+`MEMBER_REMOVED`, `TEAM_FULL`, `INVALID_ARGUMENT`, `PLACE_NOT_FOUND`, `PLACE_LIMIT`,
 `PLACE_BOUNDS_REQUIRED`, `TILE_LIMIT`, `TRAIL_LIMIT`, `SECRET_LIMIT`, `FILE_NOT_FOUND`, `GRID_CHANGED`
 and `TRAIL_SHARING_DISABLED`. Non-members get `NOT_A_MEMBER` for either missing or
 inaccessible teams. Unknown invite previews return null. Refresh membership before
@@ -154,7 +154,7 @@ retrying revoked/disabled contributions; do not keep retrying permanent limit er
 ```ts
 type TileCursor = { position: string; until: number; since: number | null };
 {
-  crew: { crewId, name, createdBy, inviteCode, createdAt },
+  team: { teamId, name, createdBy, inviteCode, createdAt },
   members: [{ userId, name, colour, sharing, walksCount, joinedAt, isYou }],
   places: [{ placeId, clientId, name, updatedAt, url: string | null }],
   tiles: [{ placeId, q, r, by: userId, at }],
@@ -166,8 +166,8 @@ type TileCursor = { position: string; until: number; since: number | null };
 }
 ```
 
-1. Refresh `myCrews` on app open and periodically while open.
-2. Start `crewSnapshot({ crewId })` without since for first sync/cache reset, or
+1. Refresh `myTeams` on app open and periodically while open.
+2. Start `teamSnapshot({ teamId })` without since for first sync/cache reset, or
    with the last fully applied `serverTime` as `since` for subsequent syncs.
 3. Merge each response's tiles. While `more` is true, pass its exact `cursor` and
    the same `since` to the next request. There are at most 1,000 tiles per page.
@@ -208,7 +208,7 @@ rows beyond the new metadata caps also need an audit before rollout.
 
 ## Local verification
 
-`convex/crews.test.ts` uses `convex-test`, real users, identities and storage in the
+`convex/teams.test.ts` uses `convex-test`, real users, identities and storage in the
 edge runtime. It covers each review finding, paging across equal ingestion times,
 merges, cleanup and retries.
 
@@ -221,6 +221,6 @@ In a restricted checkout with `node_modules` symlinked outside the writable tree
 use `npm test -- --configLoader runner` to avoid Vite's temporary config write in
 that shared directory. Tests and typechecking do not deploy anything.
 
-`uploadCrewTiles` also accepts optional `discoveredAt: number[]`, one finite millisecond timestamp per `hexes` entry. Older clients can keep using the batch-wide `at`. The phone packs history replay into at most 400 tiles per place per batch, retaining exact first-discovery dates through `discoveredAt`.
+`uploadTeamTiles` also accepts optional `discoveredAt: number[]`, one finite millisecond timestamp per `hexes` entry. Older clients can keep using the batch-wide `at`. The phone packs history replay into at most 400 tiles per place per batch, retaining exact first-discovery dates through `discoveredAt`.
 
 Paused members (`walksCount: false`) receive `CONTRIBUTIONS_PAUSED` from tile, secret and trail contribution endpoints. Existing shared data stays available. The phone clears unsent contribution queues on pause and excludes locally paused walks from future replay.

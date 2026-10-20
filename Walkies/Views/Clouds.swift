@@ -198,7 +198,7 @@ struct CloudLayer: View {
 
     var body: some View {
         // Resolve the cached dictionary once per model update, outside animation.
-        let tints = model.crewTints
+        let tints = model.teamTints
         ZStack {
             TimelineView(.animation(minimumInterval: handle.moving ? nil : 1.0 / 30)) { timeline in
                 Canvas { context, size in
@@ -208,7 +208,7 @@ struct CloudLayer: View {
                     let reveal = min(1, now.timeIntervalSince(changedAt) / Self.revealTime)
                     let projection = Projection(map: map)
                     let bounds = CGRect(origin: .zero, size: size)
-                    if model.currentCrewID == nil { CosmeticTrail(points: handle.route, style: model.equipped[.trail], projection: projection, bounds: bounds, clock: clock)
+                    if model.currentTeamID == nil { CosmeticTrail(points: handle.route, style: model.equipped[.trail], projection: projection, bounds: bounds, clock: clock)
                         .draw(in: &context) }
                     CloudPainter(
                         field: field, leaving: reveal < 1 ? leaving : [], reveal: reveal,
@@ -221,7 +221,7 @@ struct CloudLayer: View {
             // Keep the sprite blanket on the GPU without flattening the static
             // trail layer into the blanket's animated drawing group.
             .drawingGroup()
-            CrewTrailLayer(handle: handle, key: model.crewTrailKey).id(model.currentCrewID)
+            TeamTrailLayer(handle: handle, key: model.teamTrailKey).id(model.currentTeamID)
             TimelineView(.animation(minimumInterval: handle.moving ? nil : 1.0 / 30)) { timeline in
                 Canvas { context, size in
                     guard let map = handle.map, size.width > 0 else { return }
@@ -261,7 +261,7 @@ struct CloudLayer: View {
 
 /// Project route coordinates once when route versions change. Small chunks let
 /// the renderer reject offscreen history before touching individual points.
-nonisolated struct CrewTrailGeometry: Sendable {
+nonisolated struct TeamTrailGeometry: Sendable {
     struct Chunk: Sendable {
         var points: [MKMapPoint]
         var bounds: MKMapRect
@@ -269,7 +269,7 @@ nonisolated struct CrewTrailGeometry: Sendable {
     var colour: String
     var chunks: [Chunk]
 
-    init(route: CrewRoute, colour: String) {
+    init(route: TeamRoute, colour: String) {
         self.colour = colour
         chunks = route.segments.flatMap { segment -> [Chunk] in
             let points = segment.map { MKMapPoint($0.cl) }
@@ -284,11 +284,11 @@ nonisolated struct CrewTrailGeometry: Sendable {
     }
 }
 
-private struct CrewTrailLayer: View {
+private struct TeamTrailLayer: View {
     let handle: MapHandle
     let key: String
     @Environment(AppModel.self) private var model
-    @State private var geometry: [CrewTrailGeometry] = []
+    @State private var geometry: [TeamTrailGeometry] = []
 
     var body: some View {
         // Idle clouds can drift without reprojecting or repainting 512 routes.
@@ -310,17 +310,17 @@ private struct CrewTrailLayer: View {
                     }
                     guard !path.isEmpty else { continue }
                     context.stroke(path, with: .color(.white.opacity(0.85)), style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
-                    context.stroke(path, with: .color(Color.crew(trail.colour)), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                    context.stroke(path, with: .color(Color.team(trail.colour)), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                 }
             }
         }
         .task(id: key) {
             geometry = []
-            let snapshot = model.currentCrew
+            let snapshot = model.currentTeam
             let built = await Task.detached(priority: .utility) {
-                guard let crew = snapshot else { return [CrewTrailGeometry]() }
-                return crew.trails.map { CrewTrailGeometry(route: $0.route, colour: crew.colour(for: $0.by)) }
-                    + crew.pendingTrails.map { CrewTrailGeometry(route: $0.route, colour: crew.colour(for: crew.you?.userId ?? "")) }
+                guard let team = snapshot else { return [TeamTrailGeometry]() }
+                return team.trails.map { TeamTrailGeometry(route: $0.route, colour: team.colour(for: $0.by)) }
+                    + team.pendingTrails.map { TeamTrailGeometry(route: $0.route, colour: team.colour(for: team.you?.userId ?? "")) }
             }.value
             guard !Task.isCancelled else { return }
             geometry = built
@@ -485,7 +485,7 @@ private struct Honeycomb {
                 var path = Path()
                 path.addLines(outline.corners.map(projection.point))
                 path.closeSubpath()
-                let colour = Color.crew(tint)
+                let colour = Color.team(tint)
                 context.fill(path, with: .color(colour.opacity(0.3 * opacity)))
                 context.stroke(path, with: .color(colour.opacity(0.9 * opacity)), lineWidth: 1.2)
                 continue

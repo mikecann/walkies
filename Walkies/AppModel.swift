@@ -7,40 +7,40 @@ import os
 final class AppModel {
     private(set) var cities: [City] = []
     private(set) var walks: [Walk] = []
-    private(set) var crews: [CrewMap] = []
-    var currentCrewID: String? {
+    private(set) var teams: [TeamMap] = []
+    var currentTeamID: String? {
         didSet {
-            guard currentCrewID != oldValue else { return }
-            UserDefaults.standard.set(currentCrewID, forKey: "currentCrew")
+            guard currentTeamID != oldValue else { return }
+            UserDefaults.standard.set(currentTeamID, forKey: "currentTeam")
             let oldMap = oldValue ?? "personal"
             UserDefaults.standard.set(selectedCityID?.uuidString, forKey: "selectedCity.\(oldMap)")
-            let saved = UserDefaults.standard.string(forKey: "selectedCity.\(currentCrewID ?? "personal")").flatMap(UUID.init)
+            let saved = UserDefaults.standard.string(forKey: "selectedCity.\(currentTeamID ?? "personal")").flatMap(UUID.init)
             selectedCityID = mapCities.first(where: { $0.id == saved })?.id ?? mapCities.first?.id
             flyToSelected += 1
             tilesRevision += 1
             refreshNeighbours()
         }
     }
-    var pendingCrewInvite: String?
-    var crewNotice: String?
-    private(set) var crewMembershipRevision = 0
-    @ObservationIgnored private var dirtyCrewIDs: Set<String> = []
-    @ObservationIgnored private var crewCoverageCaches: [String: CrewCoverageCache] = [:]
-    @ObservationIgnored private var crewReplays: [String: (token: UUID, task: Task<Void, Never>)] = [:]
-    /// Saved with the active walk, so a relaunch keeps the crew celebration counts.
-    private var crewWalkGains: [String: Int] = [:]
-    var currentCrew: CrewMap? { crews.first { $0.id == currentCrewID } }
-    var mapCities: [City] { currentCrew?.cities ?? (currentCrewID == nil ? cities : []) }
-    var mapName: String { currentCrew?.name ?? "My map" }
+    var pendingTeamInvite: String?
+    var teamNotice: String?
+    private(set) var teamMembershipRevision = 0
+    @ObservationIgnored private var dirtyTeamIDs: Set<String> = []
+    @ObservationIgnored private var teamCoverageCaches: [String: TeamCoverageCache] = [:]
+    @ObservationIgnored private var teamReplays: [String: (token: UUID, task: Task<Void, Never>)] = [:]
+    /// Saved with the active walk, so a relaunch keeps the team celebration counts.
+    private var teamWalkGains: [String: Int] = [:]
+    var currentTeam: TeamMap? { teams.first { $0.id == currentTeamID } }
+    var mapCities: [City] { currentTeam?.cities ?? (currentTeamID == nil ? cities : []) }
+    var mapName: String { currentTeam?.name ?? "My map" }
     var mapSecrets: [String: Date] {
-        currentCrew.map { $0.secrets.mapValues { Date(ms: $0.at) } } ?? foundStickers
+        currentTeam.map { $0.secrets.mapValues { Date(ms: $0.at) } } ?? foundStickers
     }
-    var mapFreshTiles: [UUID: Set<Hex>] { currentCrewID == nil ? freshTiles : [:] }
+    var mapFreshTiles: [UUID: Set<Hex>] { currentTeamID == nil ? freshTiles : [:] }
 
     var selectedCityID: UUID? {
         didSet {
-            UserDefaults.standard.set(selectedCityID?.uuidString, forKey: "selectedCity.\(currentCrewID ?? "personal")")
-            if currentCrewID == nil { UserDefaults.standard.set(selectedCityID?.uuidString, forKey: "selectedCity") }
+            UserDefaults.standard.set(selectedCityID?.uuidString, forKey: "selectedCity.\(currentTeamID ?? "personal")")
+            if currentTeamID == nil { UserDefaults.standard.set(selectedCityID?.uuidString, forKey: "selectedCity") }
         }
     }
     /// Bumps when the map should fly to the selected place: when you pick or add one,
@@ -112,7 +112,7 @@ final class AppModel {
     @ObservationIgnored private var shapes: [UUID: BoundaryShape] = [:]
     @ObservationIgnored private var lastSave = Date.distantPast
     @ObservationIgnored private var startWhenAllowed = false
-    @ObservationIgnored private var crewPlaceUploads: [String: Task<Void, Error>] = [:]
+    @ObservationIgnored private var teamPlaceUploads: [String: Task<Void, Error>] = [:]
 
     @ObservationIgnored private var historyTask: Task<Void, Never>?
     private(set) var historyReady = false
@@ -130,9 +130,9 @@ final class AppModel {
         self.servicesEnabled = servicesEnabled
         ledger = store.loadProgress()
         cities = store.loadCities()
-        crews = store.loadCrews()
-        currentCrewID = UserDefaults.standard.string(forKey: "currentCrew")
-        if !crews.contains(where: { $0.id == currentCrewID }) { currentCrewID = nil }
+        teams = store.loadTeams()
+        currentTeamID = UserDefaults.standard.string(forKey: "currentTeam")
+        if !teams.contains(where: { $0.id == currentTeamID }) { currentTeamID = nil }
         self.alwaysOn = alwaysOn ?? UserDefaults.standard.bool(forKey: "alwaysOn")
 
         // A walk without an end means the app was killed mid-walk. If iOS has just
@@ -154,24 +154,24 @@ final class AppModel {
             walks.append(walk)
         }
 
-        let saved = (UserDefaults.standard.string(forKey: "selectedCity.\(currentCrewID ?? "personal")") ?? UserDefaults.standard.string(forKey: "selectedCity")).flatMap(UUID.init)
+        let saved = (UserDefaults.standard.string(forKey: "selectedCity.\(currentTeamID ?? "personal")") ?? UserDefaults.standard.string(forKey: "selectedCity")).flatMap(UUID.init)
         selectedCityID = mapCities.first { $0.id == saved }?.id ?? mapCities.first?.id
 
         tracker.onLocation = { [weak self] in self?.record($0) }
         tracker.onAuthorizationChange = { [weak self] in self?.authorizationChanged() }
         if servicesEnabled { fetchMissingRoads() }
-        crewWalkGains = activeWalk?.crewTiles ?? [:]
-        for i in crews.indices where crews[i].you?.walksCount == true && crews[i].you?.sharing == .tilesAndTrail {
+        teamWalkGains = activeWalk?.teamTiles ?? [:]
+        for i in teams.indices where teams[i].you?.walksCount == true && teams[i].you?.sharing == .tilesAndTrail {
             for walk in closedOnLaunch where !walk.isAutomatic || Self.displacement(of: walk.points) >= Self.autoWalkConfirmDistance && CoverageTracer.distance(for: walk.points) >= Self.minimumAutoWalk {
-                if !crews[i].routeWork.contains(where: { $0.id == walk.id }) { crews[i].routeWork.append(walk) }
+                if !teams[i].routeWork.contains(where: { $0.id == walk.id }) { teams[i].routeWork.append(walk) }
             }
         }
-        for i in crews.indices {
+        for i in teams.indices {
             let dropped = closedOnLaunch.filter { $0.isAutomatic && CoverageTracer.distance(for: $0.points) < Self.minimumAutoWalk }
-            crews[i].excludedWalks = (crews[i].excludedWalks ?? []).union(dropped.map(\.id))
-            crews[i].enforcePreferences()
+            teams[i].excludedWalks = (teams[i].excludedWalks ?? []).union(dropped.map(\.id))
+            teams[i].enforcePreferences()
         }
-        if !closedOnLaunch.isEmpty { dirtyCrewIDs.formUnion(crews.map(\.id)); saveCrews() }
+        if !closedOnLaunch.isEmpty { dirtyTeamIDs.formUnion(teams.map(\.id)); saveTeams() }
         foundStickers = store.loadStickers()
         placeStickers()
         refreshNeighbours()
@@ -246,7 +246,7 @@ final class AppModel {
                 else { return }
                 cities[i].roads = CityBuilder.roadLines(from: ways)
                 cities[i].updatedAt = .now
-                if currentCrewID == nil { tilesRevision += 1 }
+                if currentTeamID == nil { tilesRevision += 1 }
                 store.save(cities)
             }
         }
@@ -258,32 +258,32 @@ final class AppModel {
     /// clouded takes a moment on a big place, so it's only redone when the tiles change.
     @ObservationIgnored private var cachedField: (key: String, field: CloudField)?
 
-    var cloudKey: String { "\(currentCrewID ?? "personal")-\(tilesRevision)-\(mapCities.count)" }
+    var cloudKey: String { "\(currentTeamID ?? "personal")-\(tilesRevision)-\(mapCities.count)" }
 
-    @ObservationIgnored private var cachedCrewTints: (key: String, tints: [CloudField.Tile: String])?
+    @ObservationIgnored private var cachedTeamTints: (key: String, tints: [CloudField.Tile: String])?
 
-    var crewTintKey: String {
-        cloudKey + (currentCrew?.members.map { "\($0.id):\($0.colour)" }.joined(separator: ",") ?? "")
+    var teamTintKey: String {
+        cloudKey + (currentTeam?.members.map { "\($0.id):\($0.colour)" }.joined(separator: ",") ?? "")
     }
 
-    var crewTints: [CloudField.Tile: String] {
-        let key = crewTintKey
-        if let cachedCrewTints, cachedCrewTints.key == key { return cachedCrewTints.tints }
+    var teamTints: [CloudField.Tile: String] {
+        let key = teamTintKey
+        if let cachedTeamTints, cachedTeamTints.key == key { return cachedTeamTints.tints }
         var tints: [CloudField.Tile: String] = [:]
-        if let crew = currentCrew {
-            for place in crew.places {
-                for (hex, first) in place.first { tints[CloudField.Tile(grid: place.city.grid, hex: hex)] = crew.colour(for: first.by) }
+        if let team = currentTeam {
+            for place in team.places {
+                for (hex, first) in place.first { tints[CloudField.Tile(grid: place.city.grid, hex: hex)] = team.colour(for: first.by) }
             }
         }
-        cachedCrewTints = (key, tints)
+        cachedTeamTints = (key, tints)
         return tints
     }
 
-    var crewTrailKey: String {
-        guard let crew = currentCrew else { return "personal" }
-        return crew.id + crew.members.map { "\($0.id):\($0.colour)" }.joined(separator: ",")
-            + crew.trails.map { "\($0.by):\($0.walkClientId):\($0.at)" }.joined(separator: ",")
-            + crew.pendingTrails.map { "\($0.id):\($0.updatedAt)" }.joined(separator: ",")
+    var teamTrailKey: String {
+        guard let team = currentTeam else { return "personal" }
+        return team.id + team.members.map { "\($0.id):\($0.colour)" }.joined(separator: ",")
+            + team.trails.map { "\($0.by):\($0.walkClientId):\($0.at)" }.joined(separator: ",")
+            + team.pendingTrails.map { "\($0.id):\($0.updatedAt)" }.joined(separator: ",")
     }
 
     var cloudField: CloudField {
@@ -314,7 +314,7 @@ final class AppModel {
         activePath = []
         freshTiles = [:]
         addedTiles = [:]
-        crewWalkGains = [:]
+        teamWalkGains = [:]
         tracer = CoverageTracer()
         if servicesEnabled {
             tracker.start()
@@ -331,7 +331,7 @@ final class AppModel {
         tracker.stop()
         walk.endedAt = .now
         finishCoverage(of: &walk)
-        finishCrewWalk(&walk)
+        finishTeamWalk(&walk)
         let history = walks
         let fresh = freshTiles
         let counts = questTileCounts
@@ -342,12 +342,12 @@ final class AppModel {
         activePath = []
         freshTiles = [:]
         addedTiles = [:]
-        if currentCrewID == nil { tilesRevision += 1 }
+        if currentTeamID == nil { tilesRevision += 1 }
         store.save(walk)
         store.save(cities)
         recapRequest += 1
         recap = WalkRecap.make(walk: walk, cities: cities, fresh: fresh, found: foundStickers, history: history, counts: counts)
-        recap?.crewGains = crewSummary(walk)
+        recap?.teamGains = teamSummary(walk)
         refreshProgressPicks()
         requestSync?()
     }
@@ -377,7 +377,7 @@ final class AppModel {
                 }
                 return WalkRecap.make(walk: walk, cities: before, fresh: fresh, found: found, history: earlier, counts: counts)
             }.value
-            if generation == dataGeneration, request == recapRequest { recap = result; recap?.crewGains = crewSummary(walk) }
+            if generation == dataGeneration, request == recapRequest { recap = result; recap?.teamGains = teamSummary(walk) }
         }
     }
 
@@ -390,7 +390,7 @@ final class AppModel {
         // Don't overwrite a resumed legacy walk while its worker is still finding
         // the tiles uncovered before launch.
         guard historyReady else { return }
-        walk.crewTiles = crewWalkGains
+        walk.teamTiles = teamWalkGains
         walk.newTilesByPlace = freshTiles.countsByPlaceID
         walk.newTileHexesByPlace = Dictionary(uniqueKeysWithValues: freshTiles.map { ($0.key.uuidString, $0.value) })
         walk.addedTilesByPlace = Dictionary(uniqueKeysWithValues: addedTiles.map { ($0.key.uuidString, $0.value) })
@@ -403,7 +403,7 @@ final class AppModel {
             store.save(walk)
         }
         store.save(cities)
-        saveCrews()
+        saveTeams()
         lastSave = .now
     }
 
@@ -462,7 +462,7 @@ final class AppModel {
             activePath = []
             freshTiles = [:]
             addedTiles = [:]
-            crewWalkGains = [:]
+            teamWalkGains = [:]
             autoWalkPending = true
         }
         guard var walk = activeWalk else { return }
@@ -539,13 +539,13 @@ final class AppModel {
         freshTiles = [:]
         addedTiles = [:]
         tracer = CoverageTracer()
-        if currentCrewID == nil { tilesRevision += 1 }
+        if currentTeamID == nil { tilesRevision += 1 }
         walk.endedAt = byYou ? .now : walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt
         // Measure again by today's rules, so walks logged by older versions (or GPS
         // wobble at home) don't get kept as real ones. Tiles already uncovered stay.
         walk.distance = CoverageTracer.distance(for: walk.points)
         if !wasPending, byYou || walk.distance >= Self.minimumAutoWalk {
-            finishCrewWalk(&walk)
+            finishTeamWalk(&walk)
             let history = walks
             let counts = questTileCounts
             walks.append(walk)
@@ -556,7 +556,7 @@ final class AppModel {
             // next time you open the app.
             recapRequest += 1
             recap = WalkRecap.make(walk: walk, cities: cities, fresh: fresh, found: foundStickers, history: history, counts: counts)
-            recap?.crewGains = crewSummary(walk)
+            recap?.teamGains = teamSummary(walk)
         } else {
             // Keep the dated tile credit even though this outing doesn't qualify
             // for walk history, distance/day quests or streak rewards.
@@ -610,7 +610,7 @@ final class AppModel {
 
     /// Marks these points as visited in every city. Returns how many tiles were new.
     private func visit(_ points: [Coordinate]) -> Int {
-        visitCrews(points)
+        visitTeams(points)
         var uncovered = 0
         for i in cities.indices {
             var city = cities[i]
@@ -622,7 +622,7 @@ final class AppModel {
             freshTiles[city.id, default: []].formUnion(fresh)
             addedTiles[city.id, default: []].formUnion(fresh.subtracting(originalTiles))
             countingTilesByPlace[city.id, default: 0] += fresh.count
-            if currentCrewID == nil { tilesRevision += 1 }
+            if currentTeamID == nil { tilesRevision += 1 }
             uncovered += fresh.count
             unlockStickers(in: city, on: fresh, notify: true, popUp: true)
         }
@@ -678,7 +678,7 @@ final class AppModel {
             unlockStickers(in: cities[i], on: cities[i].visited, notify: false, popUp: true)
         }
         if changed {
-            if currentCrewID == nil { tilesRevision += 1 }
+            if currentTeamID == nil { tilesRevision += 1 }
             store.save(cities)
         }
     }
@@ -711,9 +711,9 @@ final class AppModel {
         placesRevision += 1
         rebuildCountingTiles()
         shapes[city.id] = city.shape()
-        if currentCrewID == nil { select(city.id) }
+        if currentTeamID == nil { select(city.id) }
         placeStickers()
-        if currentCrewID == nil { tilesRevision += 1 }
+        if currentTeamID == nil { tilesRevision += 1 }
         store.save(cities)
         refreshProgressPicks()
         requestSync?()
@@ -729,7 +729,7 @@ final class AppModel {
         if let selectedCityID, removed.contains(selectedCityID) {
             self.selectedCityID = cities.first?.id
         }
-        if currentCrewID == nil { tilesRevision += 1 }
+        if currentTeamID == nil { tilesRevision += 1 }
         placeStickers()
         store.save(cities)
         refreshProgressPicks()
@@ -901,7 +901,7 @@ final class AppModel {
     var spyglasses: Int { ledger.spyglassesLeft }
     /// Re-read on a timer while showing the map so the ring disappears at expiry.
     var activeSpyglassRing: Progression.Ring? {
-        guard currentCrewID == nil, let city = selectedCity else { return nil }
+        guard currentTeamID == nil, let city = selectedCity else { return nil }
         return Progression.activeRing(in: city, ledger: ledger, found: foundStickers, now: .now)
     }
 
@@ -939,7 +939,7 @@ final class AppModel {
     }
 
     @discardableResult func useSpyglass() -> Bool {
-        guard currentCrewID == nil, spyglasses > 0, let city = selectedCity, activeSpyglassRing == nil,
+        guard currentTeamID == nil, spyglasses > 0, let city = selectedCity, activeSpyglassRing == nil,
               let use = Progression.spyglass(in: city, from: lastLocation.map { Coordinate($0.coordinate) }, found: foundStickers, now: .now)
         else { return false }
         ledger.spyglasses.append(use)
@@ -1010,7 +1010,7 @@ final class AppModel {
                 cities[i] = city
             } else {
                 cities.append(remote)
-                if currentCrewID == nil, selectedCityID == nil { select(remote.id) }
+                if currentTeamID == nil, selectedCityID == nil { select(remote.id) }
             }
             shapes[remote.id] = nil
         }
@@ -1021,7 +1021,7 @@ final class AppModel {
         for walk in missing { store.save(walk) }
         guard !changedCities.isEmpty || !missing.isEmpty else { return }
         placesRevision += 1
-        if currentCrewID == nil { tilesRevision += 1 }
+        if currentTeamID == nil { tilesRevision += 1 }
         rebuildCountingTiles()
         let snapshotCities = cities
         let snapshotWalks = walks
@@ -1048,7 +1048,7 @@ final class AppModel {
         installBackfill(restored.1)
         historyRevision += 1
         placesRevision += 1
-        if currentCrewID == nil { tilesRevision += 1 }
+        if currentTeamID == nil { tilesRevision += 1 }
         rebuildCountingTiles()
         placeStickers()
         for city in cities { unlockStickers(in: city, on: city.visited, notify: false, popUp: false) }
@@ -1073,13 +1073,13 @@ final class AppModel {
     /// Forgets everything on this phone, for signing out. It's all in the account.
     func wipeLocalData() {
         dataGeneration += 1
-        crewMembershipRevision += 1
-        for job in crewReplays.values { job.task.cancel() }
-        crewReplays = [:]
-        dirtyCrewIDs = []
-        crewCoverageCaches = [:]
-        for task in crewPlaceUploads.values { task.cancel() }
-        crewPlaceUploads = [:]
+        teamMembershipRevision += 1
+        for job in teamReplays.values { job.task.cancel() }
+        teamReplays = [:]
+        dirtyTeamIDs = []
+        teamCoverageCaches = [:]
+        for task in teamPlaceUploads.values { task.cancel() }
+        teamPlaceUploads = [:]
         historyTask?.cancel()
         historyTask = nil
         historyReady = true
@@ -1091,16 +1091,16 @@ final class AppModel {
         freshTiles = [:]
         recap = nil
         cities = []
-        crews = []
-        currentCrewID = nil
-        pendingCrewInvite = nil
-        crewWalkGains = [:]
+        teams = []
+        currentTeamID = nil
+        pendingTeamInvite = nil
+        teamWalkGains = [:]
         walks = []
         shapes = [:]
         foundStickers = [:]
         ledger = Ledger()
         cachedProgression = nil
-        cachedCrewTints = nil
+        cachedTeamTints = nil
         cachedHistoricalRewards = nil
         questTileCounts = [:]
         countingTilesByPlace = [:]
@@ -1129,81 +1129,81 @@ private extension Dictionary where Key == UUID, Value == Set<Hex> {
 }
 
 extension AppModel {
-    /// Queue-only edits never invalidate cloud geometry or write whole crew files.
-    func editCrew(_ id: String, mapChanged: Bool = false, _ edit: (inout CrewMap) -> Void) {
-        guard let i = crews.firstIndex(where: { $0.id == id }) else { return }
-        edit(&crews[i])
-        crews[i].enforcePreferences()
-        if crews[i].you?.walksCount != true, let walk = activeWalk {
-            crews[i].excludedWalks = (crews[i].excludedWalks ?? []).union([walk.id])
+    /// Queue-only edits never invalidate cloud geometry or write whole team files.
+    func editTeam(_ id: String, mapChanged: Bool = false, _ edit: (inout TeamMap) -> Void) {
+        guard let i = teams.firstIndex(where: { $0.id == id }) else { return }
+        edit(&teams[i])
+        teams[i].enforcePreferences()
+        if teams[i].you?.walksCount != true, let walk = activeWalk {
+            teams[i].excludedWalks = (teams[i].excludedWalks ?? []).union([walk.id])
         }
-        dirtyCrewIDs.insert(id)
+        dirtyTeamIDs.insert(id)
         if mapChanged {
-            crewCoverageCaches[id] = nil
-            if currentCrewID == id { tilesRevision += 1 }
+            teamCoverageCaches[id] = nil
+            if currentTeamID == id { tilesRevision += 1 }
         }
     }
 
-    func setCrewPreferences(_ id: String, colour: String, sharing: CrewSharing, walksCount: Bool) {
+    func setTeamPreferences(_ id: String, colour: String, sharing: TeamSharing, walksCount: Bool) {
         // Invalidate snapshots and replay workers started with older choices.
-        crewMembershipRevision += 1
-        editCrew(id) { crew in
-            if let i = crew.members.firstIndex(where: \.isYou) {
-                crew.members[i].colour = colour
-                crew.members[i].sharing = sharing
-                crew.members[i].walksCount = walksCount
+        teamMembershipRevision += 1
+        editTeam(id) { team in
+            if let i = team.members.firstIndex(where: \.isYou) {
+                team.members[i].colour = colour
+                team.members[i].sharing = sharing
+                team.members[i].walksCount = walksCount
             }
         }
-        saveCrews()
+        saveTeams()
     }
 
-    func saveCrews() {
-        guard !dirtyCrewIDs.isEmpty else { return }
-        store.save(crews: crews, changedIDs: dirtyCrewIDs)
-        dirtyCrewIDs = []
+    func saveTeams() {
+        guard !dirtyTeamIDs.isEmpty else { return }
+        store.save(teams: teams, changedIDs: dirtyTeamIDs)
+        dirtyTeamIDs = []
     }
 
-    /// Only explicit membership operations and an accepted list may insert a crew.
-    func joinedCrew(_ id: String) {
-        crewMembershipRevision += 1
-        if !crews.contains(where: { $0.id == id }) {
-            crews.append(CrewMap(id: id, name: "Team map", createdBy: "", inviteCode: ""))
+    /// Only explicit membership operations and an accepted list may insert a team.
+    func joinedTeam(_ id: String) {
+        teamMembershipRevision += 1
+        if !teams.contains(where: { $0.id == id }) {
+            teams.append(TeamMap(id: id, name: "Team map", createdBy: "", inviteCode: ""))
         }
-        dirtyCrewIDs.insert(id)
-        saveCrews()
+        dirtyTeamIDs.insert(id)
+        saveTeams()
     }
 
-    func acceptCrewList(_ listings: [CrewsAPI.Listing], revision: Int) -> Bool {
-        guard revision == crewMembershipRevision else { return false }
-        let ids = Set(listings.map(\.crewId))
-        retainCrews(ids, removedMessage: true)
-        for listing in listings where !crews.contains(where: { $0.id == listing.crewId }) {
-            crews.append(CrewMap(id: listing.crewId, name: listing.name, createdBy: "", inviteCode: "", members: [listing.membership]))
-            dirtyCrewIDs.insert(listing.crewId)
+    func acceptTeamList(_ listings: [TeamsAPI.Listing], revision: Int) -> Bool {
+        guard revision == teamMembershipRevision else { return false }
+        let ids = Set(listings.map(\.teamId))
+        retainTeams(ids, removedMessage: true)
+        for listing in listings where !teams.contains(where: { $0.id == listing.teamId }) {
+            teams.append(TeamMap(id: listing.teamId, name: listing.name, createdBy: "", inviteCode: "", members: [listing.membership]))
+            dirtyTeamIDs.insert(listing.teamId)
         }
         return true
     }
 
-    func retainCrews(_ ids: Set<String>, removedMessage: Bool = false) {
-        let removed = crews.filter { !ids.contains($0.id) }
+    func retainTeams(_ ids: Set<String>, removedMessage: Bool = false) {
+        let removed = teams.filter { !ids.contains($0.id) }
         guard !removed.isEmpty else { return }
-        crewMembershipRevision += 1
-        if removedMessage { crewNotice = "You’re no longer a member of \(removed.map(\.name).joined(separator: ", "))." }
-        for crew in removed {
-            crewReplays[crew.id]?.task.cancel()
-            crewReplays[crew.id] = nil
-            crewCoverageCaches[crew.id] = nil
+        teamMembershipRevision += 1
+        if removedMessage { teamNotice = "You’re no longer a member of \(removed.map(\.name).joined(separator: ", "))." }
+        for team in removed {
+            teamReplays[team.id]?.task.cancel()
+            teamReplays[team.id] = nil
+            teamCoverageCaches[team.id] = nil
         }
-        crews.removeAll { !ids.contains($0.id) }
-        if let currentCrewID, !ids.contains(currentCrewID) { self.currentCrewID = nil }
+        teams.removeAll { !ids.contains($0.id) }
+        if let currentTeamID, !ids.contains(currentTeamID) { self.currentTeamID = nil }
         // Update the index and delete removed files without rewriting retained maps.
-        store.save(crews: crews, changedIDs: [])
-        dirtyCrewIDs.subtract(removed.map(\.id))
+        store.save(teams: teams, changedIDs: [])
+        dirtyTeamIDs.subtract(removed.map(\.id))
     }
 
-    func applyCrew(_ snapshot: CrewSnapshot, cities: [String: City], trails: [CrewTrail]) {
-        let id = snapshot.crew.crewId
-        guard let old = crews.first(where: { $0.id == id }) else { return }
+    func applyTeam(_ snapshot: TeamSnapshot, cities: [String: City], trails: [TeamTrail]) {
+        let id = snapshot.team.teamId
+        guard let old = teams.first(where: { $0.id == id }) else { return }
         // Comparing sets is only done once per completed snapshot, never per upload.
         let tileChange = !cities.isEmpty || Set(old.places.map(\.id)) != Set(snapshot.places.map(\.placeId)) || snapshot.tiles.contains { tile in
             let hex = Hex(q: tile.q, r: tile.r)
@@ -1214,111 +1214,111 @@ extension AppModel {
                 .union(old.pendingTiles.filter { $0.placeId == place.id }.flatMap(\.hexes))
             return received != place.city.visited
         })
-        editCrew(id, mapChanged: tileChange) { $0.merge(snapshot, cities: cities, trails: trails) }
-        if currentCrewID == id, !mapCities.contains(where: { $0.id == selectedCityID }) { selectedCityID = mapCities.first?.id }
+        editTeam(id, mapChanged: tileChange) { $0.merge(snapshot, cities: cities, trails: trails) }
+        if currentTeamID == id, !mapCities.contains(where: { $0.id == selectedCityID }) { selectedCityID = mapCities.first?.id }
     }
 
-    private func visitCrews(_ samples: [Coordinate]) {
-        for i in crews.indices where crews[i].you?.walksCount == true {
-            let before = crews[i].pendingSecrets.count
-            let batches = crews[i].pendingTiles.count
-            let id = crews[i].id
-            if crewCoverageCaches[id] == nil { crewCoverageCaches[id] = CrewCoverageCache(places: crews[i].places) }
-            let count = crews[i].visit(samples, at: .now, cache: &crewCoverageCaches[id]!)
-            crewWalkGains[crews[i].id, default: 0] += count
-            if batches != crews[i].pendingTiles.count || before != crews[i].pendingSecrets.count { dirtyCrewIDs.insert(crews[i].id) }
-            if batches != crews[i].pendingTiles.count, currentCrewID == crews[i].id { tilesRevision += 1 }
+    private func visitTeams(_ samples: [Coordinate]) {
+        for i in teams.indices where teams[i].you?.walksCount == true {
+            let before = teams[i].pendingSecrets.count
+            let batches = teams[i].pendingTiles.count
+            let id = teams[i].id
+            if teamCoverageCaches[id] == nil { teamCoverageCaches[id] = TeamCoverageCache(places: teams[i].places) }
+            let count = teams[i].visit(samples, at: .now, cache: &teamCoverageCaches[id]!)
+            teamWalkGains[teams[i].id, default: 0] += count
+            if batches != teams[i].pendingTiles.count || before != teams[i].pendingSecrets.count { dirtyTeamIDs.insert(teams[i].id) }
+            if batches != teams[i].pendingTiles.count, currentTeamID == teams[i].id { tilesRevision += 1 }
         }
-        // Crew finds live only in the crew book. Personal visit owns all rewards.
+        // Team finds live only in the team book. Personal visit owns all rewards.
         // Persistence uses saveIfDue/saveNow, like personal coverage.
     }
 
-    private func finishCrewWalk(_ walk: inout Walk) {
-        walk.crewTiles = crewWalkGains
-        for i in crews.indices {
-            if crews[i].you?.walksCount != true {
-                crews[i].excludedWalks = (crews[i].excludedWalks ?? []).union([walk.id])
-                dirtyCrewIDs.insert(crews[i].id)
+    private func finishTeamWalk(_ walk: inout Walk) {
+        walk.teamTiles = teamWalkGains
+        for i in teams.indices {
+            if teams[i].you?.walksCount != true {
+                teams[i].excludedWalks = (teams[i].excludedWalks ?? []).union([walk.id])
+                dirtyTeamIDs.insert(teams[i].id)
                 continue
             }
-            guard crews[i].you?.sharing == .tilesAndTrail, crews[i].excludedWalks?.contains(walk.id) != true else { continue }
-            crews[i].routeWork.removeAll { $0.id == walk.id }
-            crews[i].routeWork.append(walk)
-            dirtyCrewIDs.insert(crews[i].id)
+            guard teams[i].you?.sharing == .tilesAndTrail, teams[i].excludedWalks?.contains(walk.id) != true else { continue }
+            teams[i].routeWork.removeAll { $0.id == walk.id }
+            teams[i].routeWork.append(walk)
+            dirtyTeamIDs.insert(teams[i].id)
         }
-        saveCrews()
-        Task { await prepareCrewRoutes(); requestSync?() }
+        saveTeams()
+        Task { await prepareTeamRoutes(); requestSync?() }
     }
 
-    func prepareCrewRoutes() async {
+    func prepareTeamRoutes() async {
         let generation = dataGeneration
-        let maps = crews
+        let maps = teams
         let prepared = await Task.detached(priority: .utility) {
             maps.flatMap { map in
                 map.routeWork.filter { map.you?.walksCount == true && map.you?.sharing == .tilesAndTrail && map.excludedWalks?.contains($0.id) != true }.map { walk in
-                    (map.id, walk.id, CrewCoverage.route(for: walk.points, cities: map.cities))
+                    (map.id, walk.id, TeamCoverage.route(for: walk.points, cities: map.cities))
                 }
             }
         }.value
         guard dataGeneration == generation else { return }
         for (id, walkID, route) in prepared {
-            editCrew(id) { crew in
-                guard crew.routeWork.contains(where: { $0.id == walkID }) else { return }
-                crew.routeWork.removeAll { $0.id == walkID }
-                guard crew.you?.walksCount == true, crew.you?.sharing == .tilesAndTrail, !route.segments.isEmpty else { return }
-                crew.queueRoute(route, walkClientId: walkID.uuidString)
+            editTeam(id) { team in
+                guard team.routeWork.contains(where: { $0.id == walkID }) else { return }
+                team.routeWork.removeAll { $0.id == walkID }
+                guard team.you?.walksCount == true, team.you?.sharing == .tilesAndTrail, !route.segments.isEmpty else { return }
+                team.queueRoute(route, walkClientId: walkID.uuidString)
             }
         }
-        saveCrews()
+        saveTeams()
     }
 
-    private func crewSummary(_ walk: Walk) -> [WalkRecap.CrewGain] {
-        crews.compactMap { crew in
-            guard let count = walk.crewTiles?[crew.id], count > 0 else { return nil }
-            return WalkRecap.CrewGain(name: crew.name, tiles: count)
+    private func teamSummary(_ walk: Walk) -> [WalkRecap.TeamGain] {
+        teams.compactMap { team in
+            guard let count = walk.teamTiles?[team.id], count > 0 else { return nil }
+            return WalkRecap.TeamGain(name: team.name, tiles: count)
         }
     }
 
-    func replayCrewHistory(_ id: String, forceTrails: Bool = false, creditWalkID: UUID? = nil) async {
-        if let running = crewReplays[id] {
+    func replayTeamHistory(_ id: String, forceTrails: Bool = false, creditWalkID: UUID? = nil) async {
+        if let running = teamReplays[id] {
             await running.task.value
             return
         }
         let active = creditWalkID.flatMap { id in activeWalk?.id == id ? activeWalk : walks.first { $0.id == id } }
             ?? (autoWalkPending ? nil : activeWalk)
         let token = UUID()
-        let task = Task { await performCrewReplay(id, forceTrails: forceTrails, active: active) }
-        crewReplays[id] = (token, task)
+        let task = Task { await performTeamReplay(id, forceTrails: forceTrails, active: active) }
+        teamReplays[id] = (token, task)
         await task.value
-        if crewReplays[id]?.token == token { crewReplays[id] = nil }
+        if teamReplays[id]?.token == token { teamReplays[id] = nil }
     }
 
-    private func performCrewReplay(_ id: String, forceTrails: Bool, active: Walk?) async {
-        guard let crew = crews.first(where: { $0.id == id }), crew.you?.walksCount == true else { return }
-        let newPlaceIDs = Set(crew.places.map(\.id)).subtracting(crew.replayedPlaces)
+    private func performTeamReplay(_ id: String, forceTrails: Bool, active: Walk?) async {
+        guard let team = teams.first(where: { $0.id == id }), team.you?.walksCount == true else { return }
+        let newPlaceIDs = Set(team.places.map(\.id)).subtracting(team.replayedPlaces)
         let newPlaces = !newPlaceIDs.isEmpty
         guard forceTrails || newPlaces else { return }
         let savedWalks = walks.filter { $0.id != active?.id }
         let generation = dataGeneration
-        let membership = crewMembershipRevision
+        let membership = teamMembershipRevision
         let (result, activeTiles) = await Task.detached(priority: .utility) {
-            var result = CrewCoverage.replay(crew, walks: savedWalks, includeTiles: newPlaces, placeIDs: newPlaceIDs)
+            var result = TeamCoverage.replay(team, walks: savedWalks, includeTiles: newPlaces, placeIDs: newPlaceIDs)
             let beforeActive = Set(result.places.flatMap { $0.city.visited })
-            if newPlaces, let active, crew.excludedWalks?.contains(active.id) != true {
+            if newPlaces, let active, team.excludedWalks?.contains(active.id) != true {
                 result.visit(CoverageTracer.samples(for: active.points), at: active.startedAt, only: newPlaceIDs)
             }
             if let active, active.endedAt != nil { result.queueTrail(active) }
             return (result, Set(result.places.flatMap { $0.city.visited }).subtracting(beforeActive))
         }.value
-        guard generation == dataGeneration, membership == crewMembershipRevision, !Task.isCancelled else { return }
+        guard generation == dataGeneration, membership == teamMembershipRevision, !Task.isCancelled else { return }
         var activeGains = 0
         var mapChanged = false
-        editCrew(id) { live in
+        editTeam(id) { live in
             guard live.you?.walksCount == true else { return }
             activeGains = activeTiles.subtracting(Set(live.places.flatMap { $0.city.visited })).count
             // A GPS fix may have arrived while replay ran. Merge its output, never replace live state.
             let existingBatches = Set(live.pendingTiles.map(\.id))
-            let originalBatches = Set(crew.pendingTiles.map(\.id))
+            let originalBatches = Set(team.pendingTiles.map(\.id))
             for var batch in result.pendingTiles where !existingBatches.contains(batch.id) && !originalBatches.contains(batch.id) {
                 let visited = live.places.first { $0.id == batch.placeId }?.city.visited ?? []
                 let indices = batch.hexes.indices.filter { !visited.contains(batch.hexes[$0]) }
@@ -1345,71 +1345,71 @@ extension AppModel {
             live.replayedPlaces.formUnion(result.replayedPlaces)
         }
         if mapChanged {
-            crewCoverageCaches[id] = nil
-            if currentCrewID == id { tilesRevision += 1 }
+            teamCoverageCaches[id] = nil
+            if currentTeamID == id { tilesRevision += 1 }
         }
         if let active, activeGains > 0 {
-            if active.id == activeWalk?.id { crewWalkGains[id, default: 0] += activeGains }
+            if active.id == activeWalk?.id { teamWalkGains[id, default: 0] += activeGains }
             else if let i = walks.firstIndex(where: { $0.id == active.id }) {
                 // Joining can finish after End walk. Keep that walk's credit and
                 // its visible recap in step with the replay that just completed.
-                var gains = walks[i].crewTiles ?? [:]
+                var gains = walks[i].teamTiles ?? [:]
                 gains[id, default: 0] += activeGains
-                walks[i].crewTiles = gains
+                walks[i].teamTiles = gains
                 store.save(walks[i])
                 if recap?.id == active.id {
                     recap?.walk = walks[i]
-                    recap?.crewGains = crewSummary(walks[i])
+                    recap?.teamGains = teamSummary(walks[i])
                 }
             }
         }
-        saveCrews()
+        saveTeams()
         requestSync?()
     }
 
-    func crewAPI() async throws -> CrewsAPI {
+    func teamAPI() async throws -> TeamsAPI {
         guard let client = await makePlaceClient?() else { throw ConvexError.server("Connect and sign in to manage a team map.") }
-        return CrewsAPI(client: client)
+        return TeamsAPI(client: client)
     }
 
-    func refreshCrew(_ id: String, api: CrewsAPI) async throws {
-        defer { saveCrews() }
+    func refreshTeam(_ id: String, api: TeamsAPI) async throws {
+        defer { saveTeams() }
         let generation = dataGeneration
-        let membership = crewMembershipRevision
+        let membership = teamMembershipRevision
         let creditWalkID = autoWalkPending ? nil : activeWalk?.id
-        guard let index = crews.firstIndex(where: { $0.id == id }) else { throw CancellationError() }
+        guard let index = teams.firstIndex(where: { $0.id == id }) else { throw CancellationError() }
         // Keep just immutable trail versions while awaiting the network, rather
         // than retaining all of the live visited sets across subsequent GPS fixes.
-        let since = crews[index].since
-        let knownPlaces = Set(crews[index].places.map(\.id))
-        let cachedTrails = Dictionary(crews[index].trails.map { ($0.version, $0) }, uniquingKeysWith: { first, _ in first })
-        let snapshot: CrewSnapshot
+        let since = teams[index].since
+        let knownPlaces = Set(teams[index].places.map(\.id))
+        let cachedTrails = Dictionary(teams[index].trails.map { ($0.version, $0) }, uniquingKeysWith: { first, _ in first })
+        let snapshot: TeamSnapshot
         do {
             snapshot = try await api.snapshot(id, since: since) { [weak self] page in
-                guard let self, self.dataGeneration == generation, self.crewMembershipRevision == membership else { return }
+                guard let self, self.dataGeneration == generation, self.teamMembershipRevision == membership else { return }
                 // Apply revocations immediately, even when a later page/download fails.
                 // Tile progress and its watermark are still committed together at the end.
-                self.editCrew(id) { crew in
-                    crew.name = page.crew.name
-                    crew.inviteCode = page.crew.inviteCode
-                    crew.createdBy = page.crew.createdBy
-                    crew.members = page.members
-                    crew.trails.removeAll { trail in
+                self.editTeam(id) { team in
+                    team.name = page.team.name
+                    team.inviteCode = page.team.inviteCode
+                    team.createdBy = page.team.createdBy
+                    team.members = page.members
+                    team.trails.removeAll { trail in
                         !page.members.contains { $0.userId == trail.by && $0.sharing == .tilesAndTrail }
                         || !page.trails.contains { $0.by == trail.by && $0.walkClientId == trail.walkClientId && $0.at == trail.at && $0.url != nil }
                     }
-                    crew.enforcePreferences()
+                    team.enforcePreferences()
                 }
             }
         }
         catch {
-            guard generation == dataGeneration, membership == crewMembershipRevision else { throw CancellationError() }
-            if let error = error as? ConvexError, ["NOT_A_MEMBER", "CREW_NOT_FOUND", "MEMBER_REMOVED"].contains(error.code ?? "") {
-                retainCrews(Set(crews.map(\.id)).subtracting([id]), removedMessage: true)
+            guard generation == dataGeneration, membership == teamMembershipRevision else { throw CancellationError() }
+            if let error = error as? ConvexError, ["NOT_A_MEMBER", "TEAM_NOT_FOUND", "MEMBER_REMOVED"].contains(error.code ?? "") {
+                retainTeams(Set(teams.map(\.id)).subtracting([id]), removedMessage: true)
             }
             throw error
         }
-        guard generation == dataGeneration, membership == crewMembershipRevision else { throw CancellationError() }
+        guard generation == dataGeneration, membership == teamMembershipRevision else { throw CancellationError() }
         var cities: [String: City] = [:]
         for place in snapshot.places where !knownPlaces.contains(place.placeId) {
             // Don't advance the tile cursor until every place can accept its tiles.
@@ -1419,46 +1419,46 @@ extension AppModel {
             city.tileCredits = nil
             cities[place.placeId] = city
         }
-        var trails: [CrewTrail] = []
+        var trails: [TeamTrail] = []
         for trail in snapshot.trails {
             guard snapshot.members.contains(where: { $0.userId == trail.by && $0.sharing == .tilesAndTrail }),
                   let url = trail.url.flatMap(URL.init(string:)) else { continue }
             if let cached = cachedTrails[trail.version] {
                 trails.append(cached)
             } else if let route = try? await api.route(url) {
-                trails.append(CrewTrail(walkClientId: trail.walkClientId, by: trail.by, at: trail.at, route: route))
+                trails.append(TeamTrail(walkClientId: trail.walkClientId, by: trail.by, at: trail.at, route: route))
             }
         }
-        guard generation == dataGeneration, membership == crewMembershipRevision else { throw CancellationError() }
-        applyCrew(snapshot, cities: cities, trails: trails)
-        await replayCrewHistory(id, creditWalkID: creditWalkID)
-        saveCrews()
+        guard generation == dataGeneration, membership == teamMembershipRevision else { throw CancellationError() }
+        applyTeam(snapshot, cities: cities, trails: trails)
+        await replayTeamHistory(id, creditWalkID: creditWalkID)
+        saveTeams()
     }
 
-    /// Both the neighbour buttons and place search enter here. The crew's grid is
+    /// Both the neighbour buttons and place search enter here. The team's grid is
     /// fetched before building, including when adding somewhere far from its first place.
     func addPlace(_ place: PlaceResult, status: @escaping @MainActor @Sendable (String) -> Void) async throws {
         let generation = dataGeneration
-        let destination = currentCrewID
+        let destination = currentTeamID
         if let id = destination {
-            let api = try await crewAPI()
-            try await refreshCrew(id, api: api)
-            guard let crew = crews.first(where: { $0.id == id }) else { return }
+            let api = try await teamAPI()
+            try await refreshTeam(id, api: api)
+            guard let team = teams.first(where: { $0.id == id }) else { return }
             let cityID: UUID
-            if let draft = crew.pendingPlaces.first(where: { $0.city.boundary == place.boundary }) {
+            if let draft = team.pendingPlaces.first(where: { $0.city.boundary == place.boundary }) {
                 cityID = draft.city.id
             } else {
-                var city = try await CityBuilder.build(from: place, walks: [], grid: crew.places.first?.city.grid, client: api.client, status: status)
+                var city = try await CityBuilder.build(from: place, walks: [], grid: team.places.first?.city.grid, client: api.client, status: status)
                 guard generation == dataGeneration else { throw CancellationError() }
-                let assigned = LoreLibrary.assign(to: crew.cities + [city]) { city, point in city.shape().contains(city.grid.projection.project(point)) }
+                let assigned = LoreLibrary.assign(to: team.cities + [city]) { city, point in city.shape().contains(city.grid.projection.project(point)) }
                 city.stickers = city.placeStickers(assigned[city.id] ?? [])
-                _ = try CrewPlaceBounds(city: city)
+                _ = try TeamPlaceBounds(city: city)
                 cityID = city.id
-                editCrew(id) { $0.pendingPlaces.append(CrewPendingPlace(city: city)) }
+                editTeam(id) { $0.pendingPlaces.append(TeamPendingPlace(city: city)) }
             }
-            try await uploadCrewPlaces(id, api: api)
-            try await refreshCrew(id, api: api)
-            if currentCrewID == id { select(cityID) }
+            try await uploadTeamPlaces(id, api: api)
+            try await refreshTeam(id, api: api)
+            if currentTeamID == id { select(cityID) }
             requestSync?()
         } else {
             let city = try await CityBuilder.build(from: place, walks: walks, near: cities, client: await makePlaceClient?(), status: status)
@@ -1469,76 +1469,76 @@ extension AppModel {
 
     /// Retain both client id and file id when a reply is lost, so retrying an add
     /// adopts the original server place instead of creating a duplicate suburb.
-    func uploadCrewPlaces(_ id: String, api: CrewsAPI) async throws {
-        defer { saveCrews() }
-        if let running = crewPlaceUploads[id] { try await running.value; return }
-        let task = Task { try await performCrewPlaceUploads(id, api: api) }
-        crewPlaceUploads[id] = task
-        defer { crewPlaceUploads[id] = nil }
+    func uploadTeamPlaces(_ id: String, api: TeamsAPI) async throws {
+        defer { saveTeams() }
+        if let running = teamPlaceUploads[id] { try await running.value; return }
+        let task = Task { try await performTeamPlaceUploads(id, api: api) }
+        teamPlaceUploads[id] = task
+        defer { teamPlaceUploads[id] = nil }
         try await task.value
     }
 
-    private func performCrewPlaceUploads(_ id: String, api: CrewsAPI) async throws {
+    private func performTeamPlaceUploads(_ id: String, api: TeamsAPI) async throws {
         let generation = dataGeneration
-        let membership = crewMembershipRevision
-        let drafts = crews.first(where: { $0.id == id })?.pendingPlaces ?? []
+        let membership = teamMembershipRevision
+        let drafts = teams.first(where: { $0.id == id })?.pendingPlaces ?? []
         for original in drafts {
             // A null grid anchor is checked transactionally. If another phone wins
             // the first-place race, no incompatible immutable place gets saved.
             var draft = original
             for attempt in 0..<3 {
-                if attempt > 0 { try await refreshCrew(id, api: api) }
-                guard let crew = crews.first(where: { $0.id == id }) else { throw CancellationError() }
-                if crew.places.contains(where: { $0.clientId == draft.city.id.uuidString }) {
-                    editCrew(id) { $0.pendingPlaces.removeAll { $0.id == draft.id } }
+                if attempt > 0 { try await refreshTeam(id, api: api) }
+                guard let team = teams.first(where: { $0.id == id }) else { throw CancellationError() }
+                if team.places.contains(where: { $0.clientId == draft.city.id.uuidString }) {
+                    editTeam(id) { $0.pendingPlaces.removeAll { $0.id == draft.id } }
                     break
                 }
-                if let anchor = crew.places.first, anchor.city.grid != draft.city.grid {
+                if let anchor = team.places.first, anchor.city.grid != draft.city.grid {
                     let place = PlaceResult(id: 0, name: draft.city.name, detail: draft.city.detail, kind: "suburb", boundary: draft.city.boundary, area: 0)
                     var rebuilt = try await CityBuilder.build(from: place, walks: [], grid: anchor.city.grid, client: api.client, status: { _ in })
                     rebuilt.id = draft.city.id
-                    let assigned = LoreLibrary.assign(to: crew.cities + [rebuilt]) { city, point in city.shape().contains(city.grid.projection.project(point)) }
+                    let assigned = LoreLibrary.assign(to: team.cities + [rebuilt]) { city, point in city.shape().contains(city.grid.projection.project(point)) }
                     rebuilt.stickers = rebuilt.placeStickers(assigned[rebuilt.id] ?? [])
-                    draft = CrewPendingPlace(city: rebuilt)
+                    draft = TeamPendingPlace(city: rebuilt)
                 }
-                guard generation == dataGeneration, membership == crewMembershipRevision, !Task.isCancelled else { throw CancellationError() }
-                do { _ = try CrewPlaceBounds(city: draft.city) }
+                guard generation == dataGeneration, membership == teamMembershipRevision, !Task.isCancelled else { throw CancellationError() }
+                do { _ = try TeamPlaceBounds(city: draft.city) }
                 catch {
-                    editCrew(id) { $0.pendingPlaces.removeAll { $0.id == draft.id }; $0.syncMessage = error.localizedDescription }
+                    editTeam(id) { $0.pendingPlaces.removeAll { $0.id == draft.id }; $0.syncMessage = error.localizedDescription }
                     throw error
                 }
                 if draft.file == nil || draft.uploadClaimed != true {
                     do { draft.file = try await api.upload(draft.city) }
                     catch {
                         if let coded = error as? ConvexError, coded.code == "INVALID_ARGUMENT" {
-                            editCrew(id) { $0.pendingPlaces.removeAll { $0.id == draft.id }; $0.syncMessage = error.localizedDescription }
+                            editTeam(id) { $0.pendingPlaces.removeAll { $0.id == draft.id }; $0.syncMessage = error.localizedDescription }
                         }
                         throw error
                     }
                     draft.uploadClaimed = true
                 }
-                guard generation == dataGeneration, membership == crewMembershipRevision, !Task.isCancelled else { throw CancellationError() }
-                editCrew(id) { crew in
-                    if let i = crew.pendingPlaces.firstIndex(where: { $0.id == draft.id }) { crew.pendingPlaces[i] = draft }
+                guard generation == dataGeneration, membership == teamMembershipRevision, !Task.isCancelled else { throw CancellationError() }
+                editTeam(id) { team in
+                    if let i = team.pendingPlaces.firstIndex(where: { $0.id == draft.id }) { team.pendingPlaces[i] = draft }
                 }
                 // A place claim must survive a killed app after the server adopts
-                // its file. This writes just the changed crew, once per place.
-                saveCrews()
+                // its file. This writes just the changed team, once per place.
+                saveTeams()
                 do {
-                    _ = try await api.addPlace(id, city: draft.city, file: draft.file!, gridPlaceId: crew.places.first?.id)
-                    guard generation == dataGeneration, membership == crewMembershipRevision, !Task.isCancelled else { throw CancellationError() }
-                    editCrew(id) { $0.pendingPlaces.removeAll { $0.id == draft.id } }
+                    _ = try await api.addPlace(id, city: draft.city, file: draft.file!, gridPlaceId: team.places.first?.id)
+                    guard generation == dataGeneration, membership == teamMembershipRevision, !Task.isCancelled else { throw CancellationError() }
+                    editTeam(id) { $0.pendingPlaces.removeAll { $0.id == draft.id } }
                     break
                 } catch {
                     // Rejected saves discard unused uploads. Expired claims also need a new file.
                     if let error = error as? ConvexError, error.code != nil {
                         draft.file = nil
-                        editCrew(id) { crew in
-                            if let i = crew.pendingPlaces.firstIndex(where: { $0.id == draft.id }) { crew.pendingPlaces[i].file = nil }
+                        editTeam(id) { team in
+                            if let i = team.pendingPlaces.firstIndex(where: { $0.id == draft.id }) { team.pendingPlaces[i].file = nil }
                         }
                         if error.code == "GRID_CHANGED", attempt < 2 { continue }
                         if ["PLACE_LIMIT", "INVALID_ARGUMENT"].contains(error.code ?? "") {
-                            editCrew(id) { $0.pendingPlaces.removeAll { $0.id == draft.id }; $0.syncMessage = error.localizedDescription }
+                            editTeam(id) { $0.pendingPlaces.removeAll { $0.id == draft.id }; $0.syncMessage = error.localizedDescription }
                         }
                     }
                     throw error
@@ -1547,10 +1547,10 @@ extension AppModel {
         }
     }
 
-    func openCrewURL(_ url: URL) {
+    func openTeamURL(_ url: URL) {
         let parts = url.pathComponents.filter { $0 != "/" }
         guard url.scheme?.lowercased() == "walkies", url.host?.lowercased() == "join",
-              parts.count == 1, let raw = parts.first, CrewInviteCode.isValid(CrewInviteCode.normalise(raw)) else { return }
-        pendingCrewInvite = CrewInviteCode.normalise(raw)
+              parts.count == 1, let raw = parts.first, TeamInviteCode.isValid(TeamInviteCode.normalise(raw)) else { return }
+        pendingTeamInvite = TeamInviteCode.normalise(raw)
     }
 }

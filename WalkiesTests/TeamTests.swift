@@ -5,19 +5,19 @@ import Testing
 
 @MainActor
 @Suite(.serialized)
-struct CrewTests {
+struct TeamTests {
     func city(origin: Coordinate = Coordinate(lat: -33.6, lon: 115.4), size: Double = 50) -> City {
         let grid = HexGrid(projection: LocalProjection(origin: origin), size: size)
         let ring = [SIMD2(-200.0, -200), SIMD2(200.0, -200), SIMD2(200.0, 200), SIMD2(-200.0, 200)].map(grid.projection.unproject)
         let boundary = Boundary(polygons: [GeoPolygon(outer: ring, holes: [])])
-        return City(name: "Crew suburb", detail: "Tests", grid: grid, boundary: boundary,
+        return City(name: "Team suburb", detail: "Tests", grid: grid, boundary: boundary,
                     tiles: City.hexes(inside: BoundaryShape(boundary, projection: grid.projection), grid: grid), visited: [], roads: [])
     }
-    func member(_ id: String = "you", sharing: CrewSharing = .tilesAndTrail, walksCount: Bool = true) -> CrewMember {
-        CrewMember(userId: id, name: id == "you" ? "Mike" : "Dad", colour: id == "you" ? "teal" : "blue", sharing: sharing, walksCount: walksCount, joinedAt: 1, isYou: id == "you")
+    func member(_ id: String = "you", sharing: TeamSharing = .tilesAndTrail, walksCount: Bool = true) -> TeamMember {
+        TeamMember(userId: id, name: id == "you" ? "Mike" : "Dad", colour: id == "you" ? "teal" : "blue", sharing: sharing, walksCount: walksCount, joinedAt: 1, isYou: id == "you")
     }
-    func crew(_ city: City) -> CrewMap {
-        CrewMap(id: "crew", name: "Mike & Dad", createdBy: "you", inviteCode: "ABCD2345", members: [member(), member("dad")], places: [CrewPlace(placeId: "place", clientId: city.id.uuidString, city: city)])
+    func team(_ city: City) -> TeamMap {
+        TeamMap(id: "team", name: "Mike & Dad", createdBy: "you", inviteCode: "ABCD2345", members: [member(), member("dad")], places: [TeamPlace(placeId: "place", clientId: city.id.uuidString, city: city)])
     }
     func walk(_ city: City) -> Walk {
         let date = Date(timeIntervalSince1970: 10_000)
@@ -27,16 +27,16 @@ struct CrewTests {
         }
         return Walk(startedAt: date, endedAt: date.addingTimeInterval(180), points: points)
     }
-    func snapshot(_ crew: CrewMap, tiles: [CrewSnapshot.Tile] = [], since: Double = 100, full: Bool = false) -> CrewSnapshot {
-        CrewSnapshot(crew: .init(crewId: crew.id, name: crew.name, createdBy: crew.createdBy, inviteCode: crew.inviteCode, createdAt: 1),
-                     members: crew.members, places: crew.places.map { .init(placeId: $0.id, clientId: $0.clientId, name: $0.city.name, updatedAt: 1, url: nil) },
+    func snapshot(_ team: TeamMap, tiles: [TeamSnapshot.Tile] = [], since: Double = 100, full: Bool = false) -> TeamSnapshot {
+        TeamSnapshot(team: .init(teamId: team.id, name: team.name, createdBy: team.createdBy, inviteCode: team.inviteCode, createdAt: 1),
+                     members: team.members, places: team.places.map { .init(placeId: $0.id, clientId: $0.clientId, name: $0.city.name, updatedAt: 1, url: nil) },
                      tiles: tiles, trails: [], secrets: [], serverTime: since, isFull: full)
     }
-    func store() -> Store { Store(root: URL.temporaryDirectory.appending(path: "CrewTests-\(UUID())")) }
+    func store() -> Store { Store(root: URL.temporaryDirectory.appending(path: "TeamTests-\(UUID())")) }
 
     @Test func visitQueuesOnceWithPersonalGridIndependentAndHonoursSwitch() {
         let city = city()
-        var map = crew(city)
+        var map = team(city)
         let samples = [city.grid.projection.origin]
         #expect(map.visit(samples, at: Date(timeIntervalSince1970: 1)) == 1)
         #expect(map.visit(samples, at: .now) == 0)
@@ -50,10 +50,10 @@ struct CrewTests {
 
     @Test func overlapCountsSharedTilesOnceWhileQueuingEachPlace() {
         let city = city()
-        var map = crew(city)
+        var map = team(city)
         var neighbour = city
         neighbour.id = UUID()
-        map.places.append(CrewPlace(placeId: "overlap", clientId: neighbour.id.uuidString, city: neighbour))
+        map.places.append(TeamPlace(placeId: "overlap", clientId: neighbour.id.uuidString, city: neighbour))
         #expect(map.visit([city.grid.projection.origin], at: .now) == 1)
         #expect(map.pendingTiles.count == 2)
         #expect(map.visit([city.grid.projection.origin], at: .now) == 0)
@@ -61,7 +61,7 @@ struct CrewTests {
 
     @Test func tileBatchesStayBelowBackendLimit() {
         let city = city(size: 5)
-        var map = crew(city)
+        var map = team(city)
         let samples = city.tiles.prefix(1100).map { city.grid.projection.unproject(city.grid.centre(of: $0)) }
         #expect(map.visit(samples, at: .now) == 1100)
         #expect(map.pendingTiles.count == 3)
@@ -72,18 +72,18 @@ struct CrewTests {
         var city = city()
         city.stickers = ["test-secret": Hex(q: 0, r: 0)]
         city.visited = [Hex(q: 0, r: 0)]
-        var map = crew(city)
+        var map = team(city)
         #expect(map.visit([city.grid.projection.origin], at: .now) == 0)
         #expect(map.pendingSecrets["test-secret"] != nil)
         #expect(map.secrets["test-secret"]?.by == "you")
     }
 
-    @Test func replayUsesCrewGridAndNeverChangesOriginalOrPersonalRewards() {
+    @Test func replayUsesTeamGridAndNeverChangesOriginalOrPersonalRewards() {
         let personal = city(size: 50)
         let shared = city(origin: personal.grid.projection.unproject(SIMD2(37, 21)), size: 35)
-        let map = crew(shared)
+        let map = team(shared)
         let walk = walk(personal)
-        let replayed = CrewCoverage.replay(map, walks: [walk])
+        let replayed = TeamCoverage.replay(map, walks: [walk])
         var expected = shared
         _ = expected.visit(CoverageTracer.samples(for: walk.points), within: shared.shape())
         #expect(replayed.places[0].city.visited == expected.visited)
@@ -95,11 +95,11 @@ struct CrewTests {
 
     @Test func newPlaceReplayLeavesExistingPlaceCoverageAlone() {
         let city = city()
-        var map = crew(city)
+        var map = team(city)
         var new = city
         new.id = UUID()
-        map.places.append(CrewPlace(placeId: "new", clientId: new.id.uuidString, city: new))
-        let replayed = CrewCoverage.replay(map, walks: [walk(city)], placeIDs: ["new"])
+        map.places.append(TeamPlace(placeId: "new", clientId: new.id.uuidString, city: new))
+        let replayed = TeamCoverage.replay(map, walks: [walk(city)], placeIDs: ["new"])
         #expect(replayed.places[0].city.visited.isEmpty)
         #expect(!replayed.places[1].city.visited.isEmpty)
         #expect(replayed.pendingTiles.allSatisfy { $0.placeId == "new" })
@@ -107,7 +107,7 @@ struct CrewTests {
 
     @Test func enablingTrailsDoesNotBackfillTilesFromPausedWalks() {
         let city = city()
-        let replayed = CrewCoverage.replay(crew(city), walks: [walk(city)], includeTiles: false)
+        let replayed = TeamCoverage.replay(team(city), walks: [walk(city)], includeTiles: false)
         #expect(replayed.places[0].city.visited.isEmpty)
         #expect(replayed.pendingTiles.isEmpty)
         #expect(!replayed.pendingTrails.isEmpty)
@@ -119,7 +119,7 @@ struct CrewTests {
         let hole = [SIMD2(-20.0, -20), SIMD2(20.0, -20), SIMD2(20.0, 20), SIMD2(-20.0, 20)].map(projection.unproject)
         city.boundary.polygons[0].holes = [hole]
         let run = [-300.0, -100, 100, 300].map { projection.unproject(SIMD2($0, 0)) }
-        let clipped = CrewCoverage.clip([run], to: [city])
+        let clipped = TeamCoverage.clip([run], to: [city])
         #expect(clipped.segments.count == 2)
         for segment in clipped.segments {
             for (a, b) in zip(segment, segment.dropFirst()) {
@@ -132,22 +132,22 @@ struct CrewTests {
     @Test func clippingSupportsDisjointPlacesWithoutConnectingThem() {
         let first = city()
         let second = city(origin: first.grid.projection.unproject(SIMD2(1000, 0)))
-        let route = CrewCoverage.clip([[-400.0, 1400].map { first.grid.projection.unproject(SIMD2($0, 0)) }], to: [first, second])
+        let route = TeamCoverage.clip([[-400.0, 1400].map { first.grid.projection.unproject(SIMD2($0, 0)) }], to: [first, second])
         #expect(route.segments.count == 2)
-        #expect(CrewCoverage.clip(route.segments, to: []).segments.isEmpty)
+        #expect(TeamCoverage.clip(route.segments, to: []).segments.isEmpty)
     }
 
     @Test func drivingAndGPSGapsDoNotProduceSharedConnectingLines() {
         let city = city()
         var route = walk(city)
         route.points[2].wheels = true
-        let shared = CrewCoverage.route(for: route.points, cities: [city])
+        let shared = TeamCoverage.route(for: route.points, cities: [city])
         #expect(!shared.segments.isEmpty)
         for segment in shared.segments {
             let xs = segment.map { city.grid.projection.project($0).x }
             #expect(!(xs.min()! < -10 && xs.max()! > 10))
         }
-        var map = crew(city)
+        var map = team(city)
         map.members[0].sharing = .tiles
         map.queueTrail(route)
         #expect(map.pendingTrails.isEmpty)
@@ -155,7 +155,7 @@ struct CrewTests {
 
     @Test func incrementalMergeRetainsUnionButServerFirstCreditWins() {
         let city = city()
-        var map = crew(city)
+        var map = team(city)
         let zero = Hex(q: 0, r: 0), one = Hex(q: 1, r: 0)
         _ = map.visit([city.grid.projection.origin], at: Date(timeIntervalSince1970: 1))
         var pull = snapshot(map, tiles: [.init(placeId: "place", q: 0, r: 0, by: "dad", at: 9000)])
@@ -166,17 +166,17 @@ struct CrewTests {
         map.merge(pull, cities: [:], trails: [])
         #expect(map.places[0].city.visited == [zero, one])
         #expect(map.since == 101)
-        #expect(map.firstColour(placeId: "place", hex: one) == CrewColour.fallback)
+        #expect(map.firstColour(placeId: "place", hex: one) == TeamColour.fallback)
         #expect(map.memberName("gone") == "Past member")
     }
 
     @Test func snapshotReplacesOptedOutTrailsAndSecretsButKeepsOfflineQueue() {
         let city = city()
-        var map = crew(city)
+        var map = team(city)
         map.queueTrail(walk(city))
         map.secrets["old"] = .init(by: "dad", at: 1)
         map.pendingSecrets["local"] = 2
-        let trail = CrewTrail(walkClientId: "remote", by: "dad", at: 1, route: .init(segments: [[city.grid.projection.origin]]))
+        let trail = TeamTrail(walkClientId: "remote", by: "dad", at: 1, route: .init(segments: [[city.grid.projection.origin]]))
         var pull = snapshot(map)
         pull.members[1].sharing = .tiles
         pull.members[0].sharing = .tiles
@@ -187,62 +187,62 @@ struct CrewTests {
         #expect(map.secrets["local"]?.at == 2)
     }
 
-    @Test func crewFilesRoundTripAndWipe() {
+    @Test func teamFilesRoundTripAndWipe() {
         let store = store()
         defer { store.wipe() }
         let city = city()
-        var map = crew(city)
+        var map = team(city)
         _ = map.visit([city.grid.projection.origin], at: .now)
         map.since = 123
-        store.save(crews: [map])
-        let restored = store.loadCrews()
+        store.save(teams: [map])
+        let restored = store.loadTeams()
         #expect(restored.count == 1)
         #expect(restored.first?.since == 123)
         #expect(restored.first?.pendingTiles.count == 1)
         #expect(restored.first?.places[0].city.visited == map.places[0].city.visited)
         store.wipe()
-        #expect(store.loadCrews().isEmpty)
+        #expect(store.loadTeams().isEmpty)
     }
 
-    @Test func selectingCrewDoesNotChangePersonalCloudsOrShellInputsAndLinksAreParsed() async {
+    @Test func selectingTeamDoesNotChangePersonalCloudsOrShellInputsAndLinksAreParsed() async {
         let store = store()
         defer { store.wipe() }
         let personal = city()
         let shared = city(origin: personal.grid.projection.unproject(SIMD2(5000, 0)))
         store.save([personal])
-        store.save(crews: [crew(shared)])
+        store.save(teams: [team(shared)])
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
         let before = model.balance
-        model.currentCrewID = "crew"
+        model.currentTeamID = "team"
         #expect(model.mapCities[0].id == shared.id)
         #expect(model.cities[0].id == personal.id)
         #expect(model.balance == before)
-        model.openCrewURL(URL(string: "walkies://join/abcd2345")!)
-        #expect(model.pendingCrewInvite == "ABCD2345")
-        model.openCrewURL(URL(string: "walkies://signed-in?code=nope")!)
-        #expect(model.pendingCrewInvite == "ABCD2345")
+        model.openTeamURL(URL(string: "walkies://join/abcd2345")!)
+        #expect(model.pendingTeamInvite == "ABCD2345")
+        model.openTeamURL(URL(string: "walkies://signed-in?code=nope")!)
+        #expect(model.pendingTeamInvite == "ABCD2345")
         model.wipeLocalData()
-        #expect(model.crews.isEmpty)
-        #expect(model.currentCrewID == nil)
+        #expect(model.teams.isEmpty)
+        #expect(model.currentTeamID == nil)
     }
 }
 
-extension CrewTests {
+extension TeamTests {
     @Test func walkingContributesToEveryEnabledMapRegardlessOfSelection() async {
         let store = store()
         let personal = city()
         let shared = city(origin: personal.grid.projection.unproject(SIMD2(27, 10)), size: 35)
-        var enabled = crew(shared)
+        var enabled = team(shared)
         enabled.replayedPlaces = ["place"]
         var paused = enabled
         paused.id = "paused"
         paused.members[0].walksCount = false
         store.save([personal])
-        store.save(crews: [enabled, paused])
+        store.save(teams: [enabled, paused])
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
-        model.currentCrewID = "paused"
+        model.currentTeamID = "paused"
         model.startWalk()
         for (n, x) in [-80.0, -30, 20, 70].enumerated() {
             let c = personal.grid.projection.unproject(SIMD2(x, 0))
@@ -250,45 +250,45 @@ extension CrewTests {
                                                 course: 90, speed: 1, timestamp: Date.now.addingTimeInterval(Double(n) * 40)))
         }
         #expect(!model.cities[0].visited.isEmpty)
-        #expect(!model.crews[0].places[0].city.visited.isEmpty)
-        #expect(!model.crews[0].pendingTiles.isEmpty)
-        #expect(model.crews[1].places[0].city.visited.isEmpty)
-        #expect(model.crews[1].pendingTiles.isEmpty)
+        #expect(!model.teams[0].places[0].city.visited.isEmpty)
+        #expect(!model.teams[0].pendingTiles.isEmpty)
+        #expect(model.teams[1].places[0].city.visited.isEmpty)
+        #expect(model.teams[1].pendingTiles.isEmpty)
         model.endWalk()
-        #expect(model.recap?.crewGains.first?.name == "Mike & Dad")
-        #expect((model.recap?.crewGains.first?.tiles ?? 0) > 0)
-        #expect(model.walks[0].crewTiles?["crew"] == model.recap?.crewGains.first?.tiles)
+        #expect(model.recap?.teamGains.first?.name == "Mike & Dad")
+        #expect((model.recap?.teamGains.first?.tiles ?? 0) > 0)
+        #expect(model.walks[0].teamTiles?["team"] == model.recap?.teamGains.first?.tiles)
         model.wipeLocalData()
     }
 
     @Test func routeClippingWorkSurvivesRelaunch() async {
         let store = store()
         let city = city()
-        var map = crew(city)
+        var map = team(city)
         map.routeWork = [walk(city)]
-        store.save(crews: [map])
+        store.save(teams: [map])
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
-        await model.prepareCrewRoutes()
-        #expect(model.crews[0].routeWork.isEmpty)
-        #expect(model.crews[0].pendingTrails.count == 1)
-        #expect(store.loadCrews()[0].pendingTrails.count == 1)
+        await model.prepareTeamRoutes()
+        #expect(model.teams[0].routeWork.isEmpty)
+        #expect(model.teams[0].pendingTrails.count == 1)
+        #expect(store.loadTeams()[0].pendingTrails.count == 1)
         model.wipeLocalData()
     }
 
-    @Test func interruptedManualWalkStillQueuesItsCrewTrailOnLaunch() async {
+    @Test func interruptedManualWalkStillQueuesItsTeamTrailOnLaunch() async {
         let store = store()
         let city = city()
         var interrupted = walk(city)
         interrupted.endedAt = nil
         store.save(interrupted)
-        store.save(crews: [crew(city)])
+        store.save(teams: [team(city)])
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
-        #expect(model.crews[0].routeWork.count == 1)
-        await model.prepareCrewRoutes()
-        #expect(model.crews[0].pendingTrails.count == 1)
-        #expect(model.crews[0].pendingTrails[0].walkClientId == interrupted.id.uuidString)
+        #expect(model.teams[0].routeWork.count == 1)
+        await model.prepareTeamRoutes()
+        #expect(model.teams[0].pendingTrails.count == 1)
+        #expect(model.teams[0].pendingTrails[0].walkClientId == interrupted.id.uuidString)
         model.wipeLocalData()
     }
 
@@ -303,20 +303,20 @@ extension CrewTests {
     }
 
     @Test func inviteCodesAndActionKindsMatchCurrentContract() async throws {
-        #expect(CrewInviteCode.isValid(CrewInviteCode.normalise(" abcd2345 ")))
-        #expect(!CrewInviteCode.isValid("ABC234"))
-        #expect(!CrewInviteCode.isValid("ABCI2345"))
-        let server = CrewHTTPServer(map: crew(city()))
-        CrewHTTPProtocol.server = server
-        defer { CrewHTTPProtocol.server = nil }
+        #expect(TeamInviteCode.isValid(TeamInviteCode.normalise(" abcd2345 ")))
+        #expect(!TeamInviteCode.isValid("ABC234"))
+        #expect(!TeamInviteCode.isValid("ABCI2345"))
+        let server = TeamHTTPServer(map: team(city()))
+        TeamHTTPProtocol.server = server
+        defer { TeamHTTPProtocol.server = nil }
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [CrewHTTPProtocol.self]
-        let api = CrewsAPI(client: ConvexClient(session: URLSession(configuration: configuration)))
-        #expect(try await api.create(name: "Crew", colour: "teal", sharing: .tiles).inviteCode == "ABCD2345")
-        #expect(try await api.join(code: "ABCD2345", colour: "teal", sharing: .tiles) == "crew")
-        #expect(try await api.newInviteCode("crew") == "EFGH2345")
-        try await api.remove("crew", userId: "dad")
-        for code in ["RATE_LIMITED", "MEMBER_REMOVED", "CREW_FULL", "NOT_A_MEMBER"] {
+        configuration.protocolClasses = [TeamHTTPProtocol.self]
+        let api = TeamsAPI(client: ConvexClient(session: URLSession(configuration: configuration)))
+        #expect(try await api.create(name: "Team", colour: "teal", sharing: .tiles).inviteCode == "ABCD2345")
+        #expect(try await api.join(code: "ABCD2345", colour: "teal", sharing: .tiles) == "team")
+        #expect(try await api.newInviteCode("team") == "EFGH2345")
+        try await api.remove("team", userId: "dad")
+        for code in ["RATE_LIMITED", "MEMBER_REMOVED", "TEAM_FULL", "NOT_A_MEMBER"] {
             let message = ConvexError.coded(code, "Raw backend message").localizedDescription
             #expect(!message.contains("Raw backend"))
         }
@@ -324,7 +324,7 @@ extension CrewTests {
 
     @Test func trailVersionsSurviveRetriesChangesAndLegacySavesAndRespectCap() throws {
         let city = city()
-        var map = crew(city)
+        var map = team(city)
         let walk = walk(city)
         map.queueTrail(walk)
         let first = map.pendingTrails[0]
@@ -332,14 +332,14 @@ extension CrewTests {
         map.queueTrail(walk)
         #expect(map.pendingTrails[0].updatedAt == first.updatedAt)
         #expect(map.pendingTrails[0].file == "claimed")
-        let route = CrewRoute(segments: [[Coordinate(lat: 1, lon: 1), Coordinate(lat: 2, lon: 2)]])
+        let route = TeamRoute(segments: [[Coordinate(lat: 1, lon: 1), Coordinate(lat: 2, lon: 2)]])
         map.queueRoute(route, walkClientId: first.id)
         #expect(map.pendingTrails[0].updatedAt > first.updatedAt)
         #expect(map.pendingTrails[0].file == nil)
-        let restored = try JSONDecoder().decode(CrewMap.self, from: JSONEncoder().encode(map))
+        let restored = try JSONDecoder().decode(TeamMap.self, from: JSONEncoder().encode(map))
         #expect(restored.pendingTrails[0].updatedAt == map.pendingTrails[0].updatedAt)
         let legacy = Data(#"{"walkClientId":"old","route":{"segments":[]},"file":"personal-upload"}"#.utf8)
-        let migrated = try JSONDecoder().decode(CrewPendingTrail.self, from: legacy)
+        let migrated = try JSONDecoder().decode(TeamPendingTrail.self, from: legacy)
         #expect(migrated.file == nil)
         #expect(migrated.updatedAt.isFinite)
         for n in 0..<100 { map.queueRoute(route, walkClientId: "walk-\(n)") }
@@ -352,42 +352,42 @@ extension CrewTests {
         var city = city()
         let inside = city.tiles
         city.tiles = [Hex(q: 0, r: 0)]
-        let bounds = try CrewPlaceBounds(city: city)
+        let bounds = try TeamPlaceBounds(city: city)
         #expect(inside.allSatisfy { $0.q >= bounds.minQ && $0.q <= bounds.maxQ && $0.r >= bounds.minR && $0.r <= bounds.maxR })
         city.tiles.insert(Hex(q: 1_000_001, r: 0))
-        #expect(throws: (any Error).self) { try CrewPlaceBounds(city: city) }
+        #expect(throws: (any Error).self) { try TeamPlaceBounds(city: city) }
     }
 
     @Test func snapshotPagingIsAtomicOnFailureAndKeepsExactCursor() async throws {
         let store = store()
         defer { store.wipe() }
         let city = city()
-        var local = crew(city)
+        var local = team(city)
         local.since = 90
         local.replayedPlaces = ["place"]
-        local.trails = [CrewTrail(walkClientId: "walk", by: "you", at: 1, route: CrewRoute(segments: []))]
-        store.save(crews: [local])
-        let server = CrewHTTPServer(map: crew(city))
+        local.trails = [TeamTrail(walkClientId: "walk", by: "you", at: 1, route: TeamRoute(segments: []))]
+        store.save(teams: [local])
+        let server = TeamHTTPServer(map: team(city))
         await server.configurePaging(fail: true)
-        CrewHTTPProtocol.server = server
-        defer { CrewHTTPProtocol.server = nil }
+        TeamHTTPProtocol.server = server
+        defer { TeamHTTPProtocol.server = nil }
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [CrewHTTPProtocol.self]
-        let api = CrewsAPI(client: ConvexClient(session: URLSession(configuration: configuration)))
+        configuration.protocolClasses = [TeamHTTPProtocol.self]
+        let api = TeamsAPI(client: ConvexClient(session: URLSession(configuration: configuration)))
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
-        do { try await model.refreshCrew("crew", api: api); Issue.record("Expected page failure") } catch { }
-        #expect(model.crews[0].since == 90)
-        #expect(store.loadCrews()[0].since == 90)
-        #expect(model.crews[0].places[0].city.visited.isEmpty)
-        #expect(model.crews[0].trails.isEmpty)
+        do { try await model.refreshTeam("team", api: api); Issue.record("Expected page failure") } catch { }
+        #expect(model.teams[0].since == 90)
+        #expect(store.loadTeams()[0].since == 90)
+        #expect(model.teams[0].places[0].city.visited.isEmpty)
+        #expect(model.teams[0].trails.isEmpty)
         await server.configurePaging(fail: false)
-        try await model.refreshCrew("crew", api: api)
-        #expect(model.crews[0].places[0].city.visited.count == 2001)
-        #expect(store.loadCrews()[0].since == 200)
-        #expect(model.crews[0].name == "Last page")
+        try await model.refreshTeam("team", api: api)
+        #expect(model.teams[0].places[0].city.visited.count == 2001)
+        #expect(store.loadTeams()[0].since == 200)
+        #expect(model.teams[0].name == "Last page")
         // Initial full sync also echoes cursor.since as explicit JSON null.
-        let full = try await api.snapshot("crew", since: nil)
+        let full = try await api.snapshot("team", since: nil)
         #expect(full.isFull && full.tiles.count == 2001)
     }
 
@@ -396,21 +396,21 @@ extension CrewTests {
         defer { store.wipe() }
         let original = city()
         let winning = city(origin: original.grid.projection.unproject(SIMD2(37, 21)), size: 35)
-        var local = crew(original)
+        var local = team(original)
         local.places = []
-        local.pendingPlaces = [CrewPendingPlace(city: original)]
-        store.save(crews: [local])
-        let server = CrewHTTPServer(map: crew(winning))
+        local.pendingPlaces = [TeamPendingPlace(city: original)]
+        store.save(teams: [local])
+        let server = TeamHTTPServer(map: team(winning))
         await server.configureRace()
-        CrewHTTPProtocol.server = server
-        defer { CrewHTTPProtocol.server = nil }
+        TeamHTTPProtocol.server = server
+        defer { TeamHTTPProtocol.server = nil }
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [CrewHTTPProtocol.self]
-        let api = CrewsAPI(client: ConvexClient(session: URLSession(configuration: configuration)))
+        configuration.protocolClasses = [TeamHTTPProtocol.self]
+        let api = TeamsAPI(client: ConvexClient(session: URLSession(configuration: configuration)))
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
-        try await model.uploadCrewPlaces("crew", api: api)
-        #expect(model.crews[0].pendingPlaces.isEmpty)
+        try await model.uploadTeamPlaces("team", api: api)
+        #expect(model.teams[0].pendingPlaces.isEmpty)
         #expect(await server.uploadCalls == 2)
         #expect(await server.placeClientIDs == [original.id.uuidString, original.id.uuidString])
         let data = try #require(await server.routeFile)
@@ -423,28 +423,28 @@ extension CrewTests {
     @Test func placeRetryReusesClientAndStorageIDsAfterLostReply() async throws {
         let store = store()
         let city = city()
-        var map = crew(city)
+        var map = team(city)
         var draft = city
         draft.id = UUID()
-        map.pendingPlaces = [CrewPendingPlace(city: draft)]
-        store.save(crews: [map])
-        let server = CrewHTTPServer(map: crew(city))
-        CrewHTTPProtocol.server = server
-        defer { CrewHTTPProtocol.server = nil }
+        map.pendingPlaces = [TeamPendingPlace(city: draft)]
+        store.save(teams: [map])
+        let server = TeamHTTPServer(map: team(city))
+        TeamHTTPProtocol.server = server
+        defer { TeamHTTPProtocol.server = nil }
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [CrewHTTPProtocol.self]
-        let api = CrewsAPI(client: ConvexClient(token: nil, session: URLSession(configuration: configuration)))
+        configuration.protocolClasses = [TeamHTTPProtocol.self]
+        let api = TeamsAPI(client: ConvexClient(token: nil, session: URLSession(configuration: configuration)))
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
         do {
-            try await model.uploadCrewPlaces("crew", api: api)
+            try await model.uploadTeamPlaces("team", api: api)
             Issue.record("The first place reply should have been lost")
         } catch { }
-        #expect(model.crews[0].pendingPlaces[0].file == "crew-route-file")
-        #expect(store.loadCrews()[0].pendingPlaces[0].city.id == draft.id)
-        #expect(store.loadCrews()[0].pendingPlaces[0].file == "crew-route-file")
-        try await model.uploadCrewPlaces("crew", api: api)
-        #expect(model.crews[0].pendingPlaces.isEmpty)
+        #expect(model.teams[0].pendingPlaces[0].file == "team-route-file")
+        #expect(store.loadTeams()[0].pendingPlaces[0].city.id == draft.id)
+        #expect(store.loadTeams()[0].pendingPlaces[0].file == "team-route-file")
+        try await model.uploadTeamPlaces("team", api: api)
+        #expect(model.teams[0].pendingPlaces.isEmpty)
         #expect(await server.uploadCalls == 1)
         #expect(await server.placeClientIDs == [draft.id.uuidString, draft.id.uuidString])
         let data = try #require(await server.routeFile)
@@ -456,38 +456,38 @@ extension CrewTests {
         let store = store()
         defer { store.wipe() }
         let city = city()
-        var local = crew(city)
+        var local = team(city)
         local.replayedPlaces = ["place"]
         local.queueTrail(walk(city))
         let version = local.pendingTrails[0].updatedAt
-        store.save(crews: [local])
-        let server = CrewHTTPServer(map: crew(city))
+        store.save(teams: [local])
+        let server = TeamHTTPServer(map: team(city))
         await server.expireNextTrail()
-        CrewHTTPProtocol.server = server
-        defer { CrewHTTPProtocol.server = nil }
+        TeamHTTPProtocol.server = server
+        defer { TeamHTTPProtocol.server = nil }
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [CrewHTTPProtocol.self]
+        configuration.protocolClasses = [TeamHTTPProtocol.self]
         let client = ConvexClient(session: URLSession(configuration: configuration))
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
         let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, makeClient: { client })
         await engine.sync()
-        #expect(model.crews[0].pendingTrails[0].file == nil)
-        #expect(store.loadCrews()[0].pendingTrails[0].updatedAt == version)
+        #expect(model.teams[0].pendingTrails[0].file == nil)
+        #expect(store.loadTeams()[0].pendingTrails[0].updatedAt == version)
         await engine.sync()
         #expect(await server.uploadCalls == 2)
-        #expect(model.crews[0].pendingTrails.isEmpty)
+        #expect(model.teams[0].pendingTrails.isEmpty)
         #expect(engine.status == .idle)
         await server.rejectContributions()
-        model.editCrew("crew") { crew in
-            _ = crew.visit([city.grid.projection.origin], at: .now)
-            crew.pendingSecrets["limit"] = Date.now.ms
-            crew.queueRoute(CrewRoute(segments: [[Coordinate(lat: 0, lon: 0), Coordinate(lat: 1, lon: 1)]]), walkClientId: "extra")
+        model.editTeam("team") { team in
+            _ = team.visit([city.grid.projection.origin], at: .now)
+            team.pendingSecrets["limit"] = Date.now.ms
+            team.queueRoute(TeamRoute(segments: [[Coordinate(lat: 0, lon: 0), Coordinate(lat: 1, lon: 1)]]), walkClientId: "extra")
         }
         await engine.sync()
-        #expect(model.crews[0].waiting == 0)
-        #expect(model.crews[0].syncMessage != nil)
-        #expect(model.crews[0].places[0].city.visited.isEmpty)
+        #expect(model.teams[0].waiting == 0)
+        #expect(model.teams[0].syncMessage != nil)
+        #expect(model.teams[0].places[0].city.visited.isEmpty)
         let calls = await server.trailCalls
         await engine.sync()
         #expect(await server.trailCalls == calls)
@@ -497,75 +497,75 @@ extension CrewTests {
         let store = store()
         defer { store.wipe() }
         let city = city()
-        var local = crew(city)
+        var local = team(city)
         local.places[0].city.stickers = ["secret": Hex(q: 0, r: 0)]
         local.replayedPlaces = ["place"]
         _ = local.visit([city.grid.projection.origin], at: Date(timeIntervalSince1970: 50))
         local.queueTrail(walk(city))
-        store.save(crews: [local])
-        let server = CrewHTTPServer(map: crew(city))
-        CrewHTTPProtocol.server = server
-        defer { CrewHTTPProtocol.server = nil }
+        store.save(teams: [local])
+        let server = TeamHTTPServer(map: team(city))
+        TeamHTTPProtocol.server = server
+        defer { TeamHTTPProtocol.server = nil }
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [CrewHTTPProtocol.self]
+        configuration.protocolClasses = [TeamHTTPProtocol.self]
         let client = ConvexClient(token: "mock", session: URLSession(configuration: configuration))
-        let invalidInvite = try await CrewsAPI(client: client).preview("BAD23456")
+        let invalidInvite = try await TeamsAPI(client: client).preview("BAD23456")
         #expect(invalidInvite == nil)
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
         let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, makeClient: { client })
         await engine.sync()
         #expect(engine.status != .idle)
-        #expect(model.crews[0].pendingTiles.count == 1)
+        #expect(model.teams[0].pendingTiles.count == 1)
         #expect(await server.tileCalls == 1)
         await engine.sync()
         #expect(engine.status == .idle)
-        #expect(model.crews[0].waiting == 0)
+        #expect(model.teams[0].waiting == 0)
         #expect(await server.tileCalls == 2)
         #expect(await server.savedTileCount == 1)
         #expect(await server.savedSecrets == ["secret"])
         #expect(await server.trailCalls == 1)
         #expect(await server.sinceValues.contains(101))
-        #expect(model.crews[0].trails.count == 1)
-        let restored = try #require(store.loadCrews().first)
+        #expect(model.teams[0].trails.count == 1)
+        let restored = try #require(store.loadTeams().first)
         #expect(restored.since == 101)
         #expect(restored.pendingTiles.isEmpty)
         let uploaded = try #require(await server.routeFile)
-        let clipped = try JSONDecoder().decode(CrewRoute.self, from: uploaded)
+        let clipped = try JSONDecoder().decode(TeamRoute.self, from: uploaded)
         #expect(!clipped.segments.isEmpty)
         #expect(clipped.segments.flatMap { $0 }.allSatisfy { abs(city.grid.projection.project($0).x) <= 200.01 })
         await server.disableTrails()
         await engine.sync()
-        #expect(model.crews[0].trails.isEmpty)
-        #expect(model.crews[0].pendingTrails.isEmpty)
+        #expect(model.teams[0].trails.isEmpty)
+        #expect(model.teams[0].pendingTrails.isEmpty)
         #expect(await server.trailCalls == 1)
         engine.reset()
     }
 }
 
-extension CrewTests {
+extension TeamTests {
     func fix(_ model: AppModel, city: City, x: Double, seconds: Double) {
         let c = city.grid.projection.unproject(SIMD2(x, 0))
         model.tracker.onLocation?(CLLocation(coordinate: c.cl, altitude: 0, horizontalAccuracy: 5, verticalAccuracy: 5,
                                             course: 90, speed: 1, timestamp: Date.now.addingTimeInterval(seconds)))
     }
 
-    @Test func crewOnlySecretsNeverEnterPersonalBookOrAwardShells() async throws {
+    @Test func teamOnlySecretsNeverEnterPersonalBookOrAwardShells() async throws {
         let store = store()
         defer { store.wipe() }
         var shared = city()
         let entry = try #require(LoreLibrary.all.first)
         shared.stickers = [entry.id: Hex(q: 0, r: 0)]
-        var map = crew(shared)
+        var map = team(shared)
         map.replayedPlaces = ["place"]
-        store.save(crews: [map])
+        store.save(teams: [map])
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
         let balance = model.balance, xp = model.xp
         model.startWalk()
         fix(model, city: shared, x: -60, seconds: 0)
         fix(model, city: shared, x: 60, seconds: 80)
-        #expect(model.crews[0].secrets[entry.id]?.by == "you")
+        #expect(model.teams[0].secrets[entry.id]?.by == "you")
         #expect(model.foundStickers.isEmpty)
         #expect(model.stickerQueue.isEmpty)
         #expect(model.balance == balance)
@@ -575,17 +575,17 @@ extension CrewTests {
         #expect(store.loadStickers().isEmpty)
     }
 
-    @Test func fixesThrottleCrewFilesAndOnlyChangedCrewIsWritten() async throws {
-        let root = URL.temporaryDirectory.appending(path: "CrewSaveTest-\(UUID())")
+    @Test func fixesThrottleTeamFilesAndOnlyChangedTeamIsWritten() async throws {
+        let root = URL.temporaryDirectory.appending(path: "TeamSaveTest-\(UUID())")
         let store = Store(root: root)
         defer { store.wipe() }
         let shared = city()
-        var first = crew(shared)
+        var first = team(shared)
         first.replayedPlaces = ["place"]
-        var second = crew(city(origin: Coordinate(lat: -34, lon: 116)))
+        var second = team(city(origin: Coordinate(lat: -34, lon: 116)))
         second.id = "other"
-        store.save(crews: [first, second])
-        func file(_ id: String) -> URL { root.appending(path: "crews/\(Data(id.utf8).base64EncodedString()).json") }
+        store.save(teams: [first, second])
+        func file(_ id: String) -> URL { root.appending(path: "teams/\(Data(id.utf8).base64EncodedString()).json") }
         let otherFile = file("other")
         // Valid trailing whitespace makes an unexpected rewrite detectable.
         var otherBytes = try Data(contentsOf: otherFile)
@@ -595,50 +595,50 @@ extension CrewTests {
         await model.waitForHistory()
         model.startWalk()
         model.saveNow()
-        let before = try Data(contentsOf: file("crew"))
+        let before = try Data(contentsOf: file("team"))
         for (i, x) in [-100.0, -50, 0, 50, 100].enumerated() { fix(model, city: shared, x: x, seconds: Double(i) * 40) }
-        #expect(!model.crews[0].pendingTiles.isEmpty)
-        #expect(try Data(contentsOf: file("crew")) == before)
+        #expect(!model.teams[0].pendingTiles.isEmpty)
+        #expect(try Data(contentsOf: file("team")) == before)
         model.saveNow()
-        #expect(!store.loadCrews()[0].pendingTiles.isEmpty)
+        #expect(!store.loadTeams()[0].pendingTiles.isEmpty)
         #expect(try Data(contentsOf: otherFile) == otherBytes)
         model.endWalk()
     }
 
-    @Test func queueEditsDoNotInvalidatePersonalOrCrewCloudsAndTintsRefreshWithTiles() async {
+    @Test func queueEditsDoNotInvalidatePersonalOrTeamCloudsAndTintsRefreshWithTiles() async {
         let store = store()
         defer { store.wipe() }
         let shared = city()
         let personal = city(origin: Coordinate(lat: -34, lon: 116))
         store.save([personal])
-        store.save(crews: [crew(shared)])
+        store.save(teams: [team(shared)])
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
         let personalKey = model.cloudKey
-        model.editCrew("crew") { _ = $0.visit([shared.grid.projection.origin], at: .now) }
+        model.editTeam("team") { _ = $0.visit([shared.grid.projection.origin], at: .now) }
         #expect(model.cloudKey == personalKey)
-        model.currentCrewID = "crew"
+        model.currentTeamID = "team"
         let tint = CloudField.Tile(grid: shared.grid, hex: Hex(q: 0, r: 0))
-        #expect(model.crewTints[tint] == "teal")
-        let crewKey = model.cloudKey
-        model.editCrew("crew") { $0.pendingTiles = [] }
-        #expect(model.cloudKey == crewKey)
-        #expect(model.crewTints[tint] == "teal")
+        #expect(model.teamTints[tint] == "teal")
+        let teamKey = model.cloudKey
+        model.editTeam("team") { $0.pendingTiles = [] }
+        #expect(model.cloudKey == teamKey)
+        #expect(model.teamTints[tint] == "teal")
         model.startWalk()
         fix(model, city: personal, x: -100, seconds: 0)
         fix(model, city: personal, x: 0, seconds: 80)
-        #expect(model.cloudKey == crewKey)
+        #expect(model.cloudKey == teamKey)
         model.endWalk()
-        #expect(model.cloudKey == crewKey)
-        model.setCrewPreferences("crew", colour: "orange", sharing: .tiles, walksCount: true)
-        #expect(model.crewTints[tint] == "orange")
-        model.editCrew("crew", mapChanged: true) { $0.places[0].first[Hex(q: 1, r: 0)] = CrewDiscovery(by: "dad", at: 1) }
-        #expect(model.cloudKey != crewKey)
-        #expect(model.crewTints[CloudField.Tile(grid: shared.grid, hex: Hex(q: 1, r: 0))] == "blue")
+        #expect(model.cloudKey == teamKey)
+        model.setTeamPreferences("team", colour: "orange", sharing: .tiles, walksCount: true)
+        #expect(model.teamTints[tint] == "orange")
+        model.editTeam("team", mapChanged: true) { $0.places[0].first[Hex(q: 1, r: 0)] = TeamDiscovery(by: "dad", at: 1) }
+        #expect(model.cloudKey != teamKey)
+        #expect(model.teamTints[CloudField.Tile(grid: shared.grid, hex: Hex(q: 1, r: 0))] == "blue")
     }
 
     @Test func secondInviteReplacesFirstAndRejectsItsLatePreview() {
-        var draft = CrewInviteDraft()
+        var draft = TeamInviteDraft()
         draft.replace(with: "ABCD2345")
         let first = draft.receive(.init(name: "First", memberNames: []), for: "ABCD2345")
         #expect(first)
@@ -656,10 +656,10 @@ extension CrewTests {
         let shared = city()
         var walks = (0..<20).map { _ in walk(shared) }
         for i in walks.indices { walks[i].startedAt += Double(i) }
-        let replayed = CrewCoverage.replay(crew(shared), walks: walks)
+        let replayed = TeamCoverage.replay(team(shared), walks: walks)
         #expect(replayed.pendingTiles.count == 1)
         #expect(Set(replayed.pendingTiles.flatMap(\.hexes)).count == replayed.places[0].city.visited.count)
-        #expect(CrewCoverage.route(for: walks[0].points, cities: [shared]).segments.count == 1)
+        #expect(TeamCoverage.route(for: walks[0].points, cities: [shared]).segments.count == 1)
     }
 
     @Test func packedReplayKeepsEachTileDiscoveryDate() {
@@ -668,7 +668,7 @@ extension CrewTests {
         first.points = Array(first.points.prefix(2))
         second.startedAt += 1000
         second.points = Array(second.points.suffix(2))
-        let replayed = CrewCoverage.replay(crew(shared), walks: [first, second])
+        let replayed = TeamCoverage.replay(team(shared), walks: [first, second])
         #expect(replayed.pendingTiles.count == 1)
         let batch = replayed.pendingTiles[0]
         #expect(batch.discoveredAt?.count == batch.hexes.count)
@@ -682,30 +682,30 @@ extension CrewTests {
         let store = store()
         defer { store.wipe() }
         let shared = city()
-        var map = crew(shared)
+        var map = team(shared)
         _ = map.visit([shared.grid.projection.origin], at: .now)
         map.pendingSecrets["secret"] = 1
         map.queueTrail(walk(shared))
         map.routeWork = [walk(shared)]
-        store.save(crews: [map])
+        store.save(teams: [map])
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
         model.startWalk()
         let pausedWalkID = model.activeWalk?.id
-        model.setCrewPreferences("crew", colour: "teal", sharing: .tilesAndTrail, walksCount: false)
-        #expect(model.crews[0].waiting == 0)
-        #expect(model.crews[0].replayedPlaces == ["place"])
-        #expect(model.crews[0].excludedWalks?.contains(pausedWalkID!) == true)
+        model.setTeamPreferences("team", colour: "teal", sharing: .tilesAndTrail, walksCount: false)
+        #expect(model.teams[0].waiting == 0)
+        #expect(model.teams[0].replayedPlaces == ["place"])
+        #expect(model.teams[0].excludedWalks?.contains(pausedWalkID!) == true)
         for (i, x) in [-100.0, -50, 0, 50, 100].enumerated() { fix(model, city: shared, x: x, seconds: Double(i) * 40) }
         model.endWalk()
-        #expect(model.crews[0].waiting == 0)
-        model.setCrewPreferences("crew", colour: "teal", sharing: .tilesAndTrail, walksCount: true)
-        await model.replayCrewHistory("crew", forceTrails: true)
-        #expect(model.crews[0].waiting == 0)
-        #expect(store.loadCrews()[0].excludedWalks?.contains(pausedWalkID!) == true)
-        var paused = crew(shared)
+        #expect(model.teams[0].waiting == 0)
+        model.setTeamPreferences("team", colour: "teal", sharing: .tilesAndTrail, walksCount: true)
+        await model.replayTeamHistory("team", forceTrails: true)
+        #expect(model.teams[0].waiting == 0)
+        #expect(store.loadTeams()[0].excludedWalks?.contains(pausedWalkID!) == true)
+        var paused = team(shared)
         paused.members[0].walksCount = false
-        let replayed = CrewCoverage.replay(paused, walks: [walk(shared)])
+        let replayed = TeamCoverage.replay(paused, walks: [walk(shared)])
         #expect(replayed.replayedPlaces == ["place"])
         #expect(replayed.waiting == 0)
     }
@@ -714,18 +714,18 @@ extension CrewTests {
         let store = store()
         defer { store.wipe() }
         let shared = city()
-        var map = crew(shared)
+        var map = team(shared)
         map.members[0].sharing = .tiles
-        store.save(crews: [map])
+        store.save(teams: [map])
         for _ in 0..<30 { store.save(walk(shared)) }
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
-        async let first: Void = model.replayCrewHistory("crew")
-        async let second: Void = model.replayCrewHistory("crew")
+        async let first: Void = model.replayTeamHistory("team")
+        async let second: Void = model.replayTeamHistory("team")
         _ = await (first, second)
-        #expect(model.crews[0].pendingTiles.count == 1)
-        #expect(model.crews[0].pendingTrails.isEmpty)
-        #expect(model.crews[0].routeWork.isEmpty)
+        #expect(model.teams[0].pendingTiles.count == 1)
+        #expect(model.teams[0].pendingTrails.isEmpty)
+        #expect(model.teams[0].routeWork.isEmpty)
     }
 
     @Test func switchingMapsRestoresEachSelectionAndBlocksPersonalSpyglasses() async {
@@ -733,19 +733,19 @@ extension CrewTests {
         defer { store.wipe() }
         let first = city(), second = city(origin: Coordinate(lat: -34, lon: 116))
         store.save([first, second])
-        store.save(crews: [crew(city())])
+        store.save(teams: [team(city())])
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
-        model.currentCrewID = nil
+        model.currentTeamID = nil
         model.select(second.id)
-        model.currentCrewID = "crew"
-        let crewSelection = model.selectedCityID
+        model.currentTeamID = "team"
+        let teamSelection = model.selectedCityID
         #expect(model.activeSpyglassRing == nil)
         #expect(!model.useSpyglass())
-        model.currentCrewID = nil
+        model.currentTeamID = nil
         #expect(model.selectedCityID == second.id)
-        model.currentCrewID = "crew"
-        #expect(model.selectedCityID == crewSelection)
+        model.currentTeamID = "team"
+        #expect(model.selectedCityID == teamSelection)
     }
 
     @Test func staleListsAndSnapshotsCannotUndoJoinOrLeaveAndRemovalShowsMessage() async {
@@ -753,16 +753,16 @@ extension CrewTests {
         defer { store.wipe() }
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
-        let revision = model.crewMembershipRevision
-        model.joinedCrew("crew")
-        #expect(!model.acceptCrewList([], revision: revision))
-        #expect(model.crews.map(\.id) == ["crew"])
-        model.retainCrews([])
-        model.applyCrew(snapshot(crew(city())), cities: [:], trails: [])
-        #expect(model.crews.isEmpty)
-        model.joinedCrew("crew")
-        #expect(model.acceptCrewList([], revision: model.crewMembershipRevision))
-        #expect(model.crewNotice != nil)
+        let revision = model.teamMembershipRevision
+        model.joinedTeam("team")
+        #expect(!model.acceptTeamList([], revision: revision))
+        #expect(model.teams.map(\.id) == ["team"])
+        model.retainTeams([])
+        model.applyTeam(snapshot(team(city())), cities: [:], trails: [])
+        #expect(model.teams.isEmpty)
+        model.joinedTeam("team")
+        #expect(model.acceptTeamList([], revision: model.teamMembershipRevision))
+        #expect(model.teamNotice != nil)
     }
 
     @Test func joinReplaysActivePrefixAndCreditsItWithoutSharingUnfinishedTrail() async {
@@ -774,77 +774,77 @@ extension CrewTests {
         model.startWalk()
         fix(model, city: shared, x: -100, seconds: 0)
         fix(model, city: shared, x: 0, seconds: 80)
-        model.joinedCrew("crew")
-        model.applyCrew(snapshot(crew(shared)), cities: ["place": shared], trails: [])
-        await model.replayCrewHistory("crew")
-        let gained = model.crews[0].places[0].city.visited.count
+        model.joinedTeam("team")
+        model.applyTeam(snapshot(team(shared)), cities: ["place": shared], trails: [])
+        await model.replayTeamHistory("team")
+        let gained = model.teams[0].places[0].city.visited.count
         #expect(gained > 0)
-        #expect(model.crews[0].pendingTrails.isEmpty)
+        #expect(model.teams[0].pendingTrails.isEmpty)
         model.endWalk()
-        #expect(model.walks[0].crewTiles?["crew"] == gained)
+        #expect(model.walks[0].teamTiles?["team"] == gained)
     }
 
-    @Test func droppedShortAutomaticWalkDoesNotQueueCrewRoute() async {
+    @Test func droppedShortAutomaticWalkDoesNotQueueTeamRoute() async {
         let store = store()
         defer { store.wipe() }
         let shared = city()
-        store.save(crews: [crew(shared)])
+        store.save(teams: [team(shared)])
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true)
         await model.waitForHistory()
         for (i, x) in [-180.0, -130, -80, -30, 20, 70].enumerated() { fix(model, city: shared, x: x, seconds: Double(i) * 40) }
         #expect(!model.autoWalkPending)
         fix(model, city: shared, x: 100, seconds: 1000)
         #expect(model.walks.isEmpty)
-        await model.prepareCrewRoutes()
-        #expect(model.crews[0].routeWork.isEmpty)
-        #expect(model.crews[0].pendingTrails.isEmpty)
+        await model.prepareTeamRoutes()
+        #expect(model.teams[0].routeWork.isEmpty)
+        #expect(model.teams[0].pendingTrails.isEmpty)
     }
 }
 
-extension CrewTests {
-    fileprivate func client(_ server: CrewHTTPServer) -> ConvexClient {
-        CrewHTTPProtocol.server = server
+extension TeamTests {
+    fileprivate func client(_ server: TeamHTTPServer) -> ConvexClient {
+        TeamHTTPProtocol.server = server
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [CrewHTTPProtocol.self]
+        configuration.protocolClasses = [TeamHTTPProtocol.self]
         return ConvexClient(session: URLSession(configuration: configuration))
     }
 
     @Test func unchangedTrailVersionsAreReusedAndOneFailedFileDoesNotFailRefresh() async throws {
         let store = store()
-        defer { store.wipe(); CrewHTTPProtocol.server = nil }
+        defer { store.wipe(); TeamHTTPProtocol.server = nil }
         let shared = city()
-        var map = crew(shared)
+        var map = team(shared)
         map.replayedPlaces = ["place"]
-        store.save(crews: [map])
-        let route = CrewCoverage.route(for: walk(shared).points, cities: [shared])
-        let good = CrewTrail(walkClientId: "good", by: "dad", at: 1, route: route)
-        var changed = CrewTrail(walkClientId: "changed", by: "dad", at: 1, route: route)
-        let server = CrewHTTPServer(map: map)
+        store.save(teams: [map])
+        let route = TeamCoverage.route(for: walk(shared).points, cities: [shared])
+        let good = TeamTrail(walkClientId: "good", by: "dad", at: 1, route: route)
+        var changed = TeamTrail(walkClientId: "changed", by: "dad", at: 1, route: route)
+        let server = TeamHTTPServer(map: map)
         await server.setRemoteTrails([good, changed], failures: ["changed"])
-        let api = CrewsAPI(client: client(server))
+        let api = TeamsAPI(client: client(server))
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
-        try await model.refreshCrew("crew", api: api)
-        #expect(model.crews[0].trails.count == 1)
-        #expect(model.crews[0].since == 100)
+        try await model.refreshTeam("team", api: api)
+        #expect(model.teams[0].trails.count == 1)
+        #expect(model.teams[0].since == 100)
         #expect(await server.routeDownloads == 2)
         await server.setRemoteTrails([good, changed])
-        try await model.refreshCrew("crew", api: api)
-        #expect(model.crews[0].trails.count == 2)
+        try await model.refreshTeam("team", api: api)
+        #expect(model.teams[0].trails.count == 2)
         #expect(await server.routeDownloads == 3)
-        try await model.refreshCrew("crew", api: api)
+        try await model.refreshTeam("team", api: api)
         #expect(await server.routeDownloads == 3)
         changed.at = 2
         await server.setRemoteTrails([good, changed])
-        try await model.refreshCrew("crew", api: api)
+        try await model.refreshTeam("team", api: api)
         #expect(await server.routeDownloads == 4)
     }
 
-    @Test func idleSyncRefreshesOnceAndPausedOrTilesOnlyCrewsNeverUploadRoutes() async {
+    @Test func idleSyncRefreshesOnceAndPausedOrTilesOnlyTeamsNeverUploadRoutes() async {
         for paused in [true, false] {
             let store = store()
             let shared = city()
-            var local = crew(shared)
+            var local = team(shared)
             local.queueTrail(walk(shared))
             _ = local.visit([shared.grid.projection.origin], at: .now)
             local.pendingSecrets["secret"] = 1
@@ -854,8 +854,8 @@ extension CrewTests {
             if paused { remote.members[0].walksCount = false }
             remote.replayedPlaces = ["place"]
             local.replayedPlaces = ["place"]
-            store.save(crews: [local])
-            let server = CrewHTTPServer(map: remote)
+            store.save(teams: [local])
+            let server = TeamHTTPServer(map: remote)
             let client = client(server)
             let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
             await model.waitForHistory()
@@ -863,48 +863,48 @@ extension CrewTests {
             await engine.sync()
             #expect(await server.uploadCalls == 0)
             #expect(await server.trailCalls == 0)
-            #expect(model.crews[0].pendingTrails.isEmpty)
-            #expect(model.crews[0].routeWork.isEmpty)
+            #expect(model.teams[0].pendingTrails.isEmpty)
+            #expect(model.teams[0].routeWork.isEmpty)
             if paused {
                 #expect(await server.tileCalls == 0)
                 #expect(await server.savedSecrets.isEmpty)
                 #expect(await server.snapshotCalls == 1)
-                #expect(model.crews[0].waiting == 0)
+                #expect(model.teams[0].waiting == 0)
             }
             store.wipe()
         }
-        CrewHTTPProtocol.server = nil
+        TeamHTTPProtocol.server = nil
     }
 
     @Test func rejectedSecretAloneGetsRefreshWithoutLeavingOptimisticCredit() async {
         let store = store()
-        defer { store.wipe(); CrewHTTPProtocol.server = nil }
-        var map = crew(city())
+        defer { store.wipe(); TeamHTTPProtocol.server = nil }
+        var map = team(city())
         map.replayedPlaces = ["place"]
         map.pendingSecrets["limit"] = 1
-        map.secrets["limit"] = CrewDiscovery(by: "you", at: 1)
-        store.save(crews: [map])
-        let server = CrewHTTPServer(map: map)
+        map.secrets["limit"] = TeamDiscovery(by: "you", at: 1)
+        store.save(teams: [map])
+        let server = TeamHTTPServer(map: map)
         await server.rejectContributions()
         let client = client(server)
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
         let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, makeClient: { client })
         await engine.sync()
-        #expect(model.crews[0].pendingSecrets.isEmpty)
-        #expect(model.crews[0].secrets["limit"] == nil)
+        #expect(model.teams[0].pendingSecrets.isEmpty)
+        #expect(model.teams[0].secrets["limit"] == nil)
         #expect(await server.snapshotCalls == 2)
     }
 
     @Test func tilesOnlyJoinReplayNeverUploadsAnyRouteFile() async {
         let store = store()
-        defer { store.wipe(); CrewHTTPProtocol.server = nil }
+        defer { store.wipe(); TeamHTTPProtocol.server = nil }
         let shared = city()
-        var map = crew(shared)
+        var map = team(shared)
         map.members[0].sharing = .tiles
-        store.save(crews: [map])
+        store.save(teams: [map])
         store.save(walk(shared))
-        let server = CrewHTTPServer(map: map)
+        let server = TeamHTTPServer(map: map)
         let client = client(server)
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
@@ -914,89 +914,89 @@ extension CrewTests {
         #expect(await server.savedTileCount > 0)
         #expect(await server.uploadCalls == 0)
         #expect(await server.trailCalls == 0)
-        #expect(model.crews[0].pendingTrails.isEmpty)
+        #expect(model.teams[0].pendingTrails.isEmpty)
     }
 
     @Test func joinFinishingAfterEndWalkStillCreditsSavedWalkAndRecap() async throws {
         let store = store()
-        defer { store.wipe(); CrewHTTPProtocol.server = nil }
+        defer { store.wipe(); TeamHTTPProtocol.server = nil }
         let shared = city()
-        let server = CrewHTTPServer(map: crew(shared))
-        let api = CrewsAPI(client: client(server))
+        let server = TeamHTTPServer(map: team(shared))
+        let api = TeamsAPI(client: client(server))
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
         model.startWalk()
         fix(model, city: shared, x: -100, seconds: 0)
         fix(model, city: shared, x: 0, seconds: 80)
-        model.joinedCrew("crew")
-        model.applyCrew(snapshot(crew(shared)), cities: ["place": shared], trails: [])
-        await server.pauseReply("crews:crewSnapshot")
-        let refresh = Task { try await model.refreshCrew("crew", api: api) }
+        model.joinedTeam("team")
+        model.applyTeam(snapshot(team(shared)), cities: ["place": shared], trails: [])
+        await server.pauseReply("teams:teamSnapshot")
+        let refresh = Task { try await model.refreshTeam("team", api: api) }
         for _ in 0..<200 { if await server.replyHeld { break }; try await Task.sleep(for: .milliseconds(5)) }
         #expect(await server.replyHeld)
         model.endWalk()
         await server.releaseReply()
         try await refresh.value
-        let gained = model.crews[0].places[0].city.visited.count
+        let gained = model.teams[0].places[0].city.visited.count
         #expect(gained > 0)
-        #expect(model.walks[0].crewTiles?["crew"] == gained)
-        #expect(model.recap?.crewGains.first?.tiles == gained)
-        #expect(store.loadWalks()[0].crewTiles?["crew"] == gained)
+        #expect(model.walks[0].teamTiles?["team"] == gained)
+        #expect(model.recap?.teamGains.first?.tiles == gained)
+        #expect(store.loadWalks()[0].teamTiles?["team"] == gained)
     }
 
-    @Test func notMemberRefreshShowsNoticeAndDeletesCrew() async throws {
+    @Test func notMemberRefreshShowsNoticeAndDeletesTeam() async throws {
         let store = store()
-        defer { store.wipe(); CrewHTTPProtocol.server = nil }
-        let map = crew(city())
-        store.save(crews: [map])
-        let server = CrewHTTPServer(map: map)
-        let api = CrewsAPI(client: client(server))
+        defer { store.wipe(); TeamHTTPProtocol.server = nil }
+        let map = team(city())
+        store.save(teams: [map])
+        let server = TeamHTTPServer(map: map)
+        let api = TeamsAPI(client: client(server))
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
-        model.currentCrewID = "crew"
+        model.currentTeamID = "team"
         await server.removeCurrentMember()
-        do { try await model.refreshCrew("crew", api: api); Issue.record("Expected membership error") } catch { }
-        #expect(model.crews.isEmpty)
-        #expect(model.currentCrewID == nil)
-        #expect(model.crewNotice?.contains(map.name) == true)
+        do { try await model.refreshTeam("team", api: api); Issue.record("Expected membership error") } catch { }
+        #expect(model.teams.isEmpty)
+        #expect(model.currentTeamID == nil)
+        #expect(model.teamNotice?.contains(map.name) == true)
     }
 
-    @Test func listReplyStartedBeforeJoinCannotRemoveItAndLeftCrewCannotReappear() async throws {
+    @Test func listReplyStartedBeforeJoinCannotRemoveItAndLeftTeamCannotReappear() async throws {
         let store = store()
-        defer { store.wipe(); CrewHTTPProtocol.server = nil }
+        defer { store.wipe(); TeamHTTPProtocol.server = nil }
         let shared = city()
-        var map = crew(shared)
+        var map = team(shared)
         map.replayedPlaces = ["place"]
-        store.save(crews: [map])
-        let server = CrewHTTPServer(map: map)
+        store.save(teams: [map])
+        let server = TeamHTTPServer(map: map)
         let client = client(server)
-        let api = CrewsAPI(client: client)
+        let api = TeamsAPI(client: client)
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
         let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, makeClient: { client })
-        await server.pauseReply("crews:myCrews")
+        await server.pauseReply("teams:myTeams")
         let sync = Task { await engine.sync() }
         for _ in 0..<200 { if await server.replyHeld { break }; try await Task.sleep(for: .milliseconds(5)) }
         #expect(await server.replyHeld)
-        model.joinedCrew("newly-joined")
-        model.currentCrewID = "newly-joined"
+        model.joinedTeam("newly-joined")
+        model.currentTeamID = "newly-joined"
         await server.releaseReply()
         await sync.value
-        #expect(model.crews.contains { $0.id == "newly-joined" })
-        #expect(model.currentCrewID == "newly-joined")
-        await server.pauseReply("crews:crewSnapshot")
-        let refresh = Task { try await model.refreshCrew("crew", api: api) }
+        #expect(model.teams.contains { $0.id == "newly-joined" })
+        #expect(model.currentTeamID == "newly-joined")
+        await server.pauseReply("teams:teamSnapshot")
+        let refresh = Task { try await model.refreshTeam("team", api: api) }
         for _ in 0..<200 { if await server.replyHeld { break }; try await Task.sleep(for: .milliseconds(5)) }
         #expect(await server.replyHeld)
-        model.retainCrews(["newly-joined"])
+        model.retainTeams(["newly-joined"])
         await server.releaseReply()
         do { try await refresh.value; Issue.record("Expected stale refresh cancellation") } catch is CancellationError { }
-        #expect(!model.crews.contains { $0.id == "crew" })
+        #expect(!model.teams.contains { $0.id == "team" })
     }
 }
 
-private actor CrewHTTPServer {
-    var map: CrewMap
+private actor TeamHTTPServer {
+    var map: TeamMap
     var savedTileCount: Int { savedTiles.count }
     var tileCalls = 0
     var trailCalls = 0
@@ -1019,25 +1019,25 @@ private actor CrewHTTPServer {
     var removed = false
     func removeCurrentMember() { removed = true }
     var routeDownloads = 0
-    var remoteTrails: [CrewTrail]?
+    var remoteTrails: [TeamTrail]?
     var failedRoutes: Set<String> = []
     var pausePath: String?
     var replyHeld = false
     var heldReply: CheckedContinuation<Void, Never>?
     func pauseReply(_ path: String) { pausePath = path }
     func releaseReply() { heldReply?.resume(); heldReply = nil; replyHeld = false }
-    func setRemoteTrails(_ trails: [CrewTrail], failures: Set<String> = []) { remoteTrails = trails; failedRoutes = failures }
+    func setRemoteTrails(_ trails: [TeamTrail], failures: Set<String> = []) { remoteTrails = trails; failedRoutes = failures }
     func configurePaging(fail: Bool) { paging = true; failPage = fail; trailSharing = false }
     func configureRace() { racing = true }
 
-    init(map: CrewMap) { self.map = map }
+    init(map: TeamMap) { self.map = map }
     func disableTrails() { trailSharing = false }
 
     func respond(_ request: URLRequest) async throws -> Data {
         if request.url?.path == "/upload" {
             uploadCalls += 1
             routeFile = Self.body(request)
-            return Data(#"{"storageId":"crew-route-file"}"#.utf8)
+            return Data(#"{"storageId":"team-route-file"}"#.utf8)
         }
         if let path = request.url?.path, path.hasPrefix("/route") {
             routeDownloads += 1
@@ -1053,25 +1053,25 @@ private actor CrewHTTPServer {
         var value: Any = NSNull()
         switch path {
         case "sync:snapshot": value = ["walks": [], "places": [], "secrets": []]
-        case "crews:uploadFile":
+        case "teams:uploadFile":
             #expect(request.url?.path == "/api/action")
             uploadCalls += 1
             routeFile = Data((args["json"] as! String).utf8)
-            value = "crew-route-file"
-        case "crews:createCrew":
+            value = "team-route-file"
+        case "teams:createTeam":
             #expect(request.url?.path == "/api/action")
-            value = ["crewId": "crew", "inviteCode": "ABCD2345"]
-        case "crews:joinCrew":
+            value = ["teamId": "team", "inviteCode": "ABCD2345"]
+        case "teams:joinTeam":
             #expect(request.url?.path == "/api/action")
-            value = "crew"
-        case "crews:newInviteCode":
+            value = "team"
+        case "teams:newInviteCode":
             #expect(request.url?.path == "/api/action")
             value = "EFGH2345"
-        case "crews:removeMember": #expect(request.url?.path == "/api/action")
-        case "crews:myCrews":
+        case "teams:removeMember": #expect(request.url?.path == "/api/action")
+        case "teams:myTeams":
             let membership = try JSONSerialization.jsonObject(with: JSONEncoder().encode(map.members[0]))
-            value = [["crewId": map.id, "name": map.name, "memberCount": 2, "membership": membership]]
-        case "crews:crewSnapshot":
+            value = [["teamId": map.id, "name": map.name, "memberCount": 2, "membership": membership]]
+        case "teams:teamSnapshot":
             if removed { return Self.failure("NOT_A_MEMBER") }
             snapshotCalls += 1
             let since = args["since"] as? Double
@@ -1080,23 +1080,23 @@ private actor CrewHTTPServer {
             if !trailSharing { members[0].sharing = .tiles }
             let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(members))
             value = [
-                "crew": ["crewId": map.id, "name": map.name, "createdBy": map.createdBy, "inviteCode": map.inviteCode, "createdAt": 1],
+                "team": ["teamId": map.id, "name": map.name, "createdBy": map.createdBy, "inviteCode": map.inviteCode, "createdAt": 1],
                 "members": encoded,
-                "places": [["placeId": "place", "clientId": map.places[0].clientId, "name": "Crew suburb", "updatedAt": 1, "url": NSNull()]],
+                "places": [["placeId": "place", "clientId": map.places[0].clientId, "name": "Team suburb", "updatedAt": 1, "url": NSNull()]],
                 "tiles": (since ?? 0) < 101 ? Array(savedTiles.values) : [],
-                "trails": trailSharing && trailCalls > 0 ? [["walkClientId": "walk", "by": "you", "at": 100, "url": "https://crew.walkies.test/route"]] : [],
+                "trails": trailSharing && trailCalls > 0 ? [["walkClientId": "walk", "by": "you", "at": 100, "url": "https://team.walkies.test/route"]] : [],
                 "secrets": savedSecrets.map { ["secretId": $0, "by": "you", "at": 50_000] as [String: Any] },
                 "serverTime": savedTiles.isEmpty ? 100 : 101,
                 "more": false, "cursor": NSNull(),
             ] as [String: Any]
             if let remoteTrails {
                 var page = value as! [String: Any]
-                page["trails"] = remoteTrails.map { ["walkClientId": $0.walkClientId, "by": $0.by, "at": $0.at, "url": "https://crew.walkies.test/route/\($0.walkClientId)"] as [String: Any] }
+                page["trails"] = remoteTrails.map { ["walkClientId": $0.walkClientId, "by": $0.by, "at": $0.at, "url": "https://team.walkies.test/route/\($0.walkClientId)"] as [String: Any] }
                 value = page
             }
             if racing {
                 var page = value as! [String: Any]
-                page["places"] = raceWon ? [["placeId": "place", "clientId": map.places[0].clientId, "name": "Winner", "updatedAt": 1, "url": "https://crew.walkies.test/place"]] : []
+                page["places"] = raceWon ? [["placeId": "place", "clientId": map.places[0].clientId, "name": "Winner", "updatedAt": 1, "url": "https://team.walkies.test/place"]] : []
                 value = page
             }
             if paging {
@@ -1114,10 +1114,10 @@ private actor CrewHTTPServer {
                 page["serverTime"] = 200
                 page["more"] = pageIndex < 2
                 page["cursor"] = pageIndex < 2 ? ["position": pageIndex == 0 ? "opaque/second+=" : "opaque/third+=", "until": 200, "since": since.map { $0 as Any } ?? NSNull()] : NSNull()
-                page["crew"] = ["crewId": map.id, "name": pageIndex == 2 ? "Last page" : map.name, "createdBy": map.createdBy, "inviteCode": map.inviteCode, "createdAt": 1]
+                page["team"] = ["teamId": map.id, "name": pageIndex == 2 ? "Last page" : map.name, "createdBy": map.createdBy, "inviteCode": map.inviteCode, "createdAt": 1]
                 value = page
             }
-        case "crews:addCrewPlace":
+        case "teams:addTeamPlace":
             #expect(request.url?.path == "/api/action")
             #expect(args["bounds"] != nil)
             #expect(args.keys.contains("gridPlaceId"))
@@ -1132,7 +1132,7 @@ private actor CrewHTTPServer {
             }
             if !racing && placeClientIDs.count == 1 { return Data(#"{"status":"error","errorMessage":"Lost place reply"}"#.utf8) }
             value = "place"
-        case "crews:uploadCrewTiles":
+        case "teams:uploadTeamTiles":
             tileCalls += 1
             if rejectLimits { return Self.failure("TILE_LIMIT") }
             for hex in args["hexes"] as! [[Int]] {
@@ -1140,14 +1140,14 @@ private actor CrewHTTPServer {
             }
             if tileCalls == 1 { return Data(#"{"status":"error","errorData":{"code":"RETRY","message":"Reply lost after commit"}}"#.utf8) }
             value = 0
-        case "crews:crewForInvite": #expect(request.url?.path == "/api/mutation")
-        case "crews:uploadCrewTrail":
+        case "teams:teamForInvite": #expect(request.url?.path == "/api/mutation")
+        case "teams:uploadTeamTrail":
             #expect(request.url?.path == "/api/action")
             #expect((args["updatedAt"] as? Double)?.isFinite == true)
             trailCalls += 1
             if expireTrail { expireTrail = false; return Self.failure("INVALID_UPLOAD") }
             if rejectLimits { return Self.failure("TRAIL_LIMIT") }
-        case "crews:recordCrewSecrets":
+        case "teams:recordTeamSecrets":
             if rejectLimits { return Self.failure("SECRET_LIMIT") }
             for secret in args["secrets"] as! [[String: Any]] { savedSecrets.insert(secret["secretId"] as! String) }
         default: break
@@ -1178,8 +1178,8 @@ private actor CrewHTTPServer {
     }
 }
 
-private nonisolated final class CrewHTTPProtocol: URLProtocol, @unchecked Sendable {
-    nonisolated(unsafe) static var server: CrewHTTPServer?
+private nonisolated final class TeamHTTPProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var server: TeamHTTPServer?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {

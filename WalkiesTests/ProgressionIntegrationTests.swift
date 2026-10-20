@@ -433,7 +433,7 @@ private actor TestSyncServer {
         calls.append(path)
         var value: Any = NSNull()
         switch path {
-        case "crews:myCrews": value = [] as [String]
+        case "teams:myTeams": value = [] as [String]
         case "places:warm": warmedLists.append(args["osmIds"] as! [Int])
         case "sync:generateUploadUrl": value = "https://sync.walkies.test/upload"
         case "sync:saveProgress":

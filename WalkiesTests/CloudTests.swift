@@ -96,9 +96,9 @@ struct CloudTests {
 }
 
 extension CloudTests {
-    @Test func crewGeometryProjectsOnceIntoBoundedChunksWithoutLosingJoins() {
+    @Test func teamGeometryProjectsOnceIntoBoundedChunksWithoutLosingJoins() {
         let points = (0..<300).map { Coordinate(lat: start.lat, lon: start.lon + Double($0) * 0.00001) }
-        let geometry = CrewTrailGeometry(route: CrewRoute(segments: [points]), colour: "teal")
+        let geometry = TeamTrailGeometry(route: TeamRoute(segments: [points]), colour: "teal")
         #expect(geometry.colour == "teal")
         #expect(geometry.chunks.count == 3)
         #expect(geometry.chunks.allSatisfy { $0.points.count <= 128 })

@@ -92,10 +92,10 @@ final class SyncEngine {
             return
         }
         do {
-            // One unavailable personal endpoint must not hold the crew queue behind it.
+            // One unavailable personal endpoint must not hold the team queue behind it.
             var personalError: Error?
             do { try await push(client); try await pull(client) } catch { personalError = error }
-            try await syncCrews(CrewsAPI(client: client), revision: revision)
+            try await syncTeams(TeamsAPI(client: client), revision: revision)
             if let personalError { throw personalError }
             lastSynced = .now
             status = .idle
@@ -211,124 +211,124 @@ final class SyncEngine {
         save()
     }
 
-    private func syncCrews(_ api: CrewsAPI, revision: Int) async throws {
+    private func syncTeams(_ api: TeamsAPI, revision: Int) async throws {
         func checkSession() throws {
             guard isSignedIn(), resetRevision == revision else { throw CancellationError() }
         }
         try checkSession()
-        await model.prepareCrewRoutes()
-        let membershipRevision = model.crewMembershipRevision
+        await model.prepareTeamRoutes()
+        let membershipRevision = model.teamMembershipRevision
         let memberships = try await api.list()
         try checkSession()
-        guard model.acceptCrewList(memberships, revision: membershipRevision) else { return }
-        defer { model.saveCrews() }
-        let acceptedMembershipRevision = model.crewMembershipRevision
-        func checkCrewMembership() throws {
+        guard model.acceptTeamList(memberships, revision: membershipRevision) else { return }
+        defer { model.saveTeams() }
+        let acceptedMembershipRevision = model.teamMembershipRevision
+        func checkTeamMembership() throws {
             try checkSession()
-            guard model.crewMembershipRevision == acceptedMembershipRevision else { throw CancellationError() }
+            guard model.teamMembershipRevision == acceptedMembershipRevision else { throw CancellationError() }
         }
         var failure: Error?
         for listing in memberships {
-            let id = listing.crewId
+            let id = listing.teamId
             do {
                 // Refresh preferences before sending any route. Snapshot replacement
                 // removes cached trails on another phone's opt-out or departure.
-                try checkCrewMembership()
-                try await model.refreshCrew(id, api: api)
-                if model.crews.first(where: { $0.id == id })?.pendingPlaces.isEmpty == false {
-                    try await model.uploadCrewPlaces(id, api: api)
-                    try checkCrewMembership()
-                    try await model.refreshCrew(id, api: api)
+                try checkTeamMembership()
+                try await model.refreshTeam(id, api: api)
+                if model.teams.first(where: { $0.id == id })?.pendingPlaces.isEmpty == false {
+                    try await model.uploadTeamPlaces(id, api: api)
+                    try checkTeamMembership()
+                    try await model.refreshTeam(id, api: api)
                 }
-                guard let crew = model.crews.first(where: { $0.id == id }), crew.you?.walksCount == true else { continue }
+                guard let team = model.teams.first(where: { $0.id == id }), team.you?.walksCount == true else { continue }
                 var sentTiles: Set<UUID> = []
                 func removeSentTiles() {
                     guard !sentTiles.isEmpty else { return }
-                    model.editCrew(id) { $0.pendingTiles.removeAll { sentTiles.contains($0.id) } }
+                    model.editTeam(id) { $0.pendingTiles.removeAll { sentTiles.contains($0.id) } }
                     sentTiles = []
                 }
                 defer { removeSentTiles() }
                 var refreshNeeded = false
-                for batch in crew.pendingTiles {
-                    guard model.crews.first(where: { $0.id == id })?.you?.walksCount == true else { break }
+                for batch in team.pendingTiles {
+                    guard model.teams.first(where: { $0.id == id })?.you?.walksCount == true else { break }
                     do { try await api.tiles(id, batch: batch) }
                     catch {
-                        try checkCrewMembership()
+                        try checkTeamMembership()
                         guard let coded = error as? ConvexError, ["TILE_LIMIT", "PLACE_BOUNDS_REQUIRED", "PLACE_NOT_FOUND", "INVALID_ARGUMENT"].contains(coded.code ?? "") else { throw error }
-                        model.editCrew(id) { $0.syncMessage = error.localizedDescription; $0.since = nil }
+                        model.editTeam(id) { $0.syncMessage = error.localizedDescription; $0.since = nil }
                     }
-                    try checkCrewMembership()
+                    try checkTeamMembership()
                     sentTiles.insert(batch.id)
                     refreshNeeded = true
                 }
-                for trail in crew.pendingTrails where crew.you?.walksCount == true && crew.you?.sharing == .tilesAndTrail {
-                    guard let live = model.crews.first(where: { $0.id == id }), live.you?.walksCount == true, live.you?.sharing == .tilesAndTrail else { break }
+                for trail in team.pendingTrails where team.you?.walksCount == true && team.you?.sharing == .tilesAndTrail {
+                    guard let live = model.teams.first(where: { $0.id == id }), live.you?.walksCount == true, live.you?.sharing == .tilesAndTrail else { break }
                     do {
                         let file: String
                         if let uploaded = trail.file { file = uploaded }
                         else {
                             let route = trail.route
                             let data = try await Task.detached(priority: .utility) { try JSONEncoder().encode(route) }.value
-                            try checkCrewMembership()
-                            guard let live = model.crews.first(where: { $0.id == id }), live.you?.walksCount == true, live.you?.sharing == .tilesAndTrail else { break }
+                            try checkTeamMembership()
+                            guard let live = model.teams.first(where: { $0.id == id }), live.you?.walksCount == true, live.you?.sharing == .tilesAndTrail else { break }
                             file = try await api.upload(data)
-                            try checkCrewMembership()
-                            model.editCrew(id) { live in
+                            try checkTeamMembership()
+                            model.editTeam(id) { live in
                                 if let i = live.pendingTrails.firstIndex(where: { $0.id == trail.id && $0.updatedAt == trail.updatedAt }) { live.pendingTrails[i].file = file }
                             }
                         }
-                        guard let live = model.crews.first(where: { $0.id == id }), live.you?.walksCount == true, live.you?.sharing == .tilesAndTrail else { break }
+                        guard let live = model.teams.first(where: { $0.id == id }), live.you?.walksCount == true, live.you?.sharing == .tilesAndTrail else { break }
                         try await api.trail(id, trail: trail, file: file)
                         refreshNeeded = true
                     }
                     catch {
-                        try checkCrewMembership()
+                        try checkTeamMembership()
                         guard let coded = error as? ConvexError else { throw error }
                         if ["INVALID_UPLOAD", "FILE_NOT_FOUND"].contains(coded.code ?? "") {
-                            model.editCrew(id) { live in
+                            model.editTeam(id) { live in
                                 if let i = live.pendingTrails.firstIndex(where: { $0.id == trail.id && $0.updatedAt == trail.updatedAt }) { live.pendingTrails[i].file = nil }
                             }
                             throw error
                         }
                         guard ["TRAIL_LIMIT", "INVALID_ARGUMENT"].contains(coded.code ?? "") else { throw error }
-                        model.editCrew(id) { $0.syncMessage = error.localizedDescription }
+                        model.editTeam(id) { $0.syncMessage = error.localizedDescription }
                     }
-                    try checkCrewMembership()
+                    try checkTeamMembership()
                     refreshNeeded = true
-                    model.editCrew(id) { $0.pendingTrails.removeAll { $0.id == trail.id && $0.updatedAt == trail.updatedAt } }
+                    model.editTeam(id) { $0.pendingTrails.removeAll { $0.id == trail.id && $0.updatedAt == trail.updatedAt } }
                 }
-                let entries = crew.pendingSecrets.sorted { $0.key < $1.key }
+                let entries = team.pendingSecrets.sorted { $0.key < $1.key }
                 for start in stride(from: 0, to: entries.count, by: 400) {
-                    guard model.crews.first(where: { $0.id == id })?.you?.walksCount == true else { break }
+                    guard model.teams.first(where: { $0.id == id })?.you?.walksCount == true else { break }
                     let batch = Dictionary(uniqueKeysWithValues: entries[start..<min(start + 400, entries.count)].map { ($0.key, $0.value) })
                     do { try await api.secrets(id, secrets: batch) }
                     catch {
-                        try checkCrewMembership()
+                        try checkTeamMembership()
                         guard let coded = error as? ConvexError, ["SECRET_LIMIT", "INVALID_ARGUMENT"].contains(coded.code ?? "") else { throw error }
-                        model.editCrew(id) { $0.syncMessage = error.localizedDescription }
+                        model.editTeam(id) { $0.syncMessage = error.localizedDescription }
                     }
-                    try checkCrewMembership()
+                    try checkTeamMembership()
                     refreshNeeded = true
-                    model.editCrew(id) { live in
+                    model.editTeam(id) { live in
                         for (secret, at) in batch where live.pendingSecrets[secret] == at { live.pendingSecrets[secret] = nil }
                     }
                 }
                 // Remove sent batches before merging a full pull, so rejected
                 // optimistic tiles aren't retained as unsent coverage.
                 removeSentTiles()
-                try checkCrewMembership()
-                if refreshNeeded { try await model.refreshCrew(id, api: api) }
+                try checkTeamMembership()
+                if refreshNeeded { try await model.refreshTeam(id, api: api) }
             } catch {
-                try checkCrewMembership()
-                if let error = error as? ConvexError, ["NOT_A_MEMBER", "CREW_NOT_FOUND", "MEMBER_REMOVED"].contains(error.code ?? "") {
-                    model.retainCrews(Set(model.crews.map(\.id)).subtracting([id]), removedMessage: true)
+                try checkTeamMembership()
+                if let error = error as? ConvexError, ["NOT_A_MEMBER", "TEAM_NOT_FOUND", "MEMBER_REMOVED"].contains(error.code ?? "") {
+                    model.retainTeams(Set(model.teams.map(\.id)).subtracting([id]), removedMessage: true)
                 } else if let error = error as? ConvexError, error.code == "CONTRIBUTIONS_PAUSED" {
-                    model.editCrew(id) { crew in
-                        if let i = crew.members.firstIndex(where: \.isYou) { crew.members[i].walksCount = false }
+                    model.editTeam(id) { team in
+                        if let i = team.members.firstIndex(where: \.isYou) { team.members[i].walksCount = false }
                     }
                 } else if let error = error as? ConvexError, error.code == "TRAIL_SHARING_DISABLED" {
-                    model.editCrew(id) { $0.pendingTrails = []; $0.trails = []; $0.routeWork = [] }
-                    try? await model.refreshCrew(id, api: api)
+                    model.editTeam(id) { $0.pendingTrails = []; $0.trails = []; $0.routeWork = [] }
+                    try? await model.refreshTeam(id, api: api)
                 } else { failure = error }
             }
         }
@@ -349,7 +349,7 @@ final class SyncEngine {
         waiting = model.walks.filter { $0.endedAt != nil && !state.uploadedWalks.contains($0.id) }.count
             + model.cities.filter { (state.uploadedPlaces[$0.id] ?? .distantPast) < $0.lastChanged }.count
             + model.foundStickers.keys.filter { !state.uploadedSecrets.contains($0) }.count
-            + model.crews.reduce(0) { $0 + $1.waiting }
+            + model.teams.reduce(0) { $0 + $1.waiting }
             + ((try? progressJSON(model.ledger)) == state.uploadedProgress ? 0 : 1)
     }
 }

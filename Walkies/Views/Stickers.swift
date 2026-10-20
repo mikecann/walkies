@@ -65,7 +65,7 @@ struct StickerBookView: View {
 
     var body: some View {
         let available = Set(model.mapCities.flatMap { $0.stickers?.keys.map { $0 } ?? [] })
-        let entries = model.currentCrewID == nil ? LoreLibrary.all : LoreLibrary.all.filter { available.contains($0.id) }
+        let entries = model.currentTeamID == nil ? LoreLibrary.all : LoreLibrary.all.filter { available.contains($0.id) }
         let currentAreaName = SecretsBook.currentAreaName(entries: entries, selectedCityName: model.selectedCity?.name)
         let found = entries.filter { model.mapSecrets[$0.id] != nil }.count
         let areas = SecretsBook.sections(
@@ -150,7 +150,7 @@ struct StickerBookView: View {
                 if let currentAreaName { expandedAreas.insert(currentAreaName) }
             }
             .sheet(item: $open) { entry in
-                LoreCardView(entry: entry, foundAt: model.mapSecrets[entry.id], foundBy: model.currentCrew?.secrets[entry.id].map { model.currentCrew?.memberName($0.by) ?? "Past member" })
+                LoreCardView(entry: entry, foundAt: model.mapSecrets[entry.id], foundBy: model.currentTeam?.secrets[entry.id].map { model.currentTeam?.memberName($0.by) ?? "Past member" })
             }
         }
     }
@@ -213,8 +213,8 @@ struct StickerBookView: View {
                         } label: {
                             VStack(spacing: 5) {
                                 StickerTile(entry: entry, found: isFound)
-                                if let crew = model.currentCrew, let found = crew.secrets[entry.id] {
-                                    Text("Found by \(crew.memberName(found.by)) · \(Date(ms: found.at).formatted(.dateTime.day().month(.abbreviated)))")
+                                if let team = model.currentTeam, let found = team.secrets[entry.id] {
+                                    Text("Found by \(team.memberName(found.by)) · \(Date(ms: found.at).formatted(.dateTime.day().month(.abbreviated)))")
                                         .font(.caption2).foregroundStyle(.secondary)
                                 }
                             }

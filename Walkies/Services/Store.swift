@@ -22,29 +22,29 @@ nonisolated struct Store {
         write(cities, to: citiesURL)
     }
 
-    private var crewsURL: URL { root.appending(path: "crews.json") }
-    private var crewsDir: URL { root.appending(path: "crews", directoryHint: .isDirectory) }
+    private var teamsURL: URL { root.appending(path: "teams.json") }
+    private var teamsDir: URL { root.appending(path: "teams", directoryHint: .isDirectory) }
 
-    func loadCrews() -> [CrewMap] {
-        (read([String].self, from: crewsURL) ?? []).compactMap {
-            read(CrewMap.self, from: crewFile($0))
+    func loadTeams() -> [TeamMap] {
+        (read([String].self, from: teamsURL) ?? []).compactMap {
+            read(TeamMap.self, from: teamFile($0))
         }
     }
 
-    func save(crews: [CrewMap], changedIDs: Set<String>? = nil) {
-        try? FileManager.default.createDirectory(at: crewsDir, withIntermediateDirectories: true)
-        for crew in crews where changedIDs?.contains(crew.id) != false { write(crew, to: crewFile(crew.id)) }
-        write(crews.map(\.id), to: crewsURL)
-        let keep = Set(crews.map { crewFile($0.id).lastPathComponent })
-        for url in (try? FileManager.default.contentsOfDirectory(at: crewsDir, includingPropertiesForKeys: nil)) ?? [] where !keep.contains(url.lastPathComponent) {
+    func save(teams: [TeamMap], changedIDs: Set<String>? = nil) {
+        try? FileManager.default.createDirectory(at: teamsDir, withIntermediateDirectories: true)
+        for team in teams where changedIDs?.contains(team.id) != false { write(team, to: teamFile(team.id)) }
+        write(teams.map(\.id), to: teamsURL)
+        let keep = Set(teams.map { teamFile($0.id).lastPathComponent })
+        for url in (try? FileManager.default.contentsOfDirectory(at: teamsDir, includingPropertiesForKeys: nil)) ?? [] where !keep.contains(url.lastPathComponent) {
             try? FileManager.default.removeItem(at: url)
         }
     }
 
-    private func crewFile(_ id: String) -> URL {
+    private func teamFile(_ id: String) -> URL {
         // Server ids are opaque; don't use one as an unchecked filesystem path.
         let filename = Data(id.utf8).base64EncodedString().replacingOccurrences(of: "/", with: "_")
-        return crewsDir.appending(path: "\(filename).json")
+        return teamsDir.appending(path: "\(filename).json")
     }
 
     /// When each sticker was found, by lore id.

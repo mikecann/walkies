@@ -29,14 +29,16 @@ Mike wants a shared map he and his dad fill in together by walking, alongside hi
 
 ## Data
 
+See the [team API contract](teams-api.md).
+
 Convex, alongside the existing per-user tables:
 
-- `crews`: name, createdBy, inviteCode, createdAt.
-- `crewMembers`: crewId, userId, name, colour, sharing (`tiles` or `tilesAndTrail`), walksCount, joinedAt.
-- `crewPlaces`: crewId, clientId, name, the place file (boundary, streets and its hex grid, without anyone's visited tiles), addedBy, updatedAt.
-- `crewTiles`: crewId, placeId, q, r, by (userId), at. One row per tile, first uncoverer wins.
-- `crewTrails`: crewId, userId, walkClientId, file (the route, clipped to the team places), at. Deleted if the member switches to tiles only or leaves.
-- `crewSecrets`: crewId, secretId, by, at. First finder wins.
+- `teams`: name, createdBy, inviteCode, createdAt.
+- `teamMembers`: teamId, userId, name, colour, sharing (`tiles` or `tilesAndTrail`), walksCount, joinedAt.
+- `teamPlaces`: teamId, clientId, name, the place file (boundary, streets and its hex grid, without anyone's visited tiles), addedBy, updatedAt.
+- `teamTiles`: teamId, placeId, q, r, by (userId), at. One row per tile, first uncoverer wins.
+- `teamTrails`: teamId, userId, walkClientId, file (the route, clipped to the team places), at. Deleted if the member switches to tiles only or leaves.
+- `teamSecrets`: teamId, secretId, by, at. First finder wins.
 
 Every function checks the caller is a member, using `currentUserId`. A team map's places all share one hex grid (the first place's), so tiles line up between members' phones. Phones fetch team maps when the app opens and every few minutes while it's open, and upload new team tiles, trails and secrets with the rest of sync. The phone stays the source of truth for its own walking: team uploads are queued and retried like the rest.
 

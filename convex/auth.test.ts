@@ -46,7 +46,7 @@ describe("simulator test sign-in", () => {
     expect(await t.run((ctx) => ctx.db.query("users").collect())).toEqual([]);
   });
 
-  test("creates distinct named accounts without emails, usable together in a crew", async () => {
+  test("creates distinct named accounts without emails, usable together in a team", async () => {
     const t = setup();
     vi.stubEnv("WALKIES_TEST_SIGNIN", "1");
     const a = await t.mutation(api.auth.signInForTesting, { name: " Sim A " });
@@ -59,11 +59,11 @@ describe("simulator test sign-in", () => {
     const bob = t.withIdentity({ subject: b.tokens.userId });
     expect(await alice.query(api.users.me)).toEqual({ name: "Sim A", email: null });
     expect(await bob.query(api.users.me)).toEqual({ name: "Sim B", email: null });
-    const { crewId, inviteCode } = await alice.action(api.crews.createCrew, {
-      name: "Simulator crew", colour: "#e67834", sharing: "tiles",
+    const { teamId, inviteCode } = await alice.action(api.teams.createTeam, {
+      name: "Simulator team", colour: "#e67834", sharing: "tiles",
     });
-    await bob.action(api.crews.joinCrew, { code: inviteCode, colour: "#467cba", sharing: "tiles" });
-    const snapshot = await alice.query(api.crews.crewSnapshot, { crewId });
+    await bob.action(api.teams.joinTeam, { code: inviteCode, colour: "#467cba", sharing: "tiles" });
+    const snapshot = await alice.query(api.teams.teamSnapshot, { teamId });
     expect(snapshot.members.map((m) => m.name).sort()).toEqual(["Sim A", "Sim B"]);
     const rotated = await t.mutation(api.auth.refreshSession, { refreshToken: a.tokens.refreshToken });
     expect(rotated.kind).toBe("rotated");

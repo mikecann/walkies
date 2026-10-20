@@ -28,7 +28,7 @@ struct ContentView: View {
             flyID: model.flyToSelected,
             fresh: model.mapFreshTiles,
             revision: model.tilesRevision,
-            path: model.currentCrewID == nil ? model.activePath : [],
+            path: model.currentTeamID == nil ? model.activePath : [],
             focus: focus,
             tilted: model.tilted3D,
             handle: mapHandle,
@@ -100,9 +100,9 @@ struct ContentView: View {
         } message: { place in
             Text("\(place.kind.capitalized) · \(Format.area(place.area)). It'll go under the clouds next to your other places, and any walks you've already done there count.")
         }
-        .alert("Team membership changed", isPresented: Binding(get: { model.crewNotice != nil }, set: { if !$0 { model.crewNotice = nil } })) {
-            Button("OK") { model.crewNotice = nil }
-        } message: { Text(model.crewNotice ?? "") }
+        .alert("Team membership changed", isPresented: Binding(get: { model.teamNotice != nil }, set: { if !$0 { model.teamNotice = nil } })) {
+            Button("OK") { model.teamNotice = nil }
+        } message: { Text(model.teamNotice ?? "") }
         .alert("Couldn't add it", isPresented: Binding(get: { addingError != nil }, set: { if !$0 { addingError = nil } })) {
             Button("OK") {}
         } message: {
@@ -121,7 +121,7 @@ struct ContentView: View {
             StickerBookView()
         }
         .sheet(item: $openSticker) { entry in
-            LoreCardView(entry: entry, foundAt: model.mapSecrets[entry.id], foundBy: model.currentCrew?.secrets[entry.id].map { model.currentCrew?.memberName($0.by) ?? "Past member" })
+            LoreCardView(entry: entry, foundAt: model.mapSecrets[entry.id], foundBy: model.currentTeam?.secrets[entry.id].map { model.currentTeam?.memberName($0.by) ?? "Past member" })
         }
         .overlay {
             // A separate host for the new-sticker pop-up, so it doesn't fight the other sheets.
@@ -139,8 +139,8 @@ struct ContentView: View {
                 tilted: model.tilted3D
             )
         }
-        .sheet(isPresented: Binding(get: { model.pendingCrewInvite != nil }, set: { if !$0 { model.pendingCrewInvite = nil } })) {
-            JoinCrewView(initialCode: model.pendingCrewInvite ?? "")
+        .sheet(isPresented: Binding(get: { model.pendingTeamInvite != nil }, set: { if !$0 { model.pendingTeamInvite = nil } })) {
+            JoinTeamView(initialCode: model.pendingTeamInvite ?? "")
         }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
@@ -173,7 +173,7 @@ extension ContentView {
             do {
                 try await model.addPlace(place) { addingStatus = $0 }
             } catch {
-                addingError = model.currentCrewID == nil
+                addingError = model.currentTeamID == nil
                     ? "Couldn't load the streets for \(place.name). OpenStreetMap might be busy, so try again in a minute."
                     : "\(error.localizedDescription) Any prepared team place is saved and will retry when there's signal."
             }
@@ -224,7 +224,7 @@ struct PlaceChip: View {
     let onChangePlace: () -> Void
 
     @State private var open = false
-    @State private var crewSheet: CrewSheet?
+    @State private var teamSheet: TeamSheet?
 
     var body: some View {
         Group {
@@ -259,7 +259,7 @@ struct PlaceChip: View {
                                 Text("\(secrets.found) of \(secrets.total) secrets found")
                                     .font(.subheadline)
                             }
-                            MapChoices(sheet: $crewSheet)
+                            MapChoices(sheet: $teamSheet)
                                 .padding(.vertical, 6)
                             Button("Change place", action: onChangePlace)
                                 .font(.subheadline.weight(.semibold))
@@ -286,7 +286,7 @@ struct PlaceChip: View {
                 .stickerCard(in: .capsule)
             }
         }
-        .sheet(item: $crewSheet) { $0.destination }
+        .sheet(item: $teamSheet) { $0.destination }
     }
 }
 

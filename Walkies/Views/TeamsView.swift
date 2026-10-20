@@ -1,7 +1,7 @@
 import SwiftUI
 
 extension Color {
-    static func crew(_ value: String) -> Color {
+    static func team(_ value: String) -> Color {
         switch value {
         case "teal": .badgeTeal
         case "orange": .walkiesOrange
@@ -14,7 +14,7 @@ extension Color {
     }
 }
 
-enum CrewSheet: Identifiable {
+enum TeamSheet: Identifiable {
     case start, join, settings(String)
     var id: String {
         switch self { case .start: "start"; case .join: "join"; case .settings(let id): id }
@@ -22,9 +22,9 @@ enum CrewSheet: Identifiable {
 
     @ViewBuilder var destination: some View {
         switch self {
-        case .start: StartCrewView()
-        case .join: JoinCrewView()
-        case .settings(let id): CrewSettingsView(crewID: id)
+        case .start: StartTeamView()
+        case .join: JoinTeamView()
+        case .settings(let id): TeamSettingsView(teamID: id)
         }
     }
 }
@@ -32,21 +32,21 @@ enum CrewSheet: Identifiable {
 /// Reused in the expanded place chip and in the full places panel.
 struct MapChoices: View {
     @Environment(AppModel.self) private var model
-    @Binding var sheet: CrewSheet?
+    @Binding var sheet: TeamSheet?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Maps").font(.headline)
             mapButton("My map", id: nil, members: [])
-            ForEach(model.crews) { crew in
+            ForEach(model.teams) { team in
                 HStack {
-                    mapButton(crew.name, id: crew.id, members: crew.members)
-                    Button { sheet = .settings(crew.id) } label: {
+                    mapButton(team.name, id: team.id, members: team.members)
+                    Button { sheet = .settings(team.id) } label: {
                         Image(systemName: "gearshape")
                             .frame(width: 44, height: 44)
                             .contentShape(.rect)
                     }
-                    .accessibilityLabel("Settings for \(crew.name)")
+                    .accessibilityLabel("Settings for \(team.name)")
                 }
             }
             Button { sheet = .start } label: {
@@ -64,24 +64,24 @@ struct MapChoices: View {
         .buttonStyle(.plain)
     }
 
-    private func mapButton(_ name: String, id: String?, members: [CrewMember]) -> some View {
+    private func mapButton(_ name: String, id: String?, members: [TeamMember]) -> some View {
         Button {
-            model.currentCrewID = id
+            model.currentTeamID = id
         } label: {
             HStack(spacing: 6) {
                 Text(name).lineLimit(1)
                 ForEach(members.prefix(8)) { member in
-                    Circle().fill(Color.crew(member.colour)).frame(width: 8, height: 8)
+                    Circle().fill(Color.team(member.colour)).frame(width: 8, height: 8)
                         .accessibilityLabel(member.name)
                 }
                 Spacer(minLength: 2)
-                if model.currentCrewID == id { Image(systemName: "checkmark").fontWeight(.bold) }
+                if model.currentTeamID == id { Image(systemName: "checkmark").fontWeight(.bold) }
             }
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .accessibilityAddTraits(model.currentCrewID == id ? .isSelected : [])
+        .accessibilityAddTraits(model.currentTeamID == id ? .isSelected : [])
     }
 }
 
@@ -89,14 +89,14 @@ struct MapsAndPlacesView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var addingPlace = false
-    @State private var crewSheet: CrewSheet?
+    @State private var teamSheet: TeamSheet?
 
     var body: some View {
         NavigationStack {
             // Keep these independent controls out of List's row tap handling.
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    MapChoices(sheet: $crewSheet)
+                    MapChoices(sheet: $teamSheet)
                         .padding(18)
                         .stickerCard(in: .rect(cornerRadius: 24))
 
@@ -141,22 +141,22 @@ struct MapsAndPlacesView: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
         // Presentation belongs to the stable sheet host, not a row or button group.
-        .sheet(item: $crewSheet) { $0.destination }
+        .sheet(item: $teamSheet) { $0.destination }
         .tint(.burnt)
         .environment(\.colorScheme, .light)
     }
 }
 
-private struct CrewPreferences: View {
+private struct TeamPreferences: View {
     @Binding var colour: String
-    @Binding var sharing: CrewSharing
+    @Binding var sharing: TeamSharing
 
     var body: some View {
         Section("Your colour") {
             HStack(spacing: 16) {
-                ForEach(CrewColour.allCases, id: \.rawValue) { option in
+                ForEach(TeamColour.allCases, id: \.rawValue) { option in
                     Button { colour = option.rawValue } label: {
-                        Circle().fill(Color.crew(option.rawValue))
+                        Circle().fill(Color.team(option.rawValue))
                             .frame(width: 32, height: 32)
                             .overlay {
                                 if colour == option.rawValue { Image(systemName: "checkmark").foregroundStyle(.white).fontWeight(.bold) }
@@ -170,40 +170,40 @@ private struct CrewPreferences: View {
         }
         Section("What to share") {
             Picker("Sharing", selection: $sharing) {
-                ForEach(CrewSharing.allCases, id: \.rawValue) { choice in Text(choice.title).tag(choice) }
+                ForEach(TeamSharing.allCases, id: \.rawValue) { choice in Text(choice.title).tag(choice) }
             }
             .pickerStyle(.segmented)
-            ForEach(CrewSharing.allCases, id: \.rawValue) { choice in
+            ForEach(TeamSharing.allCases, id: \.rawValue) { choice in
                 Text("\(choice.title): \(choice.detail)").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
 }
 
-struct CrewInviteCard: View {
-    let crew: CrewMap
+struct TeamInviteCard: View {
+    let team: TeamMap
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Invite someone to \(crew.name)").font(.headline)
-            Text(crew.inviteCode).font(.system(.title, design: .monospaced, weight: .bold)).textSelection(.enabled)
+            Text("Invite someone to \(team.name)").font(.headline)
+            Text(team.inviteCode).font(.system(.title, design: .monospaced, weight: .bold)).textSelection(.enabled)
             Text("They can enter this code in Walkies, or open the link on their phone.")
                 .font(.subheadline).foregroundStyle(.secondary)
-            ShareLink(item: crew.inviteURL) { Label("Share invite link", systemImage: "square.and.arrow.up") }
-            if crew.members.count >= 8 { Text("This team is full (8 members).").font(.subheadline) }
-            Text(crew.inviteURL.absoluteString).font(.caption).textSelection(.enabled)
+            ShareLink(item: team.inviteURL) { Label("Share invite link", systemImage: "square.and.arrow.up") }
+            if team.members.count >= 8 { Text("This team is full (8 members).").font(.subheadline) }
+            Text(team.inviteURL.absoluteString).font(.caption).textSelection(.enabled)
         }
         .padding(16)
         .stickerCard(in: .rect(cornerRadius: 20))
     }
 }
 
-struct StartCrewView: View {
+struct StartTeamView: View {
     @Environment(AppModel.self) private var model
     @Environment(SyncEngine.self) private var sync
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
-    @State private var colour = CrewColour.teal.rawValue
-    @State private var sharing = CrewSharing.tiles
+    @State private var colour = TeamColour.teal.rawValue
+    @State private var sharing = TeamSharing.tiles
     @State private var createdID: String?
     @State private var busy = false
     @State private var error: String?
@@ -213,8 +213,8 @@ struct StartCrewView: View {
     var body: some View {
         NavigationStack {
             Form {
-                if let id = createdID, let crew = model.crews.first(where: { $0.id == id }) {
-                    CrewInviteCard(crew: crew).listRowBackground(Color.clear)
+                if let id = createdID, let team = model.teams.first(where: { $0.id == id }) {
+                    TeamInviteCard(team: team).listRowBackground(Color.clear)
                     Text("Add a place from Maps and places, then your past walks there will count too.")
                 } else {
                     Section("Team name") {
@@ -224,7 +224,7 @@ struct StartCrewView: View {
                             .submitLabel(.done)
                             .onSubmit { nameFocused = false }
                     }
-                    CrewPreferences(colour: $colour, sharing: $sharing)
+                    TeamPreferences(colour: $colour, sharing: $sharing)
                     Section {
                         Button(action: create) {
                             Text("Start team map").frame(maxWidth: .infinity)
@@ -256,23 +256,23 @@ struct StartCrewView: View {
     }
 
     private func create() {
-        let crewName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !busy, !crewName.isEmpty else { return }
+        let teamName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !busy, !teamName.isEmpty else { return }
         nameFocused = false
         busy = true
         error = nil
         Task {
             defer { busy = false }
             do {
-                let api = try await model.crewAPI()
-                // Keep the id immediately. A failed first pull must not create a second crew on retry.
+                let api = try await model.teamAPI()
+                // Keep the id immediately. A failed first pull must not create a second team on retry.
                 if createdID == nil {
-                    createdID = try await api.create(name: crewName, colour: colour, sharing: sharing).crewId
-                    if let createdID { model.joinedCrew(createdID) }
+                    createdID = try await api.create(name: teamName, colour: colour, sharing: sharing).teamId
+                    if let createdID { model.joinedTeam(createdID) }
                 }
                 if let id = createdID {
-                    try await model.refreshCrew(id, api: api)
-                    model.currentCrewID = id
+                    try await model.refreshTeam(id, api: api)
+                    model.currentTeamID = id
                 }
                 sync.schedule()
             } catch { self.error = error.localizedDescription }
@@ -280,15 +280,15 @@ struct StartCrewView: View {
     }
 }
 
-struct JoinCrewView: View {
+struct JoinTeamView: View {
     var initialCode = ""
     @Environment(AppModel.self) private var model
     @Environment(SyncEngine.self) private var sync
     @Environment(\.dismiss) private var dismiss
-    @State private var draft = CrewInviteDraft()
+    @State private var draft = TeamInviteDraft()
     @State private var checkTask: Task<Void, Never>?
-    @State private var colour = CrewColour.blue.rawValue
-    @State private var sharing = CrewSharing.tiles
+    @State private var colour = TeamColour.blue.rawValue
+    @State private var sharing = TeamSharing.tiles
     @State private var busy = false
     @State private var error: String?
     private var normalisedCode: String { draft.normalisedCode }
@@ -298,13 +298,13 @@ struct JoinCrewView: View {
             Form {
                 Section("Invite code") {
                     TextField("ABCD2345", text: $draft.code).textInputAutocapitalization(.characters).autocorrectionDisabled()
-                    Button("Check code", action: check).disabled(!CrewInviteCode.isValid(normalisedCode) || busy)
+                    Button("Check code", action: check).disabled(!TeamInviteCode.isValid(normalisedCode) || busy)
                 }
                 if let preview = draft.preview, draft.checkedCode == normalisedCode {
                     Section(preview.name) {
                         Text("Past walks in the team's places count too.").font(.subheadline)
                     }
-                    CrewPreferences(colour: $colour, sharing: $sharing)
+                    TeamPreferences(colour: $colour, sharing: $sharing)
                     Button("Join \(preview.name)", action: join).disabled(busy)
                 }
                 if busy { ProgressView() }
@@ -315,11 +315,11 @@ struct JoinCrewView: View {
             .scrollContentBackground(.hidden).background(Color.cream)
             .navigationTitle("Join a team map").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(busy) } }
-            .onAppear { if draft.code.isEmpty { draft.replace(with: initialCode) }; if CrewInviteCode.isValid(normalisedCode) { check() } }
+            .onAppear { if draft.code.isEmpty { draft.replace(with: initialCode) }; if TeamInviteCode.isValid(normalisedCode) { check() } }
             .onChange(of: initialCode) {
                 checkTask?.cancel()
                 draft.replace(with: initialCode)
-                if CrewInviteCode.isValid(normalisedCode) { check() }
+                if TeamInviteCode.isValid(normalisedCode) { check() }
             }
         }
         .interactiveDismissDisabled(busy)
@@ -335,7 +335,7 @@ struct JoinCrewView: View {
         checkTask = Task {
             defer { if !Task.isCancelled { busy = false } }
             do {
-                let api = try await model.crewAPI()
+                let api = try await model.teamAPI()
                 let result = try await api.preview(input)
                 guard !Task.isCancelled, draft.receive(result, for: input) else { return }
                 if result == nil { error = "That code doesn't match a team map." }
@@ -349,11 +349,11 @@ struct JoinCrewView: View {
         Task {
             defer { busy = false }
             do {
-                let api = try await model.crewAPI()
+                let api = try await model.teamAPI()
                 let id = try await api.join(code: normalisedCode, colour: colour, sharing: sharing)
-                model.joinedCrew(id)
-                try await model.refreshCrew(id, api: api)
-                model.currentCrewID = id
+                model.joinedTeam(id)
+                try await model.refreshTeam(id, api: api)
+                model.currentTeamID = id
                 sync.schedule()
                 dismiss()
             } catch { self.error = error.localizedDescription }
@@ -361,62 +361,62 @@ struct JoinCrewView: View {
     }
 }
 
-struct CrewSettingsView: View {
-    let crewID: String
+struct TeamSettingsView: View {
+    let teamID: String
     @Environment(AppModel.self) private var model
     @Environment(SyncEngine.self) private var sync
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
-    @State private var colour = CrewColour.teal.rawValue
-    @State private var sharing = CrewSharing.tiles
+    @State private var colour = TeamColour.teal.rawValue
+    @State private var sharing = TeamSharing.tiles
     @State private var walksCount = true
     @State private var busy = false
     @State private var error: String?
-    @State private var removal: CrewMember?
+    @State private var removal: TeamMember?
     @State private var leaving = false
-    private var crew: CrewMap? { model.crews.first { $0.id == crewID } }
+    private var team: TeamMap? { model.teams.first { $0.id == teamID } }
 
     var body: some View {
         NavigationStack {
             Form {
-                if let crew {
-                    Section("Members (\(crew.members.count)/8)") {
-                        ForEach(crew.members) { member in
+                if let team {
+                    Section("Members (\(team.members.count)/8)") {
+                        ForEach(team.members) { member in
                             HStack {
-                                Circle().fill(Color.crew(member.colour)).frame(width: 14, height: 14)
+                                Circle().fill(Color.team(member.colour)).frame(width: 14, height: 14)
                                 VStack(alignment: .leading) {
                                     Text(member.name + (member.isYou ? " (you)" : ""))
                                     Text(member.sharing.title).font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                if crew.you?.userId == crew.createdBy, !member.isYou {
+                                if team.you?.userId == team.createdBy, !member.isYou {
                                     Button("Remove", role: .destructive) { removal = member }.font(.caption)
                                 }
                             }
                         }
                     }
-                    CrewPreferences(colour: $colour, sharing: $sharing)
+                    TeamPreferences(colour: $colour, sharing: $sharing)
                     Section {
                         Toggle("My walks count here", isOn: $walksCount)
                         Button("Save my choices") {
                             run { api in
-                                let replay = crew.you?.sharing != .tilesAndTrail && sharing == .tilesAndTrail
-                                try await api.update(.init(crewId: crewID, colour: colour, sharing: sharing, walksCount: walksCount))
-                                model.setCrewPreferences(crewID, colour: colour, sharing: sharing, walksCount: walksCount)
-                                if replay { await model.replayCrewHistory(crewID, forceTrails: true) }
+                                let replay = team.you?.sharing != .tilesAndTrail && sharing == .tilesAndTrail
+                                try await api.update(.init(teamId: teamID, colour: colour, sharing: sharing, walksCount: walksCount))
+                                model.setTeamPreferences(teamID, colour: colour, sharing: sharing, walksCount: walksCount)
+                                if replay { await model.replayTeamHistory(teamID, forceTrails: true) }
                             }
                         }
                     } footer: {
                         Text("Switch off to pause contributions. Tiles you've already shared stay on the team map. Tiles only removes your shared trails.")
                     }
-                    CrewInviteCard(crew: crew).listRowBackground(Color.clear)
-                    if let message = crew.syncMessage { Text(message).foregroundStyle(.red) }
-                    if crew.you?.userId == crew.createdBy {
+                    TeamInviteCard(team: team).listRowBackground(Color.clear)
+                    if let message = team.syncMessage { Text(message).foregroundStyle(.red) }
+                    if team.you?.userId == team.createdBy {
                         Section {
                             Button("New invite link") {
                                 run { api in
-                                    let code = try await api.newInviteCode(crewID)
-                                    model.editCrew(crewID) { $0.inviteCode = code }
+                                    let code = try await api.newInviteCode(teamID)
+                                    model.editTeam(teamID) { $0.inviteCode = code }
                                 }
                             }
                         } footer: {
@@ -424,7 +424,7 @@ struct CrewSettingsView: View {
                         }
                         Section("Team name") {
                             TextField("Name", text: $name)
-                            Button("Rename team map") { run { try await $0.rename(crewID, name: name) } }
+                            Button("Rename team map") { run { try await $0.rename(teamID, name: name) } }
                                 .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                     }
@@ -436,36 +436,36 @@ struct CrewSettingsView: View {
             .buttonStyle(.borderless)
             .disabled(busy)
             .scrollContentBackground(.hidden).background(Color.cream)
-            .navigationTitle(crew?.name ?? "Team map").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(team?.name ?? "Team map").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(busy) } }
             .onAppear {
-                if let crew, let you = crew.you { name = crew.name; colour = you.colour; sharing = you.sharing; walksCount = you.walksCount }
+                if let team, let you = team.you { name = team.name; colour = you.colour; sharing = you.sharing; walksCount = you.walksCount }
             }
             .confirmationDialog("Leave this team map?", isPresented: $leaving, titleVisibility: .visible) {
                 Button("Leave team map", role: .destructive) {
                     run { api in
-                        try await api.leave(crewID)
-                        model.retainCrews(Set(model.crews.map(\.id)).subtracting([crewID]))
+                        try await api.leave(teamID)
+                        model.retainTeams(Set(model.teams.map(\.id)).subtracting([teamID]))
                         dismiss()
                     }
                 }
             } message: { Text("Your uncovered tiles and secrets stay. Your shared trails are removed.") }
             .confirmationDialog("Remove \(removal?.name ?? "member")?", isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }), titleVisibility: .visible) {
-                if let member = removal { Button("Remove member", role: .destructive) { run { try await $0.remove(crewID, userId: member.userId) } } }
+                if let member = removal { Button("Remove member", role: .destructive) { run { try await $0.remove(teamID, userId: member.userId) } } }
             } message: { Text("Their shared trails will be removed and the invite link will change. They can only rejoin after you issue a new invite link.") }
         }
         .interactiveDismissDisabled(busy)
     }
 
-    private func run(_ action: @escaping @MainActor (CrewsAPI) async throws -> Void) {
+    private func run(_ action: @escaping @MainActor (TeamsAPI) async throws -> Void) {
         busy = true
         error = nil
         Task {
             defer { busy = false }
             do {
-                let api = try await model.crewAPI()
+                let api = try await model.teamAPI()
                 try await action(api)
-                if model.crews.contains(where: { $0.id == crewID }) { try await model.refreshCrew(crewID, api: api) }
+                if model.teams.contains(where: { $0.id == teamID }) { try await model.refreshTeam(teamID, api: api) }
                 sync.schedule()
             } catch { self.error = error.localizedDescription }
         }

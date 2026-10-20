@@ -10,12 +10,12 @@
 
 import type * as auth from "../auth.js";
 import type * as chef from "../chef.js";
-import type * as crews from "../crews.js";
 import type * as http from "../http.js";
 import type * as placeData from "../placeData.js";
 import type * as places from "../places.js";
 import type * as progression from "../progression.js";
 import type * as sync from "../sync.js";
+import type * as teams from "../teams.js";
 import type * as users from "../users.js";
 
 import type {
@@ -27,12 +27,12 @@ import type {
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   chef: typeof chef;
-  crews: typeof crews;
   http: typeof http;
   placeData: typeof placeData;
   places: typeof places;
   progression: typeof progression;
   sync: typeof sync;
+  teams: typeof teams;
   users: typeof users;
 }>;
 
