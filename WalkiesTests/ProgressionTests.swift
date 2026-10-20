@@ -548,4 +548,13 @@ struct ProgressionTests {
         #expect(Progression.Inputs().calendar == Progression.calendar)
     }
 
+    @Test func aWeekNeverGetsBothTileQuests() {
+        for year in 2026...2030 {
+            for number in 1...52 {
+                let kinds = Progression.questKinds(for: Progression.Week(start: .distantPast, end: .distantFuture, year: year, number: number))
+                #expect(Set(kinds).count == 3)
+                #expect(!(kinds.contains(.tiles25) && kinds.contains(.tiles60)))
+            }
+        }
+    }
 }

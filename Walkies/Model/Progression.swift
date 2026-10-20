@@ -195,10 +195,19 @@ nonisolated enum Progression {
                     number: calendar.component(.weekOfYear, from: date))
     }
 
+    /// Three different quests for the week. The two tile quests are the same quest at
+    /// two sizes, so a week never gets both.
     static func questKinds(for week: Week) -> [QuestKind] {
         var rng = Seed(UInt64(week.year) &* 100 &+ UInt64(week.number))
         var pool = QuestKind.allCases
-        return (0..<3).map { _ in pool.remove(at: Int(rng.next() % UInt64(pool.count))) }
+        var picked: [QuestKind] = []
+        while picked.count < 3, !pool.isEmpty {
+            let kind = pool.remove(at: Int(rng.next() % UInt64(pool.count)))
+            picked.append(kind)
+            if kind == .tiles25 { pool.removeAll { $0 == .tiles60 } }
+            if kind == .tiles60 { pool.removeAll { $0 == .tiles25 } }
+        }
+        return picked
     }
 
     /// Finished walks belong to the local week they started in. Secret dates are

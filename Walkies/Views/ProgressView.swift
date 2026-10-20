@@ -356,7 +356,10 @@ struct ShellBalance: View {
         HStack(spacing: 3) {
             ProgressArt("progress-shell", size: 23)
             Text("\(prefix)\(balance)").font(.subheadline.weight(.bold)).monospacedDigit()
+                .lineLimit(1)
+                .fixedSize()
         }
+        .padding(.horizontal, 4)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(prefix)\(balance) shells")
     }
