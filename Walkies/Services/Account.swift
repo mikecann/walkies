@@ -31,12 +31,35 @@ final class Account {
         #endif
     }
 
-    private(set) var session: Session?
+    /// The tokens. Not observed: they change every few minutes as the access token is
+    /// refreshed, and redrawing the whole app each time would reset open sheets.
+    @ObservationIgnored private(set) var session: Session? {
+        didSet {
+            let next = Profile(session)
+            if next != profile { profile = next }
+        }
+    }
 
-    var isSignedIn: Bool { session != nil }
+    /// What the screens show about who's signed in. Only changes on sign-in, sign-out
+    /// or a new name or email, never on a token refresh.
+    private var profile = Profile(nil)
+
+    private struct Profile: Equatable {
+        var signedIn = false
+        var name: String?
+        var email: String?
+
+        init(_ session: Session?) {
+            signedIn = session != nil
+            name = session?.name
+            email = session?.email
+        }
+    }
+
+    var isSignedIn: Bool { profile.signedIn }
     /// The name to show for whoever's signed in.
-    var displayName: String? { session?.name ?? session?.email }
-    var email: String? { session?.email }
+    var displayName: String? { profile.name ?? profile.email }
+    var email: String? { profile.email }
 
     @ObservationIgnored private let sheet = SignInSheet()
     @ObservationIgnored private var refreshing: Task<Session?, Never>?
@@ -46,6 +69,8 @@ final class Account {
 
     init() {
         session = Keychain.load()
+        // didSet doesn't run in init.
+        profile = Profile(session)
         #if DEBUG && targetEnvironment(simulator)
         automaticTestSignInRequested = session == nil && ProcessInfo.processInfo.arguments.contains("-testSignIn")
         #endif
@@ -127,7 +152,9 @@ final class Account {
     func client() async -> ConvexClient? {
         guard let session else { return nil }
         let now = Date.now.timeIntervalSince1970 * 1000
-        if session.accessTokenExpiresAt - now > 60_000 {
+        // Access tokens can be short-lived (a minute on some deployments), so only
+        // refresh in the last few seconds, not on every call.
+        if session.accessTokenExpiresAt - now > 5_000 {
             return ConvexClient(token: session.accessToken)
         }
         return await refreshedSession().map { ConvexClient(token: $0.accessToken) }

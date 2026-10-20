@@ -29,7 +29,7 @@ for name in ['Clouds', 'TrailLayout']:
 art = Path('Walkies/Views/CosmeticArt.swift').read_text()
 (root / 'Sources/Walkies/CosmeticArt.swift').write_text(art[:art.index('/// Retains')])
 colours = Path('Walkies/Views/CrewsView.swift').read_text()
-colours = colours[colours.index('extension Color {'):colours.index('private enum CrewSheet')]
+colours = colours[colours.index('extension Color {'):colours.index('enum CrewSheet')]
 (root / 'Sources/Walkies/CrewColours.swift').write_text('import SwiftUI\n' + colours)
 # Exercise the actual app integration and sync on macOS too. Sensors and the
 # notification/account UI are stubbed; networking uses a URLProtocol test server.

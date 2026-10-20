@@ -14,17 +14,25 @@ extension Color {
     }
 }
 
-private enum CrewSheet: Identifiable {
+enum CrewSheet: Identifiable {
     case start, join, settings(String)
     var id: String {
         switch self { case .start: "start"; case .join: "join"; case .settings(let id): id }
+    }
+
+    @ViewBuilder var destination: some View {
+        switch self {
+        case .start: StartCrewView()
+        case .join: JoinCrewView()
+        case .settings(let id): CrewSettingsView(crewID: id)
+        }
     }
 }
 
 /// Reused in the expanded place chip and in the full places panel.
 struct MapChoices: View {
     @Environment(AppModel.self) private var model
-    @State private var sheet: CrewSheet?
+    @Binding var sheet: CrewSheet?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -34,25 +42,26 @@ struct MapChoices: View {
                 HStack {
                     mapButton(crew.name, id: crew.id, members: crew.members)
                     Button { sheet = .settings(crew.id) } label: {
-                        Image(systemName: "gearshape").padding(5)
+                        Image(systemName: "gearshape")
+                            .frame(width: 44, height: 44)
+                            .contentShape(.rect)
                     }
                     .accessibilityLabel("Settings for \(crew.name)")
                 }
             }
-            Button("Start a crew map") { sheet = .start }
-            Button("Join with a code") { sheet = .join }
-        }
-        .font(.subheadline)
-        // This whole view can be one List row. Automatic buttons otherwise
-        // turn the row into a shared tap target for settings, start and join.
-        .buttonStyle(.borderless)
-        .sheet(item: $sheet) { destination in
-            switch destination {
-            case .start: StartCrewView()
-            case .join: JoinCrewView()
-            case .settings(let id): CrewSettingsView(crewID: id)
+            Button { sheet = .start } label: {
+                Text("Start a crew map")
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(.rect)
+            }
+            Button { sheet = .join } label: {
+                Text("Join with a code")
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(.rect)
             }
         }
+        .font(.subheadline)
+        .buttonStyle(.plain)
     }
 
     private func mapButton(_ name: String, id: String?, members: [CrewMember]) -> some View {
@@ -68,9 +77,11 @@ struct MapChoices: View {
                 Spacer(minLength: 2)
                 if model.currentCrewID == id { Image(systemName: "checkmark").fontWeight(.bold) }
             }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(model.currentCrewID == id ? .isSelected : [])
     }
 }
 
@@ -78,35 +89,50 @@ struct MapsAndPlacesView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var addingPlace = false
+    @State private var crewSheet: CrewSheet?
 
     var body: some View {
         NavigationStack {
-            List {
-                MapChoices().padding(.vertical, 6)
-                Section(model.mapName) {
-                    ForEach(model.mapCities) { city in
-                        Button {
-                            model.select(city.id)
-                            dismiss()
-                        } label: {
-                            HStack {
-                                Text(city.name)
-                                Spacer()
-                                Text(city.progress.percentText).monospacedDigit()
-                                if model.selectedCityID == city.id { Image(systemName: "checkmark") }
+            // Keep these independent controls out of List's row tap handling.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    MapChoices(sheet: $crewSheet)
+                        .padding(18)
+                        .stickerCard(in: .rect(cornerRadius: 24))
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(model.mapName).font(.headline)
+                        ForEach(model.mapCities) { city in
+                            Button {
+                                model.select(city.id)
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Text(city.name)
+                                    Spacer()
+                                    Text(city.progress.percentText).monospacedDigit()
+                                    if model.selectedCityID == city.id { Image(systemName: "checkmark") }
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .contentShape(.rect)
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(model.selectedCityID == city.id ? .isSelected : [])
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(18)
+                    .stickerCard(in: .rect(cornerRadius: 24))
+
                     Button { addingPlace = true } label: {
                         Label("Add a place", systemImage: "plus")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(.rect)
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(StickerButtonStyle())
                 }
+                .padding()
             }
-            .scrollContentBackground(.hidden)
-            .background(Color.cream)
+            .background(Color.sand.opacity(0.45))
+            .foregroundStyle(Color.ink)
             .navigationTitle("Maps and places")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(isPresented: $addingPlace) {
@@ -114,6 +140,10 @@ struct MapsAndPlacesView: View {
             }
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
+        // Presentation belongs to the stable sheet host, not a row or button group.
+        .sheet(item: $crewSheet) { $0.destination }
+        .tint(.burnt)
+        .environment(\.colorScheme, .light)
     }
 }
 
@@ -209,6 +239,7 @@ struct StartCrewView: View {
                 if busy { ProgressView() }
                 if let error { Text(error).foregroundStyle(.red) }
             }
+            .buttonStyle(.borderless)
             .disabled(busy)
             .scrollDismissesKeyboard(.interactively)
             .scrollContentBackground(.hidden).background(Color.cream)
@@ -279,6 +310,7 @@ struct JoinCrewView: View {
                 if busy { ProgressView() }
                 if let error { Text(error).foregroundStyle(.red) }
             }
+            .buttonStyle(.borderless)
             .disabled(busy)
             .scrollContentBackground(.hidden).background(Color.cream)
             .navigationTitle("Join a crew map").navigationBarTitleDisplayMode(.inline)
@@ -401,6 +433,7 @@ struct CrewSettingsView: View {
                 if busy { ProgressView() }
                 if let error { Text(error).foregroundStyle(.red) }
             }
+            .buttonStyle(.borderless)
             .disabled(busy)
             .scrollContentBackground(.hidden).background(Color.cream)
             .navigationTitle(crew?.name ?? "Crew map").navigationBarTitleDisplayMode(.inline)

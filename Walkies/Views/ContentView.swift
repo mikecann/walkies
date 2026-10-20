@@ -224,65 +224,69 @@ struct PlaceChip: View {
     let onChangePlace: () -> Void
 
     @State private var open = false
+    @State private var crewSheet: CrewSheet?
 
     var body: some View {
-        if let city {
-            VStack(alignment: .leading, spacing: 0) {
-                Button {
-                    withAnimation(.snappy) { open.toggle() }
-                } label: {
-                    HStack(spacing: 8) {
-                        Text("\(mapName) · \(city.name)").font(.headline).lineLimit(1)
-                        Text(city.progress.percentText)
-                            .font(.headline.monospacedDigit())
-                            .foregroundStyle(Color.walkiesOrange)
-                            .contentTransition(.numericText())
-                        Image(systemName: "chevron.down")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(Color.ink.opacity(0.5))
-                            .rotationEffect(.degrees(open ? 180 : 0))
+        Group {
+            if let city {
+                VStack(alignment: .leading, spacing: 0) {
+                    Button {
+                        withAnimation(.snappy) { open.toggle() }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text("\(mapName) · \(city.name)").font(.headline).lineLimit(1)
+                            Text(city.progress.percentText)
+                                .font(.headline.monospacedDigit())
+                                .foregroundStyle(Color.walkiesOrange)
+                                .contentTransition(.numericText())
+                            Image(systemName: "chevron.down")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(Color.ink.opacity(0.5))
+                                .rotationEffect(.degrees(open ? 180 : 0))
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 11)
+                        .contentShape(.rect)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 11)
-                    .contentShape(.rect)
+                    .buttonStyle(.plain)
+
+                    if open {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ProgressBar(value: city.progress)
+                            Text("\(city.visited.count) of \(city.tiles.count) tiles explored")
+                                .font(.subheadline)
+                            if let secrets {
+                                Text("\(secrets.found) of \(secrets.total) secrets found")
+                                    .font(.subheadline)
+                            }
+                            MapChoices(sheet: $crewSheet)
+                                .padding(.vertical, 6)
+                            Button("Change place", action: onChangePlace)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Color.burnt)
+                                .padding(.top, 2)
+                        }
+                        .foregroundStyle(Color.ink.opacity(0.75))
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 14)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+                }
+                .frame(minWidth: open ? 250 : nil, alignment: .leading)
+                .stickerCard(in: .rect(cornerRadius: open ? 22 : 24))
+                .animation(.snappy, value: city.visited.count)
+            } else {
+                Button(action: onChangePlace) {
+                    Label("\(mapName) · Maps and places", systemImage: "plus")
+                        .font(.headline)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 11)
                 }
                 .buttonStyle(.plain)
-
-                if open {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ProgressBar(value: city.progress)
-                        Text("\(city.visited.count) of \(city.tiles.count) tiles explored")
-                            .font(.subheadline)
-                        if let secrets {
-                            Text("\(secrets.found) of \(secrets.total) secrets found")
-                                .font(.subheadline)
-                        }
-                        MapChoices()
-                            .padding(.vertical, 6)
-                        Button("Change place", action: onChangePlace)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Color.burnt)
-                            .padding(.top, 2)
-                    }
-                    .foregroundStyle(Color.ink.opacity(0.75))
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 14)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                }
+                .stickerCard(in: .capsule)
             }
-            .frame(minWidth: open ? 250 : nil, alignment: .leading)
-            .stickerCard(in: .rect(cornerRadius: open ? 22 : 24))
-            .animation(.snappy, value: city.visited.count)
-        } else {
-            Button(action: onChangePlace) {
-                Label("\(mapName) · Maps and places", systemImage: "plus")
-                    .font(.headline)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 11)
-            }
-            .buttonStyle(.plain)
-            .stickerCard(in: .capsule)
         }
+        .sheet(item: $crewSheet) { $0.destination }
     }
 }
 
