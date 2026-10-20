@@ -59,6 +59,8 @@ import com.mikecann.walkies.place.percentText
 sealed interface BadgeIcon {
     data class Art(val name: String) : BadgeIcon
     data object Location : BadgeIcon
+    /** SF Symbols' scope: back to the walk, in the replay. */
+    data object Scope : BadgeIcon
 }
 
 /** A round map control as a hexagon badge (HexBadge in Theme.swift). */
@@ -83,6 +85,7 @@ fun HexBadge(icon: BadgeIcon, label: String, fill: Color = Walkies.sand, onClick
         when (icon) {
             is BadgeIcon.Art -> AssetIcon(icon.name, 34.dp)
             BadgeIcon.Location -> LocationArrow(Modifier.size(22.dp))
+            BadgeIcon.Scope -> ScopeMark(Modifier.size(24.dp))
         }
     }
 }
@@ -101,6 +104,27 @@ private fun LocationArrow(modifier: Modifier) {
         }
         drawPath(path, Color.White)
         drawPath(path, Color.White, style = Stroke(width = 1.5f * s, join = StrokeJoin.Round))
+    }
+}
+
+/** SF Symbols' scope: a ring with four ticks and a dot, in white. */
+@Composable
+private fun ScopeMark(modifier: Modifier) {
+    Canvas(modifier) {
+        val c = size.width / 2
+        val stroke = 2.dp.toPx()
+        drawCircle(Color.White, radius = size.width * 0.32f, style = Stroke(width = stroke))
+        drawCircle(Color.White, radius = size.width * 0.08f)
+        val inner = size.width * 0.32f
+        val outer = size.width * 0.48f
+        for ((dx, dy) in listOf(0f to -1f, 0f to 1f, -1f to 0f, 1f to 0f)) {
+            drawLine(
+                Color.White,
+                androidx.compose.ui.geometry.Offset(c + dx * (inner - stroke), c + dy * (inner - stroke)),
+                androidx.compose.ui.geometry.Offset(c + dx * outer, c + dy * outer),
+                stroke, StrokeCap.Round,
+            )
+        }
     }
 }
 
@@ -145,7 +169,14 @@ private fun lighten(c: Color, amount: Float) =
  * [name] and [picture] are whoever's signed in.
  */
 @Composable
-fun PlaceChip(city: City?, name: String?, picture: String?, onChangePlace: () -> Unit) {
+fun PlaceChip(
+    city: City?,
+    name: String?,
+    picture: String?,
+    /** Found and total secrets here, when the place has any. */
+    secrets: Pair<Int, Int>? = null,
+    onChangePlace: () -> Unit,
+) {
     var open by remember { mutableStateOf(false) }
     val chevron by animateFloatAsState(if (open) 180f else 0f, label = "chevron")
     val shape = RoundedCornerShape(if (open) 22.dp else 24.dp)
@@ -182,6 +213,7 @@ fun PlaceChip(city: City?, name: String?, picture: String?, onChangePlace: () ->
                 if (city != null) {
                     ProgressBar(city.progress, Modifier.fillMaxWidth())
                     BasicText("${city.visited.size} of ${city.tiles.size} tiles explored", style = text)
+                    secrets?.let { (found, total) -> BasicText("$found of $total secrets found", style = text) }
                 }
                 BasicText(
                     "Change place",

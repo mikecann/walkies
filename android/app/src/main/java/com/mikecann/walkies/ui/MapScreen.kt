@@ -1,6 +1,18 @@
 package com.mikecann.walkies.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -48,6 +60,10 @@ import com.mikecann.walkies.map.MapState
 import com.mikecann.walkies.map.MapboxMap
 import com.mikecann.walkies.map.NeighbourLayer
 import com.mikecann.walkies.map.StandInMap
+import com.mikecann.walkies.map.StickerPin
+import com.mikecann.walkies.map.StickerPinLayer
+import com.mikecann.walkies.lore.LoreEntry
+import com.mikecann.walkies.lore.LoreLibrary
 import com.mikecann.walkies.map.YouAreHere
 import com.mikecann.walkies.place.PlaceResult
 import kotlinx.coroutines.CancellationException
@@ -58,8 +74,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * The map with the clouds over it and the buttons on top: ContentView.swift, as far
- * as stage 4 goes. With no places yet the map's just the world, and the place chip
+ * The map with the clouds over it and the buttons on top: ContentView.swift, with
+ * found secrets pinned on it. With no places yet the map's just the world, and the place chip
  * leads to adding one, as on the iPhone.
  */
 @Composable
@@ -77,6 +93,9 @@ fun MapScreen(
     onShowSettings: () -> Unit,
     onShowPlaces: () -> Unit,
     onFixPermissions: () -> Unit,
+    onShowSecrets: () -> Unit,
+    /** A found secret's pin on the map, tapped to read it again. */
+    onOpenSecret: (LoreEntry) -> Unit,
 ) {
     val state = remember { MapState() }
     val hasToken = BuildConfig.MAPBOX_ACCESS_TOKEN.isNotBlank()
@@ -147,6 +166,17 @@ fun MapScreen(
     val freshOutlines = remember(fresh, model.tilesRevision) {
         cities.flatMap { city -> fresh[city.id].orEmpty().filter { it in city.visited } }.distinct().map { CloudField.corners(it) }
     }
+    // Found secrets in every place, pinned on the tile they were under.
+    val pins = remember(model.tilesRevision, model.foundStickers) {
+        cities.flatMap { city ->
+            city.stickers.orEmpty()
+                .filter { model.foundStickers[it.key] != null }
+                .toSortedMap()
+                .mapNotNull { (id, hex) ->
+                    LoreLibrary.entry(id)?.let { StickerPin(it, city.grid.projection.unproject(city.grid.centre(hex))) }
+                }
+        }
+    }
     val here = model.lastLocation
     you.set(here?.lat, here?.lon, here?.accuracy ?: 0.0)
 
@@ -196,6 +226,7 @@ fun MapScreen(
             StandInMap(state, onTap = {}, onReady = { mapReady = true })
         }
         CloudLayer(field, state, sprites, route, freshOutlines, you)
+        StickerPinLayer(pins, state, onPick = onOpenSecret)
         NeighbourLayer(
             neighbours = if (addingStatus == null) model.neighbours else emptyList(),
             state = state,
@@ -219,12 +250,14 @@ fun MapScreen(
                 .padding(horizontal = 16.dp),
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.mapButton("top leading", buttonFrames)) {
-                PlaceChip(model.selectedCity, name, picture, onChangePlace = onShowPlaces)
+                val hidden = model.stickersHere
+                val secrets = if (hidden.isEmpty()) null else hidden.count { model.foundStickers[it.first.id] != null } to hidden.size
+                PlaceChip(model.selectedCity, name, picture, secrets, onChangePlace = onShowPlaces)
             }
             Spacer(Modifier.weight(1f).widthIn(min = 12.dp))
             Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.mapButton("top trailing", buttonFrames)) {
                 HexBadge(BadgeIcon.Art("icon-gear"), "Settings", onClick = onShowSettings)
-                HexBadge(BadgeIcon.Art("icon-book"), "Secrets") {}
+                HexBadge(BadgeIcon.Art("icon-book"), "Secrets", onClick = onShowSecrets)
                 HexBadge(BadgeIcon.Art("icon-idea"), "Suggest a feature") {}
             }
         }
@@ -239,6 +272,23 @@ fun MapScreen(
                 .mapButton("bottom", buttonFrames),
         ) {
             if (!hasToken) MissingToken()
+            AnimatedVisibility(
+                model.secretsAlreadyWalked > 0,
+                enter = fadeIn() + scaleIn(initialScale = 0.8f),
+                exit = fadeOut() + scaleOut(targetScale = 0.8f),
+            ) {
+                // Keeps showing the last count while it shrinks away.
+                var count by remember { mutableIntStateOf(model.secretsAlreadyWalked) }
+                if (model.secretsAlreadyWalked > 0) count = model.secretsAlreadyWalked
+                NewSecretsBadge(
+                    count,
+                    onOpen = {
+                        model.dismissSecretsAlreadyWalked()
+                        onShowSecrets()
+                    },
+                    onClose = model::dismissSecretsAlreadyWalked,
+                )
+            }
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 WalkControls(
                     walk = model.activeWalk,
@@ -272,6 +322,45 @@ fun MapScreen(
     }
     addingError?.let {
         WalkiesDialog("Couldn't add it", it, listOf(DialogButton("OK", bold = true)), onDismiss = { addingError = null })
+    }
+}
+
+/**
+ * Secrets that turned up under tiles you'd already walked, all at once (issue #10).
+ * Tap to see them in the book. NewSecretsBadge in ContentView.swift.
+ */
+@Composable
+private fun NewSecretsBadge(count: Int, onOpen: () -> Unit, onClose: () -> Unit) {
+    val shape = RoundedCornerShape(20.dp)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        modifier = Modifier.stickerCard(shape).padding(end = 4.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .pressScale(onOpen)
+                .padding(start = 8.dp, top = 7.dp, bottom = 7.dp),
+        ) {
+            AssetIcon("icon-book", 26.dp)
+            BasicText(
+                if (count == 1) "A new secret in places you've walked" else "$count new secrets in places you've walked",
+                style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold),
+            )
+        }
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .clickable(role = Role.Button, onClick = onClose)
+                .semantics { contentDescription = "Dismiss" },
+        ) {
+            Cross(Modifier.size(10.dp), Walkies.ink.copy(alpha = 0.5f))
+        }
     }
 }
 

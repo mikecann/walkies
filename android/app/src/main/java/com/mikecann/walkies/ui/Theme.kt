@@ -95,9 +95,17 @@ fun assetImage(name: String): ImageBitmap? {
     return remember(name) { loadAssetImage(context, name) }
 }
 
-fun loadAssetImage(context: Context, name: String): ImageBitmap? = runCatching {
-    context.assets.open("images/$name.png").use { BitmapFactory.decodeStream(it)?.asImageBitmap() }
-}.getOrNull()
+/** A PNG from assets/images, or a JPEG (the secrets' photos). [sample] shrinks it by that factor as it loads. */
+fun loadAssetImage(context: Context, name: String, sample: Int = 1): ImageBitmap? {
+    val options = BitmapFactory.Options().apply { inSampleSize = sample }
+    for (extension in listOf("png", "jpg")) {
+        val image = runCatching {
+            context.assets.open("images/$name.$extension").use { BitmapFactory.decodeStream(it, null, options)?.asImageBitmap() }
+        }.getOrNull()
+        if (image != null) return image
+    }
+    return null
+}
 
 @Composable
 fun AssetIcon(name: String, size: Dp) {

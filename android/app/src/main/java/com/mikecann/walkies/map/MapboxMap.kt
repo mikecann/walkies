@@ -19,6 +19,7 @@ import com.mapbox.common.Cancelable
 import com.mapbox.common.MapboxOptions
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
+import com.mapbox.maps.MapInitOptions
 import com.mapbox.maps.MapView
 import com.mapbox.maps.ScreenCoordinate
 import com.mapbox.maps.Style
@@ -83,6 +84,23 @@ class MapboxController(private val view: MapView) : MapController {
             return CameraMath.distance(state.zoom, state.center.latitude(), heightDp)
         }
 
+    override fun frame(x0: Double, y0: Double, x1: Double, y1: Double, padding: FloatArray, pitch: Double, animated: Boolean) {
+        val density = view.resources.displayMetrics.density
+        if (view.width <= 0) return
+        val fit = CameraMath.fit(x0, y0, x1, y1, view.width / density, view.height / density, padding)
+        val camera = CameraOptions.Builder()
+            .center(Point.fromLngLat(MapPoints.lon(fit.centreX), MapPoints.lat(fit.centreY)))
+            .zoom(fit.zoom)
+            .pitch(pitch)
+            .bearing(0.0)
+            .build()
+        if (animated) {
+            view.camera.easeTo(camera, MapAnimationOptions.mapAnimationOptions { duration(800L) })
+        } else {
+            map.setCamera(camera)
+        }
+    }
+
     override fun lookAt(coordinate: Coordinate, distance: Double?, animated: Boolean) {
         val heightDp = view.height / view.resources.displayMetrics.density
         if (heightDp <= 0) return
@@ -102,7 +120,14 @@ class MapboxController(private val view: MapView) : MapController {
 }
 
 @Composable
-fun MapboxMap(state: MapState, onTap: (Coordinate) -> Unit, onReady: () -> Unit, modifier: Modifier = Modifier) {
+fun MapboxMap(
+    state: MapState,
+    onTap: (Coordinate) -> Unit,
+    onReady: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** Draw into a TextureView, so it can be clipped to rounded corners (the small map in walk history). */
+    textureView: Boolean = false,
+) {
     val subscriptions = remember { ArrayList<Cancelable>() }
     val tap by rememberUpdatedState(onTap)
     val ready by rememberUpdatedState(onReady)
@@ -117,7 +142,7 @@ fun MapboxMap(state: MapState, onTap: (Coordinate) -> Unit, onReady: () -> Unit,
         modifier = modifier,
         factory = { context ->
             MapboxOptions.accessToken = com.mikecann.walkies.BuildConfig.MAPBOX_ACCESS_TOKEN
-            val view = MapView(context)
+            val view = MapView(context, MapInitOptions(context, textureView = textureView))
             val map = view.mapboxMap
             // Apple's hybrid map with points of interest turned off.
             map.loadStyle(Style.SATELLITE_STREETS) { style ->

@@ -29,6 +29,13 @@ interface MapController {
 
     /** How far the camera is from the middle of the screen, in metres. */
     val cameraDistance: Double
+
+    /**
+     * Fits this box of map points on screen flat and facing north, inside [padding]
+     * (top, left, bottom, right, in dp), then tilts to [pitch] keeping the centre and
+     * zoom, as the replay frames a walk (ReplayMap in CelebrationView.swift).
+     */
+    fun frame(x0: Double, y0: Double, x1: Double, y1: Double, padding: FloatArray, pitch: Double, animated: Boolean)
 }
 
 /**
@@ -95,6 +102,24 @@ object CameraMath {
         val pointsPerMapPoint = min(w / max(1e-9, x1 - x0), h / max(1e-9, y1 - y0))
         val zoom = ln(pointsPerMapPoint * MapPoints.WORLD / TILE) / ln(2.0)
         return Fit((x0 + x1) / 2, (y0 + y1) / 2, zoom)
+    }
+
+    /**
+     * Fits a box of map points into a [widthDp] x [heightDp] view inside [padding]
+     * (top, left, bottom, right), flat. Uneven padding moves the centre so the box
+     * sits in the middle of what's left.
+     */
+    fun fit(x0: Double, y0: Double, x1: Double, y1: Double, widthDp: Float, heightDp: Float, padding: FloatArray): Fit {
+        val (top, left, bottom, right) = padding.map { it.toDouble() }
+        val w = max(1.0, widthDp - left - right)
+        val h = max(1.0, heightDp - top - bottom)
+        val pointsPerMapPoint = min(w / max(1e-9, x1 - x0), h / max(1e-9, y1 - y0))
+        val zoom = ln(pointsPerMapPoint * MapPoints.WORLD / TILE) / ln(2.0)
+        return Fit(
+            (x0 + x1) / 2 - (left - right) / 2 / pointsPerMapPoint,
+            (y0 + y1) / 2 - (top - bottom) / 2 / pointsPerMapPoint,
+            zoom,
+        )
     }
 
     /** The Mapbox zoom that puts the camera [distance] metres from the ground, like MKMapCamera's centerCoordinateDistance. */

@@ -3,11 +3,15 @@ package com.mikecann.walkies
 import com.mikecann.walkies.convex.ConvexClient
 import com.mikecann.walkies.grid.Coordinate
 import com.mikecann.walkies.grid.Hex
+import com.mikecann.walkies.lore.LoreEntry
+import com.mikecann.walkies.lore.LoreLibrary
+import com.mikecann.walkies.lore.placeStickers
 import com.mikecann.walkies.model.CoverageTracer
 import com.mikecann.walkies.model.Ledger
 import com.mikecann.walkies.model.SwiftDate
 import com.mikecann.walkies.model.TrackPoint
 import com.mikecann.walkies.model.Walk
+import com.mikecann.walkies.model.WalkRecap
 import com.mikecann.walkies.model.uuidString
 import com.mikecann.walkies.place.Boundary
 import com.mikecann.walkies.place.BoundaryShape
@@ -72,8 +76,12 @@ interface Settings {
  * Also the places: adding them from search or the suburbs next door, deleting them,
  * and taking in what sync pulls down.
  *
- * Not ported yet: progression and recaps (stage 5), secrets placement and pop-ups
- * (stage 5). There's no world-grid rebuild: Android never wrote the old grid.
+ * Also the secrets: hiding them under each place's tiles, finding them as you walk
+ * (a pop-up with the app open, a notification with it closed), and the recap the
+ * end-of-walk celebration plays.
+ *
+ * Not ported yet: progression (stage 5b). There's no world-grid rebuild: Android
+ * never wrote the old grid.
  */
 class AppModel(
     private val store: Store,
@@ -139,6 +147,25 @@ class AppModel(
     /** When each sticker was found, by lore id. */
     var foundStickers: Map<String, SwiftDate> = emptyMap()
         private set
+    /** Stickers just found, waiting to pop up. */
+    var stickerQueue: List<LoreEntry> = emptyList()
+        private set
+    /**
+     * Secrets that turned up under tiles you'd already walked, say from an update or
+     * a newly added place. Too many to pop up one by one, so the map just says how many.
+     */
+    var secretsAlreadyWalked = 0
+        private set
+    /** Set when a walk ends (or one's rewatched from history), to play the celebration. */
+    var recap: WalkRecap? = null
+        private set
+    private var recapRequest = 0
+
+    /**
+     * Secrets just found by walking over them, for the notification when the app's
+     * closed. Set by the app, which knows whether the map's on screen.
+     */
+    var secretsFound: ((List<LoreEntry>) -> Unit)? = null
 
     private var tracer = CoverageTracer()
     private val shapes = HashMap<UUID, BoundaryShape>()
@@ -218,6 +245,7 @@ class AppModel(
         val saved = settings.selectedCity
         selectedCityId = cities.firstOrNull { it.id.uuidString == saved }?.id ?: cities.firstOrNull()?.id
         foundStickers = store.loadStickers()
+        placeStickers()
     }
 
     val selectedCity: City? get() = cities.firstOrNull { it.id == selectedCityId }
@@ -246,6 +274,8 @@ class AppModel(
     fun endWalk() {
         var walk = activeWalk ?: return
         walk = finishCoverage(walk.copy(endedAt = now()))
+        val history = walks
+        val fresh = freshTiles
         walks = walks + walk
         activeWalk = null
         activePath = emptyList()
@@ -254,8 +284,54 @@ class AppModel(
         tilesRevision++
         store.save(walk)
         store.save(cities)
+        recapRequest++
+        recap = WalkRecap.make(walk, cities, fresh, foundStickers, history, clock())
         requestSync?.invoke()
         onChange()
+    }
+
+    /** The celebration's closed. */
+    fun dismissRecap() {
+        if (recap == null) return
+        recap = null
+        onChange()
+    }
+
+    /**
+     * Plays an old walk's replay again, from walk history. Which tiles were new on it
+     * is worked out again: the tiles under its route that no earlier walk crossed.
+     * It's marked as a rewatch, so it only recaps the walk and changes nothing.
+     */
+    fun replay(walk: Walk) {
+        val earlier = walks.filter { it.id != walk.id && it.startedAt < walk.startedAt }
+        val savedCities = cities
+        val found = foundStickers
+        val generation = dataGeneration
+        val request = ++recapRequest
+        val now = clock()
+        fun work(): WalkRecap {
+            val fresh = HashMap<UUID, Set<Hex>>()
+            val before = savedCities.map { saved ->
+                var city = saved.copy(visited = emptySet())
+                val shape = city.shape()
+                for (old in earlier) city = city.visit(CoverageTracer.samples(old.points), shape).first
+                val (after, new) = city.visit(CoverageTracer.samples(walk.points), shape)
+                if (new.isNotEmpty()) fresh[city.id] = new
+                after
+            }
+            return WalkRecap.make(walk, before, fresh, found, earlier, now).copy(isRewatch = true)
+        }
+        fun show(result: WalkRecap) {
+            if (generation != dataGeneration || request != recapRequest) return
+            recap = result
+            onChange()
+        }
+        val scope = services
+        if (scope == null) {
+            show(work())
+        } else {
+            scope.launch { show(withContext(Dispatchers.Default) { work() }) }
+        }
     }
 
     /** The End walk button on an always-on walk: ends it now. */
@@ -429,8 +505,13 @@ class AppModel(
         // wobble at home) don't get kept as real ones. Tiles already uncovered stay.
         walk = walk.copy(distance = CoverageTracer.distance(walk.points))
         if (!wasPending && (byYou || walk.distance >= MINIMUM_AUTO_WALK)) {
+            val history = walks
             walks = walks + walk
             store.save(walk)
+            // If it ended by itself while the phone was in your pocket, this plays the
+            // next time you open the app.
+            recapRequest++
+            recap = WalkRecap.make(walk, cities, fresh, foundStickers, history, clock())
         } else {
             // Keep the dated tile credit even though this outing doesn't qualify
             // for walk history, distance/day quests or streak rewards.
@@ -450,8 +531,11 @@ class AppModel(
     }
 
     private fun turnOnAlwaysOn() {
-        // Hand over from a walk you started yourself.
-        if (activeWalk != null) endWalk()
+        // Hand over from a walk you started yourself, without the summary popping up.
+        if (activeWalk != null) {
+            endWalk()
+            recap = null
+        }
         tracer = CoverageTracer()
     }
 
@@ -482,22 +566,91 @@ class AppModel(
             addedTiles = addedTiles + (city.id to (addedTiles[city.id].orEmpty() + (fresh - original.tiles)))
             tilesRevision++
             uncovered += fresh.size
-            unlockStickers(city, fresh, notify = true)
+            unlockStickers(city, fresh, notify = true, popUp = true)
         }
         cities = updated.toList()
         return uncovered
     }
 
-    /** Secrets hidden under these tiles are yours. The pop-ups come with the secrets book (stage 5). Returns how many. */
-    private fun unlockStickers(city: City, hexes: Set<Hex>, notify: Boolean): Int {
+    // Stickers
+
+    /** Every sticker hidden in the selected city, found or not. */
+    val stickersHere: List<Pair<LoreEntry, Hex>>
+        get() = selectedCity?.stickers.orEmpty()
+            .mapNotNull { (id, hex) -> LoreLibrary.entry(id)?.let { it to hex } }
+            .sortedBy { it.first.title }
+
+    /** The first sticker in the queue has been seen; on to the next. */
+    fun popSticker() {
+        if (stickerQueue.isEmpty()) return
+        stickerQueue = stickerQueue.drop(1)
+        onChange()
+    }
+
+    /** The "new secrets in places you've walked" card has been seen or closed. */
+    fun dismissSecretsAlreadyWalked() {
+        if (secretsAlreadyWalked == 0) return
+        secretsAlreadyWalked = 0
+        onChange()
+    }
+
+    /**
+     * Hides each place's secrets under its tiles. A secret that now belongs to a
+     * different place (say its suburb's just been added) moves there, unless you've
+     * already found it, when it stays where you found it. Secrets under tiles you've
+     * already walked are yours straight away.
+     */
+    private fun placeStickers() {
+        val assigned = LoreLibrary.assign(LoreLibrary.all, cities) { city, point ->
+            shape(city).contains(city.grid.projection.project(point))
+        }
+        var changed = false
+        val updated = cities.toMutableList()
+        for (i in updated.indices) {
+            val wanted = assigned[updated[i].id].orEmpty().mapTo(HashSet()) { it.id }
+            val placed = updated[i].stickers ?: continue
+            val leaving = placed.keys.filter { it !in wanted && foundStickers[it] == null }
+            if (leaving.isEmpty()) continue
+            updated[i] = updated[i].copy(stickers = placed - leaving.toSet(), updatedAt = now())
+            changed = true
+        }
+        val hidden = updated.flatMapTo(HashSet()) { it.stickers.orEmpty().keys }
+        for (i in updated.indices) {
+            val missing = assigned[updated[i].id].orEmpty().filter { it.id !in hidden }
+            if (missing.isEmpty()) continue
+            val placed = updated[i].stickers.orEmpty()
+            // The ones already here stay where they are.
+            updated[i] = updated[i].copy(
+                stickers = updated[i].placeStickers(missing, placed.values.toSet()) + placed,
+                updatedAt = now(),
+            )
+            changed = true
+            secretsAlreadyWalked += unlockStickers(updated[i], updated[i].visited, notify = false, popUp = false)
+        }
+        if (changed) {
+            cities = updated.toList()
+            tilesRevision++
+            store.save(cities)
+        }
+    }
+
+    /**
+     * Secrets hidden under these tiles are yours. [notify]: found by walking just now,
+     * so it's dated now and gets a notification if the app's closed; otherwise it was
+     * under a tile you'd already explored. [popUp]: queue it to pop up. Returns how many.
+     */
+    private fun unlockStickers(city: City, hexes: Set<Hex>, notify: Boolean, popUp: Boolean): Int {
         val placed = city.stickers ?: return 0
         val ids = placed.filter { it.value in hexes && foundStickers[it.key] == null }.keys.sorted()
         if (ids.isEmpty()) return 0
+        val entries = ids.mapNotNull(LoreLibrary::entry)
         val at = if (notify) now() else SwiftDate.distantFuture
-        foundStickers = foundStickers + ids.associateWith { at }
+        foundStickers = foundStickers + entries.associate { it.id to at }
         store.saveStickers(foundStickers)
+        if (popUp) stickerQueue = stickerQueue + entries
+        if (notify && entries.isNotEmpty()) secretsFound?.invoke(entries)
         requestSync?.invoke()
-        return ids.size
+        return entries.size
     }
 
     // Places
@@ -507,6 +660,7 @@ class AppModel(
         cities = cities + added
         shapes[added.id] = added.shape()
         select(added.id)
+        placeStickers()
         tilesRevision++
         store.save(cities)
         requestSync?.invoke()
@@ -542,6 +696,7 @@ class AppModel(
             }
         }
         tilesRevision++
+        placeStickers()
         store.save(cities)
         requestSync?.invoke()
         onChange()
@@ -768,7 +923,8 @@ class AppModel(
             city.copy(visited = city.visited + again.visited, tiles = city.tiles + again.tiles)
         }
         tilesRevision++
-        for (city in cities) unlockStickers(city, city.visited, notify = false)
+        placeStickers()
+        for (city in cities) unlockStickers(city, city.visited, notify = false, popUp = false)
         store.save(cities)
         refreshNeighbours()
         onChange()
@@ -819,6 +975,10 @@ class AppModel(
         walks = emptyList()
         shapes.clear()
         foundStickers = emptyMap()
+        stickerQueue = emptyList()
+        secretsAlreadyWalked = 0
+        recap = null
+        recapRequest++
         ledger = Ledger()
         nearby = emptyList()
         warmedNeighbourIds = null

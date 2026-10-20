@@ -103,6 +103,17 @@ class StandInCamera(private val density: Float) : MapController {
         onChange()
     }
 
+    override fun frame(x0: Double, y0: Double, x1: Double, y1: Double, padding: FloatArray, pitch: Double, animated: Boolean) {
+        if (width <= 0f) return
+        val fit = CameraMath.fit(x0, y0, x1, y1, width / density, height / density, padding)
+        centreX = fit.centreX
+        centreY = fit.centreY
+        zoom = fit.zoom
+        bearing = 0.0
+        this.pitch = pitch
+        onChange()
+    }
+
     override fun show(city: City, animated: Boolean) {
         if (width <= 0f) return
         val fit = CameraMath.fit(city, width / density, height / density)

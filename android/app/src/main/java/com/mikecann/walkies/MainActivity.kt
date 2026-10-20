@@ -14,7 +14,10 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -22,7 +25,16 @@ import com.mikecann.walkies.auth.SignInCallback
 import com.mikecann.walkies.auth.TestSignIn
 import com.mikecann.walkies.auth.signInMessage
 import com.mikecann.walkies.location.Permissions
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import com.mikecann.walkies.lore.LoreEntry
+import com.mikecann.walkies.lore.LoreLibrary
 import com.mikecann.walkies.ui.AccountRows
+import com.mikecann.walkies.ui.CelebrationScreen
+import com.mikecann.walkies.ui.LoreCard
+import com.mikecann.walkies.ui.SecretsBookScreen
+import com.mikecann.walkies.ui.WalkDetailScreen
+import com.mikecann.walkies.ui.WalkHistoryScreen
 import com.mikecann.walkies.ui.AddPlaceScreen
 import com.mikecann.walkies.ui.MapScreen
 import com.mikecann.walkies.ui.PlacesScreen
@@ -37,13 +49,18 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     private val app get() = application as WalkiesApplication
 
-    private enum class Screen { Map, FirstRun, FixPermissions, Settings, Places, AddPlace }
+    private enum class Screen { Map, FirstRun, FixPermissions, Settings, Places, AddPlace, Secrets, History, WalkDetail }
 
     private var screen by mutableStateOf(Screen.Map)
+    /** The walk open in walk history. */
+    private var walkDetail by mutableStateOf<UUID?>(null)
+    /** A secret being read again: from a pin, the book, a past walk or the celebration. */
+    private var openSecret by mutableStateOf<LoreEntry?>(null)
     /** Bumps whenever permissions might have changed, so the warnings check again. */
     private var permissionsRevision by mutableIntStateOf(0)
     /** The sign-in under way, for its spinner, and what went wrong with the last one. */
@@ -98,9 +115,10 @@ class MainActivity : ComponentActivity() {
 
     @androidx.compose.runtime.Composable
     private fun Screens() {
-        // Neither is Compose state, so read what says they've changed.
+        // None of these are Compose state, so read what says they've changed.
         @Suppress("UNUSED_EXPRESSION") permissionsRevision
         @Suppress("UNUSED_VARIABLE") val accountRevision = rememberRevision(app.account::listen)
+        @Suppress("UNUSED_VARIABLE") val modelRevision = rememberRevision(app.model::listen)
         when (screen) {
             Screen.FirstRun, Screen.FixPermissions -> SetupScreen(
                 firstRun = screen == Screen.FirstRun,
@@ -133,8 +151,43 @@ class MainActivity : ComponentActivity() {
                     },
                     permissionsMissing = Permissions.anythingMissing(this),
                     onFixPermissions = { screen = Screen.FixPermissions },
+                    walkCount = app.model.walks.size,
+                    onShowHistory = { screen = Screen.History },
                     onClose = { screen = Screen.Map },
                 )
+            }
+            Screen.History -> {
+                BackHandler { screen = Screen.Settings }
+                WalkHistoryScreen(
+                    app.model,
+                    onOpen = {
+                        walkDetail = it.id
+                        screen = Screen.WalkDetail
+                    },
+                    onBack = { screen = Screen.Settings },
+                )
+            }
+            Screen.WalkDetail -> {
+                BackHandler { screen = Screen.History }
+                val id = walkDetail
+                if (id == null) {
+                    LaunchedEffect(Unit) { screen = Screen.History }
+                } else {
+                    WalkDetailScreen(
+                        app.model, id,
+                        // Rewatching closes Settings and plays over the map, as on the iPhone.
+                        onWatch = {
+                            app.model.replay(it)
+                            screen = Screen.Map
+                        },
+                        onOpenSecret = { openSecret = it },
+                        onBack = { screen = Screen.History },
+                    )
+                }
+            }
+            Screen.Secrets -> {
+                BackHandler { screen = Screen.Map }
+                SecretsBookScreen(app.model, onOpen = { openSecret = it }, onClose = { screen = Screen.Map })
             }
             Screen.Places -> {
                 BackHandler { screen = Screen.Map }
@@ -155,9 +208,41 @@ class MainActivity : ComponentActivity() {
                 onShowSettings = { screen = Screen.Settings },
                 onShowPlaces = { screen = Screen.Places },
                 onFixPermissions = { screen = Screen.FixPermissions },
+                onShowSecrets = { screen = Screen.Secrets },
+                onOpenSecret = { openSecret = it },
             )
         }
         if (screen == Screen.FixPermissions) BackHandler { finishSetup() }
+
+        // The celebration plays over the map. One that's ready while another screen's
+        // open waits for you to come back to the map.
+        val recap = app.model.recap
+        val celebrating = recap != null && screen == Screen.Map
+        if (recap != null && celebrating) {
+            key(recap.id, recap.isRewatch) {
+                val others = remember { app.model.cities.filter { city -> recap.after.none { it.id == city.id } } }
+                CelebrationScreen(recap, others, onSecret = { openSecret = it }, onDone = app.model::dismissRecap)
+            }
+        }
+
+        val haptics = LocalHapticFeedback.current
+        val queued = app.model.stickerQueue.size
+        var lastQueued by remember { mutableIntStateOf(queued) }
+        LaunchedEffect(queued) {
+            if (queued > lastQueued) haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+            lastQueued = queued
+        }
+        val reading = openSecret
+        val fresh = app.model.stickerQueue.firstOrNull()
+        when {
+            reading != null -> key(reading.id) {
+                LoreCard(reading, app.model.foundStickers[reading.id], onClose = { openSecret = null })
+            }
+            // Secrets just found pop up one at a time, but not over the celebration.
+            fresh != null && !celebrating -> key("new-" + fresh.id) {
+                LoreCard(fresh, app.model.foundStickers[fresh.id], isNew = true, onClose = app.model::popSticker)
+            }
+        }
     }
 
     /** Like the iPhone's, short: why walks won't be noticed with the app closed. */
@@ -336,5 +421,15 @@ class MainActivity : ComponentActivity() {
             if (app.prefs.setupDone && screen == Screen.FirstRun) screen = Screen.Map
         }
         if (intent.hasExtra("alwaysOn")) app.model.alwaysOn = intent.getBooleanExtra("alwaysOn", true)
+        // A secret's notification: it pops up anyway if it's still waiting to, otherwise open it.
+        intent.getStringExtra(EXTRA_STICKER)?.let { id ->
+            intent.removeExtra(EXTRA_STICKER)
+            if (app.model.stickerQueue.none { it.id == id }) openSecret = LoreLibrary.entry(id)
+        }
+    }
+
+    companion object {
+        /** On a found secret's notification: which one. */
+        const val EXTRA_STICKER = "sticker"
     }
 }

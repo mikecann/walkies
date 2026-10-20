@@ -18,6 +18,8 @@ import com.mikecann.walkies.location.MotionActivity
 import com.mikecann.walkies.location.Permissions
 import com.mikecann.walkies.location.TrackingService
 import com.mikecann.walkies.location.WalkState
+import com.mikecann.walkies.lore.LoreLibrary
+import com.mikecann.walkies.lore.SecretNotifier
 import com.mikecann.walkies.store.Store
 import com.mikecann.walkies.sync.SyncEngine
 import com.mikecann.walkies.sync.SyncPrefs
@@ -78,9 +80,13 @@ class WalkiesApplication : Application() {
         transitions = ActivityTransitions(this)
         account = Account(KeystoreVault(this), Backend(BuildConfig.CONVEX_CLOUD_URL, BuildConfig.CONVEX_SITE_URL))
         googleSignIn = GoogleSignIn(this, account)
+        // The lore JSON, copied from the iPhone's sources into assets at build time.
+        LoreLibrary.reader = { name -> runCatching { assets.open("lore/$name.json").bufferedReader().use { it.readText() } }.getOrNull() }
         // Application Support/Walkies on the iPhone.
         val store = Store(File(filesDir, "Walkies"))
         model = AppModel(store, prefs, tracker, motion)
+        // With the app open the secret pops up instead.
+        model.secretsFound = { if (!onScreen) SecretNotifier.stickersFound(this, it) }
         model.services = scope
         model.makePlaceClient = { account.client() }
         sync = SyncEngine(

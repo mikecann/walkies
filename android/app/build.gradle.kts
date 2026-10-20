@@ -56,6 +56,8 @@ android {
     testOptions {
         unitTests.all {
             it.systemProperty("walkies.fixtures", File(repoRoot, "shared/fixtures").absolutePath)
+            // The lore JSON, read straight from the iPhone app's sources (LoreLibrary.reader).
+            it.systemProperty("walkies.lore", File(repoRoot, "Walkies/Lore").absolutePath)
             // ./gradlew testDebugUnitTest -PwriteFixtures writes shared/fixtures/android for the iPhone's tests.
             it.systemProperty("walkies.writeFixtures", providers.gradleProperty("writeFixtures").map { "true" }.getOrElse(""))
         }
@@ -131,7 +133,8 @@ val copyIosAssets = tasks.register<CopyIosAssets>("copyIosAssets") {
     outputDir.set(iosAssetsDir)
     lore.set(File(repoRoot, "Walkies/Lore"))
     xcassets.set(File(repoRoot, "Walkies/Assets.xcassets"))
-    groups.set(listOf("Icons", "Stickers"))
+    // Photos are the secrets' Wikimedia Commons pictures, shown under each story.
+    groups.set(listOf("Icons", "Stickers", "Photos"))
 }
 
 // Plain source dir plus preBuild, so the copy always runs before resources and assets merge.
