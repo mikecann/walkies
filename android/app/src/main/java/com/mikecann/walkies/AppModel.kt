@@ -21,8 +21,8 @@ interface LocationAccess {
 }
 
 /**
- * What the motion chip thinks you're doing (MotionMonitor.swift). Activity Recognition
- * comes with stage 3; until then nothing's known and the GPS speed does the filtering.
+ * What the motion chip thinks you're doing (MotionMonitor.swift): ActivityMotion on the
+ * phone. Until it's heard anything, the GPS speed does the filtering.
  */
 interface Motion {
     val onWheels: Boolean
@@ -44,8 +44,8 @@ interface Settings {
 
 /**
  * Places and walks, and turning GPS fixes into uncovered tiles: the walk side of
- * AppModel.swift. Lives on the main thread. Calls [onChange] after anything changes,
- * so the UI can redraw.
+ * AppModel.swift. Lives on the main thread. Tells its listeners after anything changes,
+ * so the UI can redraw and the notification can keep up.
  *
  * Not ported yet: progression and recaps (stage 5), secrets placement and pop-ups
  * (stage 5), sync and the world-grid rebuild (stage 4).
@@ -58,7 +58,17 @@ class AppModel(
     /** Seconds since 1970. */
     private val clock: () -> Double = { System.currentTimeMillis() / 1000.0 },
 ) {
-    var onChange: () -> Unit = {}
+    private val listeners = ArrayList<() -> Unit>()
+
+    /** Calls [listener] after anything changes. Returns a function that stops it. */
+    fun listen(listener: () -> Unit): () -> Unit {
+        listeners.add(listener)
+        return { listeners.remove(listener) }
+    }
+
+    private fun onChange() {
+        for (listener in listeners.toList()) listener()
+    }
 
     var cities: List<City> = emptyList()
         private set

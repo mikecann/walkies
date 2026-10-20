@@ -83,6 +83,9 @@ object Type {
     val headline = TextStyle(fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = Walkies.ink)
     val subheadline = TextStyle(fontSize = 15.sp, color = Walkies.ink)
     val caption = TextStyle(fontSize = 12.sp, color = Walkies.ink)
+    val footnote = TextStyle(fontSize = 13.sp, color = Walkies.ink)
+    val body = TextStyle(fontSize = 17.sp, color = Walkies.ink)
+    val title3 = TextStyle(fontSize = 20.sp, color = Walkies.ink)
 }
 
 /** One of the iPhone app's illustrated images, copied into assets/images at build time. */

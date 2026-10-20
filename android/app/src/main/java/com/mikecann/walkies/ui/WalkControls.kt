@@ -62,7 +62,8 @@ object Format {
 
 /**
  * What sits at the bottom of the map: a pending walk's badge, the walk you're on,
- * a nudge to allow location, Start walk, or nothing in always-on mode.
+ * a nudge to allow location, Start walk, or nothing in always-on mode (unless it's
+ * missing a permission it needs).
  * WalkControls in ContentView.swift.
  */
 @Composable
@@ -72,9 +73,12 @@ fun WalkControls(
     pendingDistance: Double?,
     alwaysOn: Boolean,
     locationDenied: Boolean,
+    /** Why always-on can't do its job with the app closed, if it can't. */
+    alwaysOnWarning: String?,
     onStart: () -> Unit,
     onEnd: () -> Unit,
     onOpenSettings: () -> Unit,
+    onFixPermissions: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when {
@@ -103,25 +107,32 @@ fun WalkControls(
                 BasicText("End walk", style = Type.headline.copy(color = Color.White))
             }
         }
-        locationDenied -> Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = modifier
-                .fillMaxWidth()
-                .stickerCard(RoundedCornerShape(26.dp))
-                .padding(14.dp),
-        ) {
-            BasicText("Walkies needs your location to uncover tiles.", style = Type.subheadline.copy(textAlign = TextAlign.Center))
-            StickerButton(onClick = onOpenSettings) {
-                BasicText("Open Settings", style = Type.headline.copy(color = Color.White))
-            }
-        }
+        locationDenied -> Nudge("Walkies needs your location to uncover tiles.", "Open Settings", onOpenSettings, modifier)
+        alwaysOn && alwaysOnWarning != null -> Nudge(alwaysOnWarning, "Fix permissions", onFixPermissions, modifier)
         // Nothing to press: walks get picked up by themselves.
         alwaysOn -> Spacer(modifier.fillMaxWidth().height(1.dp))
         else -> StickerButton(onClick = onStart, modifier = modifier) {
             AssetIcon("icon-walk", 26.dp)
             Spacer(Modifier.width(8.dp))
             BasicText("Start walk", style = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Color.White))
+        }
+    }
+}
+
+/** A short line and a button, on a card. */
+@Composable
+private fun Nudge(text: String, button: String, onClick: () -> Unit, modifier: Modifier) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .stickerCard(RoundedCornerShape(26.dp))
+            .padding(14.dp),
+    ) {
+        BasicText(text, style = Type.subheadline.copy(textAlign = TextAlign.Center))
+        StickerButton(onClick = onClick) {
+            BasicText(button, style = Type.headline.copy(color = Color.White))
         }
     }
 }

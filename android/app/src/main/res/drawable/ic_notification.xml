@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A map tile with a footprint in it, for the status bar. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M12,1.5L21.1,6.75L21.1,17.25L12,22.5L2.9,17.25L2.9,6.75Z M12,6.2C10.6,6.2 9.9,7.6 9.9,9.4C9.9,11.4 10.7,12.6 10.7,14.2C10.7,15.4 10.2,16.1 10.2,16.9C10.2,17.7 10.9,18.2 11.7,18.2C12.8,18.2 13.4,17.1 13.4,15.6C13.4,13.9 14.1,12.6 14.1,10.4C14.1,7.8 13.3,6.2 12,6.2Z" />
+</vector>

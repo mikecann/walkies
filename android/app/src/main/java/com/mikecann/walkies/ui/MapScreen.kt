@@ -63,9 +63,17 @@ private suspend fun loadStartingPlace(context: Context): City = withContext(Disp
     )
 }
 
-/** The map with the clouds over it and the buttons on top: ContentView.swift, as far as stage 2 goes. */
+/** The map with the clouds over it and the buttons on top: ContentView.swift, as far as stage 3 goes. */
 @Composable
-fun MapScreen(model: AppModel, tracker: LocationTracker, onOpenSettings: () -> Unit) {
+fun MapScreen(
+    model: AppModel,
+    tracker: LocationTracker,
+    /** Why always-on can't notice walks with the app closed, if it can't. */
+    alwaysOnWarning: String?,
+    onOpenSettings: () -> Unit,
+    onShowSettings: () -> Unit,
+    onFixPermissions: () -> Unit,
+) {
     val context = LocalContext.current
     val state = remember { MapState() }
     val hasToken = BuildConfig.MAPBOX_ACCESS_TOKEN.isNotBlank()
@@ -74,8 +82,8 @@ fun MapScreen(model: AppModel, tracker: LocationTracker, onOpenSettings: () -> U
     // The model isn't Compose state, so it says when it's changed.
     var revision by remember { mutableIntStateOf(0) }
     DisposableEffect(model) {
-        model.onChange = { revision++ }
-        onDispose { model.onChange = {} }
+        val stop = model.listen { revision++ }
+        onDispose { stop() }
     }
     @Suppress("UNUSED_EXPRESSION") revision
 
@@ -189,7 +197,7 @@ fun MapScreen(model: AppModel, tracker: LocationTracker, onOpenSettings: () -> U
             }
             Spacer(Modifier.weight(1f).widthIn(min = 12.dp))
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                HexBadge(BadgeIcon.Art("icon-gear"), "Settings") {}
+                HexBadge(BadgeIcon.Art("icon-gear"), "Settings", onClick = onShowSettings)
                 HexBadge(BadgeIcon.Art("icon-book"), "Secrets") {}
                 HexBadge(BadgeIcon.Art("icon-idea"), "Suggest a feature") {}
             }
@@ -210,12 +218,14 @@ fun MapScreen(model: AppModel, tracker: LocationTracker, onOpenSettings: () -> U
                     pendingDistance = if (model.autoWalkPending) model.pendingWalkDistance else null,
                     alwaysOn = model.alwaysOn,
                     locationDenied = tracker.isDenied,
+                    alwaysOnWarning = alwaysOnWarning,
                     onStart = {
                         model.startWalk()
                         focusOnYou()
                     },
                     onEnd = { if (model.activeWalk?.isAutomatic == true) model.endAutoWalk() else model.endWalk() },
                     onOpenSettings = onOpenSettings,
+                    onFixPermissions = onFixPermissions,
                     modifier = Modifier.weight(1f),
                 )
                 HexBadge(BadgeIcon.Location, "Where am I", fill = Walkies.badgeTeal) { focusOnYou() }
