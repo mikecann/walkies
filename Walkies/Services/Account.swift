@@ -15,6 +15,8 @@ nonisolated struct Session: Codable, Sendable {
     var userId: String
     var name: String?
     var email: String?
+    /// Their Google photo. Apple doesn't give one.
+    var picture: String?
 }
 
 /// Signing in with Apple or Google through Convex Auth v2. Their sign-in pages run
@@ -41,18 +43,20 @@ final class Account {
     }
 
     /// What the screens show about who's signed in. Only changes on sign-in, sign-out
-    /// or a new name or email, never on a token refresh.
+    /// or a new name, email or photo, never on a token refresh.
     private var profile = Profile(nil)
 
     private struct Profile: Equatable {
         var signedIn = false
         var name: String?
         var email: String?
+        var picture: String?
 
         init(_ session: Session?) {
             signedIn = session != nil
             name = session?.name
             email = session?.email
+            picture = session?.picture
         }
     }
 
@@ -60,6 +64,17 @@ final class Account {
     /// The name to show for whoever's signed in.
     var displayName: String? { profile.name ?? profile.email }
     var email: String? { profile.email }
+    /// Your photo for your head on the map picker, when you signed in with Google.
+    var picture: URL? {
+        #if DEBUG
+        // `-testPictureURL <url>` stands in for a Google photo, since test accounts have none.
+        let arguments = ProcessInfo.processInfo.arguments
+        if let flag = arguments.firstIndex(of: "-testPictureURL"), flag + 1 < arguments.count {
+            return URL(string: arguments[flag + 1])
+        }
+        #endif
+        return profile.picture.flatMap(URL.init(string:))
+    }
 
     @ObservationIgnored private let sheet = SignInSheet()
     @ObservationIgnored private var refreshing: Task<Session?, Never>?
@@ -139,9 +154,18 @@ final class Account {
 
         // Who this is, for Settings. Not essential, so a hiccup here doesn't stop sign-in.
         if let me: Me = try? await ConvexClient(token: tokens.accessToken).query("users:me") {
-            tokens.name = me.name
-            tokens.email = me.email
+            me.apply(to: &tokens)
         }
+        save(tokens)
+    }
+
+    /// Picks up a new name or photo for someone who's already signed in, such as a
+    /// photo saved after they first signed in. Once a launch is plenty.
+    func refreshProfile() async {
+        guard let client = await client(),
+              let me: Me = try? await client.query("users:me"),
+              var tokens = session else { return }
+        me.apply(to: &tokens)
         save(tokens)
     }
 
@@ -175,6 +199,7 @@ final class Account {
                 }
                 tokens.name = current.name
                 tokens.email = current.email
+                tokens.picture = current.picture
                 save(tokens)
                 return tokens
             } catch {
@@ -243,6 +268,13 @@ private nonisolated struct RefreshResult: Decodable {
 private nonisolated struct Me: Decodable {
     var name: String?
     var email: String?
+    var picture: String?
+
+    func apply(to session: inout Session) {
+        session.name = name
+        session.email = email
+        session.picture = picture
+    }
 }
 
 // MARK: The sign-in sheet

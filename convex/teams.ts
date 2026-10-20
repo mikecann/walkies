@@ -12,6 +12,8 @@ const tileCursor = v.object({ position: v.string(), until: v.number(), since: v.
 const memberInfo = v.object({
   userId: v.id("users"), name: v.string(), colour: v.string(), sharing,
   walksCount: v.boolean(), joinedAt: v.number(), isYou: v.boolean(),
+  // The member's Google photo, for their head in the app. Only fellow members see it.
+  picture: nullableUrl,
 });
 const teamInfo = v.object({
   teamId: v.id("teams"), name: v.string(), createdBy: v.id("users"),
@@ -55,6 +57,9 @@ async function requireCreator(ctx: ReadCtx, teamId: Id<"teams">) {
 async function memberName(ctx: ReadCtx, userId: Id<"users">, name?: string) {
   if (name !== undefined) return text(name, "Your name");
   return (await ctx.db.get("users", userId))?.name?.trim() || "Explorer";
+}
+async function memberPicture(ctx: ReadCtx, userId: Id<"users">) {
+  return (await ctx.db.get("users", userId))?.picture ?? null;
 }
 async function findInvite(ctx: ReadCtx, code: string) {
   const normalized = code.trim().toUpperCase();
@@ -440,7 +445,7 @@ export const teamSnapshot = query({
       team: { teamId, name: team.name, createdBy: team.createdBy, inviteCode: team.inviteCode, createdAt: team.createdAt },
       serverTime: until, more: !tilePage.isDone,
       cursor: tilePage.isDone ? null : { position: tilePage.continueCursor, until, since: since ?? null },
-      members: members.map((m) => ({ userId: m.userId, name: m.name, colour: m.colour, sharing: m.sharing, walksCount: m.walksCount, joinedAt: m.joinedAt, isYou: m.userId === userId })),
+      members: await Promise.all(members.map(async (m) => ({ userId: m.userId, name: m.name, colour: m.colour, sharing: m.sharing, walksCount: m.walksCount, joinedAt: m.joinedAt, isYou: m.userId === userId, picture: await memberPicture(ctx, m.userId) }))),
       places: await Promise.all(places.map(async (p) => ({ placeId: p._id, clientId: p.clientId, name: p.name, updatedAt: p.updatedAt, url: await ctx.storage.getUrl(p.file) }))),
       tiles: tilePage.page.map((t) => ({ placeId: t.placeId, q: t.q, r: t.r, by: t.by, at: t.at })),
       trails: await Promise.all(trails.filter((t) => {
@@ -460,7 +465,7 @@ export const myTeams = query({
       const team = await ctx.db.get("teams", m.teamId);
       if (team === null) fail("TEAM_NOT_FOUND", "This team map no longer exists.");
       const members = await ctx.db.query("teamMembers").withIndex("by_team_user", (q) => q.eq("teamId", m.teamId)).take(MAX_MEMBERS);
-      return { teamId: team._id, name: team.name, memberCount: members.length, membership: { userId, name: m.name, colour: m.colour, sharing: m.sharing, walksCount: m.walksCount, joinedAt: m.joinedAt, isYou: true } };
+      return { teamId: team._id, name: team.name, memberCount: members.length, membership: { userId, name: m.name, colour: m.colour, sharing: m.sharing, walksCount: m.walksCount, joinedAt: m.joinedAt, isYou: true, picture: await memberPicture(ctx, userId) } };
     }));
   },
 });

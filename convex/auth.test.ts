@@ -57,8 +57,8 @@ describe("simulator test sign-in", () => {
     expect(a.tokens.userId).not.toBe(b.tokens.userId);
     const alice = t.withIdentity({ subject: a.tokens.userId });
     const bob = t.withIdentity({ subject: b.tokens.userId });
-    expect(await alice.query(api.users.me)).toEqual({ name: "Sim A", email: null });
-    expect(await bob.query(api.users.me)).toEqual({ name: "Sim B", email: null });
+    expect(await alice.query(api.users.me)).toEqual({ name: "Sim A", email: null, picture: null });
+    expect(await bob.query(api.users.me)).toEqual({ name: "Sim B", email: null, picture: null });
     const { teamId, inviteCode } = await alice.action(api.teams.createTeam, {
       name: "Simulator team", colour: "#e67834", sharing: "tiles",
     });
@@ -81,7 +81,7 @@ describe("simulator test sign-in", () => {
     expect(new Set(results.map((r) => r.tokens.userId)).size).toBe(3);
     for (const result of results) {
       const me = await t.withIdentity({ subject: result.tokens.userId }).query(api.users.me);
-      expect(me).toEqual({ name: expect.stringMatching(/^Test walker [0-9A-F]{4}$/), email: null });
+      expect(me).toEqual({ name: expect.stringMatching(/^Test walker [0-9A-F]{4}$/), email: null, picture: null });
     }
   });
 

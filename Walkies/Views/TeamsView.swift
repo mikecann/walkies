@@ -29,7 +29,71 @@ enum TeamSheet: Identifiable {
     }
 }
 
-/// Reused in the expanded place chip and in the full places panel.
+/// Your maps as heads, in the expanded place chip: just you, each team, and "+"
+/// for a new one. Tap a head to switch to that map.
+struct MapHeads: View {
+    @Environment(AppModel.self) private var model
+    @Environment(Account.self) private var account
+    @Binding var sheet: TeamSheet?
+
+    var body: some View {
+        let you = Head.you(account, teams: model.teams)
+        ScrollView(.horizontal) {
+            HStack(alignment: .top, spacing: 14) {
+                choice("Just me", id: nil, heads: [you])
+                ForEach(model.teams) { team in
+                    choice(team.name, id: team.id, heads: Head.team(team, you: you))
+                }
+                Menu {
+                    Button("Start a team map", systemImage: "person.2") { sheet = .start }
+                    Button("Join with a code", systemImage: "number") { sheet = .join }
+                } label: {
+                    VStack(spacing: 5) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(Color.ink.opacity(0.6))
+                            .frame(width: 44, height: 44)
+                            .background(Color.cream, in: .circle)
+                            .overlay(Circle().strokeBorder(Color.ink.opacity(0.35), style: StrokeStyle(lineWidth: 2, dash: [4, 3])))
+                        caption("New team")
+                    }
+                }
+                .accessibilityLabel("New team map")
+            }
+            // Room for the selected ring, which sits outside the heads.
+            .padding(5)
+        }
+        .scrollIndicators(.hidden)
+        .buttonStyle(PressScale())
+    }
+
+    private func choice(_ name: String, id: String?, heads: [Head]) -> some View {
+        let selected = model.currentTeamID == id
+        return Button {
+            model.currentTeamID = id
+        } label: {
+            VStack(spacing: 5) {
+                AvatarStack(heads: heads, size: 44, overlap: 14)
+                    .overlay {
+                        if selected { Capsule().strokeBorder(Color.walkiesOrange, lineWidth: 2.5).padding(-4.5) }
+                    }
+                caption(name).fontWeight(selected ? .semibold : .regular)
+            }
+        }
+        .accessibilityLabel(id == nil ? "Just me, My map" : name)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func caption(_ text: String) -> some View {
+        Text(text)
+            .font(.caption2)
+            .lineLimit(1)
+            .foregroundStyle(Color.ink.opacity(0.75))
+            .frame(maxWidth: 72)
+    }
+}
+
+/// The full list of maps in Maps and places.
 struct MapChoices: View {
     @Environment(AppModel.self) private var model
     @Binding var sheet: TeamSheet?

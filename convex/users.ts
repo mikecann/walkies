@@ -108,20 +108,24 @@ export const onSignInGoogle = internalMutation({
   returns: v.null(),
   handler: async (ctx, { provider: { profile }, userId }) => {
     await saveDetails(ctx, userId, profile);
+    // Keeps the photo current, and gives one to an account first made with Apple.
+    if (profile.picture) await ctx.db.patch("users", userId, { picture: profile.picture });
     return null;
   },
 });
 
-/** The signed-in user's name and email, or null when signed out. */
+/** The signed-in user's name, email and Google photo, or null when signed out. */
 export const me = query({
   args: {},
-  returns: v.union(v.null(), v.object({ name: v.union(v.string(), v.null()), email: v.union(v.string(), v.null()) })),
+  returns: v.union(v.null(), v.object({
+    name: v.union(v.string(), v.null()), email: v.union(v.string(), v.null()), picture: v.union(v.string(), v.null()),
+  })),
   handler: async (ctx) => {
     const userId = await currentUserId(ctx);
     if (userId === null) return null;
     const user = await ctx.db.get("users", userId);
     if (user === null) return null;
-    return { name: user.name ?? null, email: user.email ?? null };
+    return { name: user.name ?? null, email: user.email ?? null, picture: user.picture ?? null };
   },
 });
 

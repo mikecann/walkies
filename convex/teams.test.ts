@@ -51,6 +51,19 @@ describe("team maps", () => {
     expect((await alice.query(api.teams.myTeams))[0].memberCount).toBe(1);
   });
 
+  test("members see each other's photos; me returns your own", async () => {
+    const { t, alice, bob, outsider, aliceId, bobId, teamId, joinBob } = await setup();
+    await t.run((ctx) => ctx.db.patch("users", aliceId, { picture: "https://lh3.googleusercontent.com/alice" }));
+    expect(await alice.query(api.users.me)).toEqual({ name: "Alice", email: null, picture: "https://lh3.googleusercontent.com/alice" });
+    expect(await bob.query(api.users.me)).toMatchObject({ picture: null });
+    expect((await alice.query(api.teams.myTeams))[0].membership.picture).toBe("https://lh3.googleusercontent.com/alice");
+    await joinBob();
+    const snapshot = await bob.query(api.teams.teamSnapshot, { teamId });
+    expect(snapshot.members.find((m) => m.userId === aliceId)?.picture).toBe("https://lh3.googleusercontent.com/alice");
+    expect(snapshot.members.find((m) => m.userId === bobId)?.picture).toBeNull();
+    await expect(outsider.query(api.teams.teamSnapshot, { teamId })).rejects.toThrow("NOT_A_MEMBER");
+  });
+
   test("competing first-place adds must retry on the winning grid; lost replies stay idempotent", async () => {
     const { alice, bob, teamId, joinBob, file } = await setup();
     await joinBob();

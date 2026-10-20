@@ -50,7 +50,12 @@ Each canonical user has a shared hourly allowance of 30 failed invite previews
 and join attempts (all joins count). The window begins with the first counted
 attempt. Once exhausted, previews and joins return `RATE_LIMITED` until it expires.
 Preview results keep the `memberNames` field for compatibility but always return
-an empty array. Names of members are available only after joining.
+an empty array. Names and photos of members are available only after joining.
+
+A `Member` (in `myTeams` and snapshots) includes `picture`, the member's Google
+profile photo URL from their user record, or `null` (Apple never sends one). The
+app draws people's heads from it, falling back to initials on their colour.
+`users:me` returns `{ name, email, picture }` for your own head.
 
 A team holds at most **eight members, including its creator**. A repeated join
 returns the team without changing preferences, even when the team is full.
@@ -155,7 +160,7 @@ retrying revoked/disabled contributions; do not keep retrying permanent limit er
 type TileCursor = { position: string; until: number; since: number | null };
 {
   team: { teamId, name, createdBy, inviteCode, createdAt },
-  members: [{ userId, name, colour, sharing, walksCount, joinedAt, isYou }],
+  members: [{ userId, name, colour, sharing, walksCount, joinedAt, isYou, picture: string | null }],
   places: [{ placeId, clientId, name, updatedAt, url: string | null }],
   tiles: [{ placeId, q, r, by: userId, at }],
   trails: [{ walkClientId, url: string | null, by: userId, at }],

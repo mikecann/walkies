@@ -21,6 +21,8 @@ nonisolated struct TeamMember: Codable, Sendable, Identifiable {
     var walksCount: Bool
     var joinedAt: Double
     var isYou: Bool
+    /// Their Google photo, for their head. Nil for Apple sign-ins and older saved teams.
+    var picture: String? = nil
     var id: String { userId }
 }
 

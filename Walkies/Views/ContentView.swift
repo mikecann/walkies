@@ -50,7 +50,7 @@ struct ContentView: View {
         .safeAreaInset(edge: .top) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 8) {
-                    PlaceChip(city: model.selectedCity, mapName: model.mapName, secrets: secretsCount) { showingCities = true }
+                    PlaceChip(city: model.selectedCity, secrets: secretsCount) { showingCities = true }
                     ShellsChip { showingProgress = true }
                 }
                 Spacer(minLength: 12)
@@ -142,6 +142,7 @@ struct ContentView: View {
         .sheet(isPresented: Binding(get: { model.pendingTeamInvite != nil }, set: { if !$0 { model.pendingTeamInvite = nil } })) {
             JoinTeamView(initialCode: model.pendingTeamInvite ?? "")
         }
+        .task { await account.refreshProfile() }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             while !Task.isCancelled {
@@ -214,17 +215,24 @@ extension ContentView {
     }
 }
 
-/// The place you're exploring, kept small: name and percentage. Tap it for the
-/// details and to switch places.
+/// The place you're exploring, kept small: whose map it is as heads, the place
+/// and percentage. Tap it for the details and to switch maps or places.
 struct PlaceChip: View {
+    @Environment(AppModel.self) private var model
+    @Environment(Account.self) private var account
     let city: City?
-    var mapName = "My map"
     /// Found and total secrets here, when the place has any.
     let secrets: (found: Int, total: Int)?
     let onChangePlace: () -> Void
 
     @State private var open = false
     @State private var teamSheet: TeamSheet?
+
+    /// You on My map, or the team on a team map.
+    private var heads: [Head] {
+        let you = Head.you(account, teams: model.teams)
+        return model.currentTeam.map { Head.team($0, you: you) } ?? [you]
+    }
 
     var body: some View {
         Group {
@@ -234,7 +242,8 @@ struct PlaceChip: View {
                         withAnimation(.snappy) { open.toggle() }
                     } label: {
                         HStack(spacing: 8) {
-                            Text("\(mapName) · \(city.name)").font(.headline).lineLimit(1)
+                            AvatarStack(heads: heads)
+                            Text(city.name).font(.headline).lineLimit(1)
                             Text(city.progress.percentText)
                                 .font(.headline.monospacedDigit())
                                 .foregroundStyle(Color.walkiesOrange)
@@ -244,14 +253,19 @@ struct PlaceChip: View {
                                 .foregroundStyle(Color.ink.opacity(0.5))
                                 .rotationEffect(.degrees(open ? 180 : 0))
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 11)
+                        .padding(.leading, 4)
+                        .padding(.trailing, 16)
+                        .padding(.vertical, 7)
                         .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("\(model.mapName), \(city.name), \(city.progress.percentText.replacingOccurrences(of: "%", with: " percent"))")
+                    .accessibilityHint(open ? "Hides the details" : "Shows the details and your maps")
 
                     if open {
                         VStack(alignment: .leading, spacing: 10) {
+                            MapHeads(sheet: $teamSheet)
+                                .padding(.bottom, 4)
                             ProgressBar(value: city.progress)
                             Text("\(city.visited.count) of \(city.tiles.count) tiles explored")
                                 .font(.subheadline)
@@ -259,15 +273,20 @@ struct PlaceChip: View {
                                 Text("\(secrets.found) of \(secrets.total) secrets found")
                                     .font(.subheadline)
                             }
-                            MapChoices(sheet: $teamSheet)
-                                .padding(.vertical, 6)
-                            Button("Change place", action: onChangePlace)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(Color.burnt)
-                                .padding(.top, 2)
+                            HStack(spacing: 18) {
+                                Button("Change place", action: onChangePlace)
+                                if let team = model.currentTeam {
+                                    Button("Team settings") { teamSheet = .settings(team.id) }
+                                }
+                            }
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.burnt)
+                            .buttonStyle(.plain)
+                            .padding(.top, 2)
                         }
                         .foregroundStyle(Color.ink.opacity(0.75))
                         .padding(.horizontal, 16)
+                        .padding(.top, 4)
                         .padding(.bottom, 14)
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
@@ -277,13 +296,18 @@ struct PlaceChip: View {
                 .animation(.snappy, value: city.visited.count)
             } else {
                 Button(action: onChangePlace) {
-                    Label("\(mapName) · Maps and places", systemImage: "plus")
-                        .font(.headline)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 11)
+                    HStack(spacing: 8) {
+                        AvatarStack(heads: heads)
+                        Label("Maps and places", systemImage: "plus")
+                            .font(.headline)
+                    }
+                    .padding(.leading, 4)
+                    .padding(.trailing, 16)
+                    .padding(.vertical, 7)
                 }
                 .buttonStyle(.plain)
                 .stickerCard(in: .capsule)
+                .accessibilityLabel("\(model.mapName), Maps and places")
             }
         }
         .sheet(item: $teamSheet) { $0.destination }
