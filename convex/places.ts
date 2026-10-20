@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { action, internalAction, internalMutation, type ActionCtx, type MutationCtx } from "./_generated/server";
+import { action, internalAction, internalMutation, internalQuery, type ActionCtx, type MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { currentUserId } from "./users";
@@ -69,6 +69,16 @@ export const allowCall = internalMutation({
     if (row === null) await ctx.db.insert("placeCalls", { userId, windowStart: now, count: 1 });
     else await ctx.db.patch("placeCalls", row._id, { windowStart: current ? row.windowStart : now, count: current ? row.count + 1 : 1 });
     return null;
+  },
+});
+
+/** A cached place's street file, for scripts and fixtures.
+ * `npx convex run places:cachedUrl '{"osmId": 11688696}'` */
+export const cachedUrl = internalQuery({
+  args: { osmId: v.number() }, returns: v.union(v.null(), v.string()),
+  handler: async (ctx, { osmId }) => {
+    const row = await ctx.db.query("placeData").withIndex("by_osm", (q) => q.eq("osmId", osmId)).unique();
+    return row?.file ? await ctx.storage.getUrl(row.file) : null;
   },
 });
 
