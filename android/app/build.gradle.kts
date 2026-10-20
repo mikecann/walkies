@@ -34,6 +34,8 @@ android {
     compileSdk = 36
 
     defaultConfig {
+        // Every current Android phone (Dad's Pixel included) and the Apple-silicon emulator are 64-bit ARM.
+        ndk { abiFilters += "arm64-v8a" }
         applicationId = "com.mikecann.walkies"
         minSdk = 29
         targetSdk = 36
