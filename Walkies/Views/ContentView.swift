@@ -253,7 +253,7 @@ struct PlaceChip: View {
                                 .foregroundStyle(Color.ink.opacity(0.5))
                                 .rotationEffect(.degrees(open ? 180 : 0))
                         }
-                        .padding(.leading, 4)
+                        .padding(.leading, 8)
                         .padding(.trailing, 16)
                         .padding(.vertical, 7)
                         .contentShape(.rect)
@@ -301,7 +301,7 @@ struct PlaceChip: View {
                         Label("Maps and places", systemImage: "plus")
                             .font(.headline)
                     }
-                    .padding(.leading, 4)
+                    .padding(.leading, 8)
                     .padding(.trailing, 16)
                     .padding(.vertical, 7)
                 }
