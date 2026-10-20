@@ -212,8 +212,8 @@ extension ContentView {
     }
 }
 
-/// The place you're exploring, kept small: whose map it is as heads, the place
-/// and percentage. Tap it for the details and to switch maps or places.
+/// The place you're exploring, kept small: your head, the place and percentage.
+/// Tap it for the details and to change place.
 struct PlaceChip: View {
     @Environment(AppModel.self) private var model
     @Environment(Account.self) private var account
@@ -223,7 +223,6 @@ struct PlaceChip: View {
     let onChangePlace: () -> Void
 
     @State private var open = false
-    @State private var teamSheet: TeamSheet?
 
     private var heads: [Head] { [Head.you(account, teams: model.teams)] }
 
@@ -234,7 +233,12 @@ struct PlaceChip: View {
             } label: {
                 HStack(spacing: 8) {
                     AvatarStack(heads: heads)
-                    Text(city?.name ?? "Places").font(.headline).lineLimit(1)
+                    if model.worldGridResetPending {
+                        Text("Rebuilding places").font(.headline).lineLimit(1)
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text(city?.name ?? "Places").font(.headline).lineLimit(1)
+                    }
                     if let city {
                         Text(city.progress.percentText)
                             .font(.headline.monospacedDigit())
@@ -253,11 +257,15 @@ struct PlaceChip: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(city.map { "\($0.name), \($0.progress.percentText.replacingOccurrences(of: "%", with: " percent"))" } ?? "Places")
-            .accessibilityHint(open ? "Hides the details" : "Shows progress and your team")
+            .accessibilityHint(open ? "Hides the details" : "Shows your progress")
 
             if open {
                 VStack(alignment: .leading, spacing: 10) {
-                    if let city {
+                    if model.worldGridResetPending {
+                        Text("Your places are moving onto the new map. It needs internet and can take a minute or two.")
+                            .font(.subheadline)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if let city {
                         ProgressBar(value: city.progress)
                         Text("\(city.visited.count) of \(city.tiles.count) tiles explored")
                             .font(.subheadline)
@@ -265,9 +273,7 @@ struct PlaceChip: View {
                             Text("\(secrets.found) of \(secrets.total) secrets found")
                                 .font(.subheadline)
                         }
-                        Divider()
                     }
-                    TeamSection(sheet: $teamSheet)
                     Button("Change place", action: onChangePlace)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.burnt)
@@ -284,7 +290,6 @@ struct PlaceChip: View {
         .frame(minWidth: open ? 250 : nil, alignment: .leading)
         .stickerCard(in: .rect(cornerRadius: open ? 22 : 24))
         .animation(.snappy, value: city?.visited.count)
-        .sheet(item: $teamSheet) { $0.destination }
     }
 }
 

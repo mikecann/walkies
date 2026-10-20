@@ -37,6 +37,11 @@ nonisolated struct Store {
         try JSONDecoder().decode([ResetPlace].self, from: Data(contentsOf: resetURL))
     }
 
+    /// Keeps OSM ids found so far, so a retry doesn't search for them again.
+    func savePendingResetPlaces(_ places: [ResetPlace]) throws {
+        try JSONEncoder().encode(places).write(to: resetURL, options: .atomic)
+    }
+
     /// The pending descriptor file is written first and removed last. Offline launches
     /// and a process killed halfway through replay can retry without losing the places.
     func prepareWorldGridReset() throws {

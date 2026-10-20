@@ -109,6 +109,16 @@ final class SyncEngine {
         } catch {
             status = .failed(error.localizedDescription)
         }
+        // Places still waiting to be rebuilt show nothing on the map, so try again
+        // soon rather than waiting for the next walk or launch.
+        if model.worldGridResetPending, !pending {
+            scheduled?.cancel()
+            scheduled = Task {
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled else { return }
+                await sync()
+            }
+        }
     }
 
     /// Forgets what was sent, for signing out.

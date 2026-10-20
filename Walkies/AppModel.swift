@@ -149,19 +149,27 @@ final class AppModel {
         await historyTask?.value
         try store.prepareWorldGridReset()
         let generation = dataGeneration
+        var pending = try store.pendingResetPlaces()
+        // Older City saves never retained osmId. Look each name up once, a second
+        // apart as Nominatim asks, and keep what's found so a retry carries on from there.
+        var searched = false
+        for i in pending.indices where pending[i].osmId == nil {
+            if searched { try await Task.sleep(for: .seconds(1.2)) }
+            searched = true
+            let saved = pending[i]
+            let matches = try await OSMClient.searchPlaces("\(saved.name), \(saved.detail)", session: client.session)
+            if let match = matches.first(where: {
+                $0.name.caseInsensitiveCompare(saved.name) == .orderedSame
+                    && $0.boundary.centre.distance(to: saved.boundary.centre) < 10_000
+            }) {
+                pending[i].osmId = match.osmId
+                try store.savePendingResetPlaces(pending)
+            }
+        }
         var rebuilt: [City] = []
-        for saved in try store.pendingResetPlaces() {
+        for saved in pending {
             var place = PlaceResult(id: 0, name: saved.name, detail: saved.detail, kind: "suburb",
                                     boundary: saved.boundary, area: 0, osmId: saved.osmId)
-            // Older City saves never retained osmId. Resolve the saved name once;
-            // new saves retain it and go straight to the shared street cache.
-            if place.osmId == nil {
-                let matches = try await OSMClient.searchPlaces("\(saved.name), \(saved.detail)", session: client.session)
-                if let match = matches.first(where: {
-                    $0.name.caseInsensitiveCompare(saved.name) == .orderedSame
-                        && $0.boundary.centre.distance(to: saved.boundary.centre) < 10_000
-                }) { place.osmId = match.osmId }
-            }
             let city: City
             if let osmId = place.osmId {
                 let cached = try await CachedPlaceData.fetch(osmId: osmId, client: client)
