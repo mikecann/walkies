@@ -193,7 +193,7 @@ struct ProgressionSheet: View {
     private var shopSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             sectionTitle("Shell shop", art: "progress-shop")
-            Text("A different look for your next walk. Shells buy looks and hints; walking uncovers the map.")
+            Text("A different look for your next walk. Shells buy looks and hints; walking uncovers the map. Tap Wear to switch to anything you own, free looks included.")
                 .font(.footnote).foregroundStyle(Color.ink.opacity(0.7))
             ForEach(Progression.Group.allCases, id: \.self) { group in
                 Text(group.displayName).font(.headline).padding(.top, 4)
@@ -227,7 +227,16 @@ struct ProgressionSheet: View {
                 Label("Equipped", systemImage: "checkmark")
                     .font(.caption.weight(.semibold)).foregroundStyle(Color.badgeTeal)
             } else if model.owned.contains(item.id) {
-                Text("Owned").font(.caption.weight(.semibold))
+                // Owned looks are worn from here too, not only from the wardrobe below.
+                if item.group != nil {
+                    Button("Wear") { wear(item) }
+                        .font(.subheadline.weight(.bold))
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .background(Color.badgeGreen.opacity(0.3), in: .capsule)
+                        .accessibilityLabel("Wear \(item.name)")
+                } else {
+                    Text("Owned").font(.caption.weight(.semibold))
+                }
             } else {
                 Button("Buy") { purchase = item }
                     .font(.subheadline.weight(.bold))
@@ -250,10 +259,7 @@ struct ProgressionSheet: View {
                     ForEach(Progression.catalog.filter { $0.group == group && model.owned.contains($0.id) }) { item in
                         let equipped = model.equipped[group] == item.id
                         Button {
-                            if model.equip(item.id) {
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                showNotice("\(item.name) equipped")
-                            } else { showNotice("Couldn't equip that just now.") }
+                            wear(item)
                         } label: {
                             VStack(spacing: 6) {
                                 ProgressItemArt(id: item.id).frame(height: 58)
@@ -333,6 +339,13 @@ struct ProgressionSheet: View {
         case Progression.spyglassPair: "2 spyglasses"
         default: Progression.item(id)?.name ?? "Reward"
         }
+    }
+
+    private func wear(_ item: Progression.Item) {
+        if model.equip(item.id) {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            showNotice("\(item.name) equipped")
+        } else { showNotice("Couldn't equip that just now.") }
     }
 
     private func celebrate(_ text: String) {

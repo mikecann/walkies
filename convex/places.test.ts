@@ -81,9 +81,11 @@ test("places:get answers from the cache, but only so many times a minute", async
   vi.useFakeTimers();
   const { t, client } = await signedIn();
   const file = await t.run((ctx) => ctx.storage.store(new Blob(["{}"])));
-  await t.run((ctx) => ctx.db.insert("placeData", { osmId: 21, name: "Home", fetchedAt: Date.now(), version: 1, file }));
+  await t.run((ctx) => ctx.db.insert("placeData", { osmId: 21, name: "Home", fetchedAt: Date.now(), version: 2, file }));
   for (let i = 0; i < 30; i++) {
-    expect((await client.action(api.places.get, { osmId: 21 })).url).toBeTruthy();
+    const cached = await client.action(api.places.get, { osmId: 21 });
+    expect(cached.url).toBeTruthy();
+    expect(cached.version).toBe(2);
   }
   await expect(client.action(api.places.get, { osmId: 21 })).rejects.toThrow(/Too many/);
   // Warming counts towards the same limit.
@@ -123,4 +125,25 @@ test("the slot never shows up as a place on the warm queue", async () => {
   await t.mutation(internal.places.takeOverpass, { lease: Date.now() });
   await client.mutation(internal.places.enqueue, { osmIds: [] });
   expect(await t.mutation(internal.places.claimNext, {})).toEqual({ kind: "done" });
+});
+
+test("streets cached by an older version are fetched again and can all be requeued", async () => {
+  vi.useFakeTimers();
+  const { t } = await signedIn();
+  const file = await t.run((ctx) => ctx.storage.store(new Blob(["{}"])));
+  await t.run(async (ctx) => {
+    await ctx.db.insert("placeData", { osmId: 31, name: "Old", fetchedAt: Date.now(), version: 1, file });
+    await ctx.db.insert("placeData", { osmId: 32, name: "Current", fetchedAt: Date.now(), version: 2, file });
+    await ctx.db.insert("placeData", { osmId: 33, name: "Never fetched", fetchedAt: 0, version: 2 });
+  });
+  // Opening an old place fetches it again rather than handing over the old file.
+  expect(await t.mutation(internal.places.claim, { osmId: 31 })).toMatchObject({ kind: "fetch" });
+  expect(await t.mutation(internal.places.claim, { osmId: 32 })).toMatchObject({ kind: "ready" });
+  await t.run(async (ctx) => {
+    const row = (await ctx.db.query("placeData").collect()).find((r) => r.osmId === 31)!;
+    await ctx.db.patch("placeData", row._id, { fetchingAt: undefined });
+  });
+  expect(await t.mutation(internal.places.requeueMissing, {})).toEqual({ queued: 2 });
+  const queued = (await rows(t)).filter((r) => r.osmId > 0 && r.queuedAt !== undefined).map((r) => r.osmId).sort();
+  expect(queued).toEqual([31, 33]);
 });

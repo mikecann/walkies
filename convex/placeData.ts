@@ -14,6 +14,38 @@ export type PlaceData = {
 
 const excluded = "motorway|motorway_link|construction|proposed|raceway|bus_guideway|abandoned|razed";
 const excludedHighways = new Set(excluded.split("|"));
+// Busy roads only count when OSM says you can walk along them.
+const busyRoads = new Set(["trunk", "trunk_link", "primary", "primary_link"]);
+const pathTypes = new Set(["footway", "path", "cycleway", "pedestrian", "steps", "bridleway", "corridor"]);
+const sidewalkValues = new Set(["both", "left", "right", "yes", "separate"]);
+
+/** km/h from an OSM maxspeed ("80", "80 km/h", "50 mph"), or null for "none", "AU:urban" and the like. */
+export function speedLimit(maxspeed: string | undefined): number | null {
+  const match = maxspeed?.trim().match(/^(\d+(?:\.\d+)?)\s*(km\/h|kmh|kph|mph)?$/i);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return match[2]?.toLowerCase() === "mph" ? value * 1.609344 : value;
+}
+
+/** Keep this in step with WalkableRule in OSMClient.swift and OSMClient.kt.
+ * Motorways and private ways are out. Trunk and primary roads, and anything signed
+ * 80 km/h or more, are out unless they have a footpath or are open to walkers.
+ * Footpaths mapped alongside them are separate ways and stay in as normal.
+ */
+export function isWalkable(tags: Record<string, unknown>): boolean {
+  const tag = (key: string) => typeof tags[key] === "string" ? tags[key] as string : undefined;
+  const highway = tag("highway");
+  if (highway === undefined || excludedHighways.has(highway)) return false;
+  if (["private", "no"].includes(tag("access") ?? "") || ["private", "no"].includes(tag("foot") ?? "")) return false;
+  const sidewalk = sidewalkValues.has(tag("sidewalk") ?? "")
+    || ["sidewalk:left", "sidewalk:right", "sidewalk:both"].some((key) => ["yes", "separate"].includes(tag(key) ?? ""));
+  const foot = tag("foot");
+  const walkersWelcome = foot === "yes" || foot === "designated";
+  if (busyRoads.has(highway) && !sidewalk && !walkersWelcome && foot !== "permissive" && tag("footway") !== "sidewalk") return false;
+  const limit = speedLimit(tag("maxspeed"));
+  if (!pathTypes.has(highway) && limit !== null && limit >= 80 && !sidewalk && !walkersWelcome) return false;
+  return true;
+}
 const round = (n: number) => Math.round(n * 1_000_000) / 1_000_000;
 
 function object(value: unknown): Record<string, unknown> {
@@ -57,7 +89,8 @@ export function walkableQuery(boundary: PlaceData["boundary"]): string {
   const west = Math.min(...outer.map((p) => p[0]));
   const north = Math.max(...outer.map((p) => p[1]));
   const east = Math.max(...outer.map((p) => p[0]));
-  // Keep this query in step with OSMClient.walkableWays.
+  // Keep this query in step with OSMClient.walkableWays. `out geom` brings every
+  // tag, which isWalkable needs (sidewalk, foot, maxspeed) before the ways are stored.
   return `[out:json][timeout:120];
 way["highway"]["highway"!~"^(${excluded})$"]["access"!~"^(private|no)$"]["foot"!~"^(private|no)$"](${south},${west},${north},${east});
 out geom;`;
@@ -71,10 +104,9 @@ export function waysFromOverpass(value: unknown): PlaceData["ways"] {
     const element = object(value);
     if (element.type !== "way" || !Array.isArray(element.geometry)) return [];
     const tags = object(element.tags ?? {});
-    if (typeof tags.highway !== "string" || excludedHighways.has(tags.highway)
-      || tags.access === "private" || tags.access === "no" || tags.foot === "private" || tags.foot === "no") return [];
+    if (!isWalkable(tags)) return [];
     const way: PlaceData["ways"][number] = {
-      highway: tags.highway,
+      highway: tags.highway as string,
       points: element.geometry.map((value) => {
         const point = object(value);
         return [coordinate(point.lat, 90), coordinate(point.lon, 180)];

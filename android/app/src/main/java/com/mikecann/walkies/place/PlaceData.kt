@@ -12,6 +12,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlin.math.abs
@@ -24,16 +25,28 @@ data class OSMWay(val tags: Map<String, String>, val points: List<Coordinate>)
  * coordinates use GeoJSON's [lon, lat]; street points use [lat, lon]. Validated,
  * so a malformed cache is an error rather than lost tiles.
  */
-data class PlaceData(val boundary: Boundary, val ways: List<OSMWay>) {
+data class PlaceData(
+    val boundary: Boundary,
+    val ways: List<OSMWay>,
+    /**
+     * The street cache's version (WalkableRule.VERSION), from places:get rather than
+     * the file. Null from a server older than version 2, whose ways weren't filtered.
+     */
+    val version: Int? = null,
+) {
     class Invalid : Exception("Invalid cached OSM geometry")
+
+    /** What a place built from these streets records as City.streetsVersion. */
+    val streetsVersion: Int? get() = version?.takeIf { it >= WalkableRule.VERSION }?.let { WalkableRule.VERSION }
 
     companion object {
         /** The server's shared street file for this OSM relation (CachedPlaceData.fetch). */
         suspend fun fetch(osmId: Long, client: ConvexClient): PlaceData {
             val file = client.action("places:get", buildJsonObject { put("osmId", osmId) }) as? JsonObject ?: throw Invalid()
             val url = (file["url"] as? JsonPrimitive)?.contentOrNull ?: throw Invalid()
+            val version = (file["version"] as? JsonPrimitive)?.intOrNull
             val bytes = client.download(url)
-            return withContext(Dispatchers.Default) { parse(bytes.decodeToString()) }
+            return withContext(Dispatchers.Default) { parse(bytes.decodeToString()).copy(version = version) }
         }
 
         fun parse(text: String): PlaceData {

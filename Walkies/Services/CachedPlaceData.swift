@@ -6,6 +6,11 @@ import Foundation
 nonisolated struct CachedPlaceData: Decodable, Sendable {
     var boundary: Boundary
     var ways: [OSMWay]
+    /// The street cache's version (WalkableRule.version), from places:get rather than
+    /// the file. Nil from a server older than version 2, whose ways weren't filtered.
+    var version: Int?
+    /// What a place built from these streets records as City.streetsVersion.
+    var streetsVersion: Int? { version.flatMap { $0 >= WalkableRule.version ? WalkableRule.version : nil } }
 
     private enum CodingKeys: String, CodingKey { case boundary, ways }
     private struct Way: Decodable {
@@ -50,8 +55,10 @@ nonisolated struct CachedPlaceData: Decodable, Sendable {
     }
 
     static func fetch(osmId: Int, client: ConvexClient) async throws -> CachedPlaceData {
-        struct File: Decodable { var url: URL; var fetchedAt: Double }
+        struct File: Decodable { var url: URL; var fetchedAt: Double; var version: Int? }
         let file: File = try await client.action("places:get", ["osmId": osmId])
-        return try JSONDecoder().decode(CachedPlaceData.self, from: await client.download(file.url))
+        var data = try JSONDecoder().decode(CachedPlaceData.self, from: await client.download(file.url))
+        data.version = file.version
+        return data
     }
 }

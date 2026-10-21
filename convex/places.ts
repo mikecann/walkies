@@ -5,7 +5,12 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { currentUserId } from "./users";
 import { boundaryFromNominatim, walkableQuery, waysFromOverpass, type PlaceData } from "./placeData";
 
-const version = 1;
+// The street cache's format and filtering. Bump it when either changes: rows with an
+// older version are fetched again when someone opens the place, and
+// `requeueMissing` puts them all back on the warm queue. Version 2 drops busy roads
+// you can't walk along (isWalkable in placeData.ts). The phones redo a place's
+// tiles once when places:get hands them a newer version than the place was built with.
+const version = 2;
 const maxAge = 60 * 24 * 60 * 60 * 1000;
 // Longer than Nominatim, the wait for the Overpass slot and both 135-second
 // Overpass attempts. A crashed action cannot leave a place locked forever;
@@ -33,7 +38,7 @@ const endpoints = [
   "https://overpass-api.de/api/interpreter",
   "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ];
-type Cached = { url: string; fetchedAt: number };
+type Cached = { url: string; fetchedAt: number; version: number };
 type Claim = { kind: "ready"; file: Id<"_storage">; fetchedAt: number }
   | { kind: "busy" } | { kind: "fetch"; lease: number };
 
@@ -90,7 +95,7 @@ export const claim = internalMutation({
 /** Ready files take one lookup. Another caller's in-flight fetch gets a brief wait. */
 export const get = action({
   args: { osmId: v.number() },
-  returns: v.object({ url: v.string(), fetchedAt: v.number() }),
+  returns: v.object({ url: v.string(), fetchedAt: v.number(), version: v.number() }),
   handler: async (ctx, { osmId }): Promise<Cached> => {
     await ctx.runMutation(internal.places.allowCall, {});
     for (let attempt = 0; attempt <= 20; attempt++) {
@@ -98,7 +103,7 @@ export const get = action({
       if (state.kind === "ready") {
         const url = await ctx.storage.getUrl(state.file);
         if (!url) throw new ConvexError("Place data file is missing");
-        return { url, fetchedAt: state.fetchedAt };
+        return { url, fetchedAt: state.fetchedAt, version };
       }
       if (state.kind === "fetch") return await fetchPlace(ctx, osmId, state.lease, overpassWait);
       if (attempt < 20) await sleep(1000);
@@ -128,15 +133,16 @@ export const enqueue = internalMutation({
   },
 });
 
-/** Puts every place without street data back on the warm queue, such as ones
- * that failed before the queue existed. `npx convex run places:requeueMissing --prod` */
+/** Puts every place without current street data back on the warm queue: ones that
+ * failed before the queue existed, and ones cached by an older version. Run it once
+ * after deploying a version bump. `npx convex run places:requeueMissing --prod` */
 export const requeueMissing = internalMutation({
   args: {}, returns: v.object({ queued: v.number() }),
   handler: async (ctx) => {
     const now = Date.now();
     let queued = 0;
     for (const row of await ctx.db.query("placeData").collect()) {
-      if (row.osmId <= 0 || row.file !== undefined || row.queuedAt !== undefined) continue;
+      if (row.osmId <= 0 || row.queuedAt !== undefined || (row.file !== undefined && row.version === version)) continue;
       await ctx.db.patch("placeData", row._id, { queuedAt: now, attempts: 0 });
       queued++;
     }
@@ -333,7 +339,7 @@ async function fetchPlace(ctx: ActionCtx, osmId: number, lease: number, overpass
     if (!saved) throw new Error("Place fetch lease expired");
     const url = await ctx.storage.getUrl(file);
     if (!url) throw new Error("Place data file is missing");
-    return { url, fetchedAt };
+    return { url, fetchedAt, version };
   } catch (error) {
     await ctx.runMutation(internal.places.finish, { osmId, lease });
     throw error;

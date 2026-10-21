@@ -20,7 +20,7 @@ nonisolated enum CityBuilder {
                 var cachedPlace = place
                 cachedPlace.boundary = cached.boundary
                 await status("Laying out the tiles…")
-                return build(from: cachedPlace, ways: cached.ways, walks: walks)
+                return build(from: cachedPlace, ways: cached.ways, walks: walks, streetsVersion: cached.streetsVersion)
             } catch {
                 // The local-first path still works with older deployments or an
                 // unavailable cache. Cancellation should stop the add altogether.
@@ -31,15 +31,28 @@ nonisolated enum CityBuilder {
         let b = place.boundary.bounds
         let ways = try await OSMClient.walkableWays(south: b.south, west: b.west, north: b.north, east: b.east, session: client?.session ?? .shared)
         await status("Laying out the tiles…")
-        return build(from: place, ways: ways, walks: walks)
+        // Straight from Overpass, with every tag, so WalkableRule has already filtered them.
+        return build(from: place, ways: ways, walks: walks, streetsVersion: WalkableRule.version)
     }
 
     /// Both network paths use the same tile selection, road hints and walk replay.
-    static func build(from place: PlaceResult, ways: [OSMWay], walks: [Walk]) -> City {
+    static func build(from place: PlaceResult, ways: [OSMWay], walks: [Walk], streetsVersion: Int? = nil) -> City {
         let grid = HexGrid.world
         let shape = BoundaryShape(place.boundary, projection: grid.projection)
-        let inside = City.hexes(inside: shape, grid: grid)
+        var city = City(
+            name: place.name, detail: place.detail, osmId: place.osmId, boundary: place.boundary,
+            tiles: streetTiles(from: ways, inside: City.hexes(inside: shape, grid: grid)), visited: [], roads: roadLines(from: ways),
+            streetsVersion: streetsVersion
+        )
+        for walk in walks {
+            _ = city.visit(CoverageTracer.samples(for: walk.points), within: shape)
+        }
+        return city
+    }
 
+    /// The tiles in the place with a walkable street or path through them.
+    static func streetTiles(from ways: [OSMWay], inside: Set<Hex>) -> Set<Hex> {
+        let grid = HexGrid.world
         var tiles = Set<Hex>()
         // A driveway leads onto someone's property, so it doesn't make a tile count.
         for way in ways where way.tags["service"] != "driveway" {
@@ -49,16 +62,7 @@ nonisolated enum CityBuilder {
             }
         }
         // Somewhere with no mapped paths at all: fall back to every tile.
-        if tiles.isEmpty { tiles = inside }
-
-        var city = City(
-            name: place.name, detail: place.detail, osmId: place.osmId, boundary: place.boundary,
-            tiles: tiles, visited: [], roads: roadLines(from: ways)
-        )
-        for walk in walks {
-            _ = city.visit(CoverageTracer.samples(for: walk.points), within: shape)
-        }
-        return city
+        return tiles.isEmpty ? inside : tiles
     }
 
     struct Replay: Sendable {

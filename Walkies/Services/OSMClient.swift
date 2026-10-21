@@ -19,6 +19,46 @@ nonisolated struct OSMWay: Sendable {
     var points: [Coordinate]
 }
 
+/// Which OSM ways you could walk along. Keep this in step with isWalkable in
+/// convex/placeData.ts, which filters the shared street cache, and OSMClient.kt.
+/// Motorways and private ways are out. Trunk and primary roads, and anything signed
+/// 80 km/h or more, are out unless they have a footpath or are open to walkers.
+/// Footpaths mapped alongside them are separate ways and stay in as normal.
+nonisolated enum WalkableRule {
+    /// Places built from streets filtered by this rule. Matches the street cache's
+    /// version in convex/places.ts; a place built with less has its tiles redone once.
+    static let version = 2
+
+    static let excludedHighways: Set = ["motorway", "motorway_link", "construction", "proposed", "raceway", "bus_guideway", "abandoned", "razed"]
+    private static let busyRoads: Set = ["trunk", "trunk_link", "primary", "primary_link"]
+    private static let pathTypes: Set = ["footway", "path", "cycleway", "pedestrian", "steps", "bridleway", "corridor"]
+    private static let sidewalkValues: Set = ["both", "left", "right", "yes", "separate"]
+
+    static func isWalkable(_ tags: [String: String]) -> Bool {
+        guard let highway = tags["highway"], !excludedHighways.contains(highway) else { return false }
+        if ["private", "no"].contains(tags["access"] ?? "") || ["private", "no"].contains(tags["foot"] ?? "") { return false }
+        let sidewalk = sidewalkValues.contains(tags["sidewalk"] ?? "")
+            || ["sidewalk:left", "sidewalk:right", "sidewalk:both"].contains { ["yes", "separate"].contains(tags[$0] ?? "") }
+        let foot = tags["foot"]
+        let walkersWelcome = foot == "yes" || foot == "designated"
+        if busyRoads.contains(highway), !sidewalk, !walkersWelcome, foot != "permissive", tags["footway"] != "sidewalk" { return false }
+        if !pathTypes.contains(highway), let limit = speedLimit(tags["maxspeed"]), limit >= 80, !sidewalk, !walkersWelcome { return false }
+        return true
+    }
+
+    /// km/h from an OSM maxspeed ("80", "80 km/h", "50 mph"), or nil for "none", "AU:urban" and the like.
+    static func speedLimit(_ maxspeed: String?) -> Double? {
+        guard let text = maxspeed?.trimmingCharacters(in: .whitespaces).lowercased() else { return nil }
+        let digits = text.prefix { $0.isNumber || $0 == "." }
+        guard let value = Double(digits) else { return nil }
+        switch text.dropFirst(digits.count).trimmingCharacters(in: .whitespaces) {
+        case "", "km/h", "kmh", "kph": return value
+        case "mph": return value * 1.609344
+        default: return nil
+        }
+    }
+}
+
 nonisolated enum OSMError: LocalizedError {
     case badResponse(Int)
 
@@ -63,7 +103,8 @@ nonisolated enum OSMClient {
     /// Lines for every street and path you could walk along inside the box.
     @concurrent
     static func walkableWays(south: Double, west: Double, north: Double, east: Double, session: URLSession = .shared) async throws -> [OSMWay] {
-        let excluded = "motorway|motorway_link|construction|proposed|raceway|bus_guideway|abandoned|razed"
+        let excluded = WalkableRule.excludedHighways.sorted().joined(separator: "|")
+        // `out geom` brings every tag, which WalkableRule needs (sidewalk, foot, maxspeed).
         let query = """
         [out:json][timeout:120];
         way["highway"]["highway"!~"^(\(excluded))$"]["access"!~"^(private|no)$"]["foot"!~"^(private|no)$"]\
@@ -72,9 +113,8 @@ nonisolated enum OSMClient {
         """
         let decoded = try JSONDecoder().decode(OverpassResponse.self, from: await overpass(query, session: session))
         return decoded.elements.compactMap { element in
-            element.geometry.map { geometry in
-                OSMWay(tags: element.tags ?? [:], points: geometry.map { Coordinate(lat: $0.lat, lon: $0.lon) })
-            }
+            guard let geometry = element.geometry, WalkableRule.isWalkable(element.tags ?? [:]) else { return nil }
+            return OSMWay(tags: element.tags ?? [:], points: geometry.map { Coordinate(lat: $0.lat, lon: $0.lon) })
         }
     }
 

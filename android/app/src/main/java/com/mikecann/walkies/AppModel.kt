@@ -3,6 +3,7 @@ package com.mikecann.walkies
 import com.mikecann.walkies.convex.ConvexClient
 import com.mikecann.walkies.grid.Coordinate
 import com.mikecann.walkies.grid.Hex
+import com.mikecann.walkies.grid.HexGrid
 import com.mikecann.walkies.lore.LoreEntry
 import com.mikecann.walkies.lore.LoreLibrary
 import com.mikecann.walkies.lore.placeStickers
@@ -20,7 +21,10 @@ import com.mikecann.walkies.place.City
 import com.mikecann.walkies.place.CityBuilder
 import com.mikecann.walkies.place.NearbyPlaces
 import com.mikecann.walkies.place.OSMClient
+import com.mikecann.walkies.place.OSMWay
+import com.mikecann.walkies.place.PlaceData
 import com.mikecann.walkies.place.PlaceResult
+import com.mikecann.walkies.place.WalkableRule
 import com.mikecann.walkies.store.Store
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -924,6 +928,73 @@ class AppModel(
         }
     }
 
+    private var refreshingStreets = false
+
+    /**
+     * Places built before the current WalkableRule (busy roads used to count) get
+     * their street tiles worked out again, once each, quietly in the background
+     * (refreshStreets in AppModel.swift). Visited tiles, credits, stickers and secrets
+     * are kept; only which tiles count, and so the clouds and %, change. Waits for a
+     * server that has the new streets. Walks carry on recording meanwhile: only the
+     * tile sets are swapped at the end.
+     */
+    fun refreshStreets() {
+        val scope = services ?: return
+        scope.launch { updateStreets() }
+    }
+
+    suspend fun updateStreets() {
+        val makeClient = makePlaceClient ?: return
+        if (refreshingStreets || cities.none { (it.streetsVersion ?: 0) < WalkableRule.VERSION }) return
+        refreshingStreets = true
+        try {
+            val generation = dataGeneration
+            val client = makeClient() ?: return
+            for (id in cities.filter { (it.streetsVersion ?: 0) < WalkableRule.VERSION }.map { it.id }) {
+                if (generation != dataGeneration) return
+                val city = cities.firstOrNull { it.id == id } ?: continue
+                val ways: List<OSMWay>
+                val version: Int
+                try {
+                    val osmId = city.osmId
+                    if (osmId != null) {
+                        val cached = PlaceData.fetch(osmId, client)
+                        // An older server's streets aren't filtered yet. Try again another time.
+                        version = cached.streetsVersion ?: return
+                        ways = cached.ways
+                    } else {
+                        val b = city.boundary.bounds
+                        ways = osm.walkableWays(b.south, b.west, b.north, b.east)
+                        version = WalkableRule.VERSION
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    log.info("Couldn't update the streets for ${city.name}: $e")
+                    continue
+                }
+                val (tiles, roads) = withContext(Dispatchers.Default) {
+                    val inside = City.hexes(BoundaryShape(city.boundary, HexGrid.projection), HexGrid)
+                    CityBuilder.streetTiles(ways, inside) to CityBuilder.roadLines(ways)
+                }
+                if (generation != dataGeneration) return
+                val i = cities.indexOfFirst { it.id == id }
+                if (i < 0 || (cities[i].streetsVersion ?: 0) >= version) continue
+                cities = cities.toMutableList().also {
+                    it[i] = it[i].replacingStreetTiles(tiles, roads, version).copy(updatedAt = now())
+                }
+                placesRevision++
+                tilesRevision++
+                rebuildCountingTiles()
+                store.save(cities)
+                requestSync?.invoke()
+                onChange()
+            }
+        } finally {
+            refreshingStreets = false
+        }
+    }
+
     /**
      * Asks the server to get the suburbs next door ready, so adding one is quick.
      * One warm per list. Failed or offline attempts retry on the next refresh, and
@@ -1122,14 +1193,24 @@ class AppModel(
                 val city = merged[i]
                 val localCredits = city.tileCredits.orEmpty().mapTo(HashSet()) { it.id }
                 val remoteCredits = remote.tileCredits.orEmpty().mapTo(HashSet()) { it.id }
-                val hadMore = !remote.visited.containsAll(city.visited) || !remoteCredits.containsAll(localCredits)
-                val credited = city.mergeTileCredits(remote)
-                merged[i] = credited.copy(
-                    visited = credited.visited + remote.visited,
-                    tiles = credited.tiles + remote.tiles,
-                    roads = credited.roads ?: remote.roads,
+                val localStreets = city.streetsVersion ?: 0
+                val remoteStreets = remote.streetsVersion ?: 0
+                val hadMore = !remote.visited.containsAll(city.visited) || !remoteCredits.containsAll(localCredits) ||
+                    localStreets > remoteStreets
+                val credited = city.mergeTileCredits(remote).copy(
+                    visited = city.visited + remote.visited,
                     // Theirs win, as in Swift's merging(_:uniquingKeysWith:).
-                    stickers = credited.stickers.orEmpty() + remote.stickers.orEmpty(),
+                    stickers = city.stickers.orEmpty() + remote.stickers.orEmpty(),
+                )
+                // Street tiles come from the copy with the newer WalkableRule, so a phone
+                // that hasn't updated can't bring busy roads back. Tiles you've been to stay.
+                val streets = when {
+                    remoteStreets > localStreets -> credited.replacingStreetTiles(remote.tiles, remote.roads, remoteStreets)
+                    remoteStreets < localStreets -> credited.replacingStreetTiles(credited.tiles, null, localStreets)
+                    else -> credited.copy(tiles = credited.tiles + remote.tiles)
+                }
+                merged[i] = streets.copy(
+                    roads = streets.roads ?: remote.roads,
                     updatedAt = if (hadMore) now() else maxOf(city.lastChanged, remote.lastChanged),
                 )
             } else {
@@ -1169,7 +1250,9 @@ class AppModel(
         // live coverage is overwritten by the snapshot it started with.
         cities = cities.map { city ->
             val again = restored.first.firstOrNull { it.id == city.id } ?: return@map city
-            city.copy(visited = city.visited + again.visited, tiles = city.tiles + again.tiles)
+            // Only the visited ones: the rest of its tiles are the snapshot's, which a
+            // street update since then may have changed.
+            city.copy(visited = city.visited + again.visited, tiles = city.tiles + again.visited)
         }
         installBackfill(restored.second)
         historyRevision++

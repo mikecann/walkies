@@ -164,6 +164,8 @@ class SyncEngine(
                 pull(client, revision)
                 lastSynced = clock()
                 status = Status.Idle
+                // After the pull, so any place another phone already updated arrives first.
+                model.refreshStreets()
             } catch (e: CancellationException) {
                 status = Status.Idle
             } catch (e: Exception) {

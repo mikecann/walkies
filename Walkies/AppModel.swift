@@ -195,7 +195,7 @@ final class AppModel {
                 let cached = try await CachedPlaceData.fetch(osmId: osmId, client: client)
                 place.boundary = cached.boundary
                 city = await Task.detached(priority: .utility) {
-                    CityBuilder.build(from: place, ways: cached.ways, walks: [])
+                    CityBuilder.build(from: place, ways: cached.ways, walks: [], streetsVersion: cached.streetsVersion)
                 }.value
             } else {
                 // Custom/retired boundaries can still be rebuilt from current OSM ways.
@@ -307,6 +307,60 @@ final class AppModel {
                 tilesRevision += 1
                 store.save(cities)
             }
+        }
+    }
+
+    @ObservationIgnored private var refreshingStreets = false
+
+    /// Places built before the current WalkableRule (busy roads used to count) get
+    /// their street tiles worked out again, once each, quietly in the background.
+    /// Visited tiles, credits, stickers and secrets are kept; only which tiles count,
+    /// and so the clouds and %, change. Waits for a server that has the new streets.
+    /// Walks carry on recording meanwhile: only the tile sets are swapped at the end.
+    func refreshStreets() {
+        Task { await updateStreets() }
+    }
+
+    func updateStreets() async {
+        guard !locked, !worldGridResetPending, !refreshingStreets, let makePlaceClient,
+              cities.contains(where: { ($0.streetsVersion ?? 0) < WalkableRule.version }) else { return }
+        refreshingStreets = true
+        defer { refreshingStreets = false }
+        let generation = dataGeneration
+        guard let client = await makePlaceClient() else { return }
+        for id in cities.filter({ ($0.streetsVersion ?? 0) < WalkableRule.version }).map(\.id) {
+            guard generation == dataGeneration, let city = cities.first(where: { $0.id == id }) else { return }
+            let ways: [OSMWay], version: Int
+            do {
+                if let osmId = city.osmId {
+                    let cached = try await CachedPlaceData.fetch(osmId: osmId, client: client)
+                    // An older server's streets aren't filtered yet. Try again another time.
+                    guard let streets = cached.streetsVersion else { return }
+                    (ways, version) = (cached.ways, streets)
+                } else {
+                    let b = city.boundary.bounds
+                    ways = try await OSMClient.walkableWays(south: b.south, west: b.west, north: b.north, east: b.east, session: client.session)
+                    version = WalkableRule.version
+                }
+            } catch {
+                Self.log.info("Couldn't update the streets for \(city.name): \(error)")
+                continue
+            }
+            let boundary = city.boundary
+            let (tiles, roads) = await Task.detached(priority: .utility) {
+                let grid = HexGrid.world
+                let inside = City.hexes(inside: BoundaryShape(boundary, projection: grid.projection), grid: grid)
+                return (CityBuilder.streetTiles(from: ways, inside: inside), CityBuilder.roadLines(from: ways))
+            }.value
+            guard generation == dataGeneration, !worldGridResetPending,
+                  let i = cities.firstIndex(where: { $0.id == id }), (cities[i].streetsVersion ?? 0) < version else { continue }
+            cities[i].replaceStreetTiles(tiles, roads: roads, version: version)
+            cities[i].updatedAt = .now
+            placesRevision += 1
+            tilesRevision += 1
+            rebuildCountingTiles()
+            store.save(cities)
+            requestSync?()
         }
     }
 
@@ -1085,12 +1139,22 @@ final class AppModel {
                 var city = cities[i]
                 let localCredits = Set((city.tileCredits ?? []).map(\.id))
                 let remoteCredits = Set((remote.tileCredits ?? []).map(\.id))
+                let localStreets = city.streetsVersion ?? 0, remoteStreets = remote.streetsVersion ?? 0
                 let hadMore = !city.visited.isSubset(of: remote.visited) || !localCredits.isSubset(of: remoteCredits)
+                    || localStreets > remoteStreets
                 city.mergeTileCredits(from: remote)
                 city.visited.formUnion(remote.visited)
-                city.tiles.formUnion(remote.tiles)
-                city.roads = city.roads ?? remote.roads
                 city.stickers = (city.stickers ?? [:]).merging(remote.stickers ?? [:]) { _, theirs in theirs }
+                // Street tiles come from the copy with the newer WalkableRule, so a phone
+                // that hasn't updated can't bring busy roads back. Tiles you've been to stay.
+                if remoteStreets > localStreets {
+                    city.replaceStreetTiles(remote.tiles, roads: remote.roads, version: remoteStreets)
+                } else if remoteStreets < localStreets {
+                    city.replaceStreetTiles(city.tiles, roads: nil, version: localStreets)
+                } else {
+                    city.tiles.formUnion(remote.tiles)
+                }
+                city.roads = city.roads ?? remote.roads
                 city.updatedAt = hadMore ? .now : max(city.lastChanged, remote.lastChanged)
                 cities[i] = city
             } else {
@@ -1127,8 +1191,10 @@ final class AppModel {
         // live coverage is overwritten by the snapshot it started with.
         for restoredCity in restored.0 {
             guard let i = cities.firstIndex(where: { $0.id == restoredCity.id }) else { continue }
+            // Only the visited ones: the rest of its tiles are the snapshot's, which a
+            // street update since then may have changed.
             cities[i].visited.formUnion(restoredCity.visited)
-            cities[i].tiles.formUnion(restoredCity.tiles)
+            cities[i].tiles.formUnion(restoredCity.visited)
         }
         installBackfill(restored.1)
         historyRevision += 1

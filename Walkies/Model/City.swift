@@ -25,6 +25,9 @@ nonisolated struct City: Codable, Equatable, Identifiable, Sendable {
     /// Coverage from confirmed automatic outings too short to keep in walk history.
     /// These records travel with the place so tile quests retain their date and identity.
     var tileCredits: [TileCredit]?
+    /// The WalkableRule.version its street tiles were worked out with. Nil for places
+    /// built before busy roads were left out; the app redoes their tiles once.
+    var streetsVersion: Int?
 
     struct TileCredit: Codable, Equatable, Sendable {
         var id: UUID
@@ -77,6 +80,18 @@ nonisolated struct City: Codable, Equatable, Identifiable, Sendable {
             }
         }
         return (inside.union(tiles).subtracting(clear), clear, noPath.subtracting(clear))
+    }
+
+    /// New street tiles from a newer WalkableRule, keeping everything you've done: the
+    /// tiles you've been to (credits included) and the ones hiding a secret stay tiles.
+    /// The rest of the place becomes no-path, so the clouds and % follow.
+    mutating func replaceStreetTiles(_ streetTiles: Set<Hex>, roads: [RoadLine]?, version: Int) {
+        var kept = streetTiles.union(visited)
+        for credit in tileCredits ?? [] { kept.formUnion(credit.hexes) }
+        kept.formUnion((stickers ?? [:]).values)
+        tiles = kept
+        if let roads { self.roads = roads }
+        streetsVersion = version
     }
 
     /// Marks the tiles under these points as visited and returns the ones that are new.

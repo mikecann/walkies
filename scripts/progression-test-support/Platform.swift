@@ -8,7 +8,9 @@ final class LocationTracker {
     var authorization: CLAuthorizationStatus = .authorizedAlways
     var onLocation: ((CLLocation) -> Void)?
     var onAuthorizationChange: (() -> Void)?
+    var isWalking: () -> Bool = { false }
     var hasAlwaysPermission = true
+    func removeFence() {}
     func requestPermissionIfNeeded() {}
     func requestAlwaysPermission() {}
     func start() {}

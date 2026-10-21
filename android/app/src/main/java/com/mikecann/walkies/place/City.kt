@@ -38,6 +38,11 @@ data class City(
      * These records travel with the place so tile quests retain their date and identity.
      */
     val tileCredits: List<TileCredit>? = null,
+    /**
+     * The WalkableRule.VERSION its street tiles were worked out with. Null for places
+     * built before busy roads were left out; the app redoes their tiles once.
+     */
+    val streetsVersion: Int? = null,
 ) {
     data class TileCredit(val id: UUID, val at: SwiftDate, val hexes: Set<Hex>)
 
@@ -57,6 +62,19 @@ data class City(
     }
 
     val lastChanged: SwiftDate get() = updatedAt ?: createdAt
+
+    /**
+     * New street tiles from a newer WalkableRule, keeping everything you've done: the
+     * tiles you've been to (credits included) and the ones hiding a secret stay tiles.
+     * The rest of the place becomes no-path, so the clouds and % follow.
+     */
+    fun replacingStreetTiles(streetTiles: Set<Hex>, roads: List<RoadLine>?, version: Int): City {
+        val kept = HashSet(streetTiles)
+        kept.addAll(visited)
+        for (credit in tileCredits.orEmpty()) kept.addAll(credit.hexes)
+        kept.addAll(stickers.orEmpty().values)
+        return copy(tiles = kept, roads = roads ?: this.roads, streetsVersion = version)
+    }
 
     /** All places and all users use the world grid. */
     val grid get() = HexGrid

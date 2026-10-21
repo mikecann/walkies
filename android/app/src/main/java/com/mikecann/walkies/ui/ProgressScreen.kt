@@ -188,8 +188,7 @@ fun ProgressionSheet(model: AppModel, initialSection: ProgressSection = Progress
                         else showNotice("That reward has already been chosen.")
                     }
                     QuestsSection(model, now, Modifier.anchor(ProgressSection.Quests))
-                    ShopSection(model, Modifier.anchor(ProgressSection.Shop)) { purchase = it }
-                    WardrobeSection(model, Modifier.anchor(ProgressSection.Wardrobe)) { item ->
+                    val wear = { item: Progression.Item ->
                         if (model.equip(item.id)) {
                             haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
                             showNotice("${item.name} equipped")
@@ -197,6 +196,8 @@ fun ProgressionSheet(model: AppModel, initialSection: ProgressSection = Progress
                             showNotice("Couldn't equip that just now.")
                         }
                     }
+                    ShopSection(model, Modifier.anchor(ProgressSection.Shop), onBuy = { purchase = it }, onWear = wear)
+                    WardrobeSection(model, Modifier.anchor(ProgressSection.Wardrobe), wear)
                     SpyglassSection(model, now, Modifier.anchor(ProgressSection.Spyglass)) {
                         if (model.useSpyglass()) celebrate("Your hint is on the map")
                         else showNotice("Couldn't use that just now. Check your selected place.")
@@ -365,26 +366,26 @@ private fun resetText(now: Long): String {
 }
 
 @Composable
-private fun ShopSection(model: AppModel, modifier: Modifier, onBuy: (Progression.Item) -> Unit) {
+private fun ShopSection(model: AppModel, modifier: Modifier, onBuy: (Progression.Item) -> Unit, onWear: (Progression.Item) -> Unit) {
     ProgressCard(modifier) {
         SectionTitle("Shell shop", "progress-shop")
         BasicText(
-            "A different look for your next walk. Shells buy looks and hints; walking uncovers the map.",
+            "A different look for your next walk. Shells buy looks and hints; walking uncovers the map. Tap Wear to switch to anything you own, free looks included.",
             style = Type.footnote.copy(color = ink70),
         )
         for (group in Progression.Group.entries) {
             BasicText(group.displayName, style = Type.headline, modifier = Modifier.padding(top = 4.dp))
-            for (item in Progression.catalog.filter { it.group == group }) ShopRow(model, item, onBuy)
+            for (item in Progression.catalog.filter { it.group == group }) ShopRow(model, item, onBuy, onWear)
         }
         Progression.item("spyglass")?.let { item ->
             BasicText("Spyglasses · ${model.spyglasses} left", style = Type.headline)
-            ShopRow(model, item, onBuy)
+            ShopRow(model, item, onBuy, onWear)
         }
     }
 }
 
 @Composable
-private fun ShopRow(model: AppModel, item: Progression.Item, onBuy: (Progression.Item) -> Unit) {
+private fun ShopRow(model: AppModel, item: Progression.Item, onBuy: (Progression.Item) -> Unit, onWear: (Progression.Item) -> Unit) {
     val balance = model.balance
     val owned = item.id in model.owned
     Row(
@@ -409,6 +410,16 @@ private fun ShopRow(model: AppModel, item: Progression.Item, onBuy: (Progression
                 Tick(Modifier.size(11.dp), Walkies.badgeTeal)
                 BasicText("Equipped", style = Type.caption.copy(fontWeight = FontWeight.SemiBold, color = Walkies.badgeTeal))
             }
+            // Owned looks are worn from here too, not only from the wardrobe below.
+            owned && group != null -> BasicText(
+                "Wear",
+                style = Type.subheadline.copy(fontWeight = FontWeight.Bold, color = Walkies.burnt),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(Walkies.badgeGreen.copy(alpha = 0.3f))
+                    .clickable(role = Role.Button, onClickLabel = "Wear ${item.name}") { onWear(item) }
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+            )
             owned -> BasicText("Owned", style = Type.caption.copy(fontWeight = FontWeight.SemiBold))
             else -> {
                 val affordable = balance >= item.price

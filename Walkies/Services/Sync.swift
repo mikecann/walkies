@@ -133,6 +133,8 @@ final class SyncEngine {
             if let personalError { throw personalError }
             lastSynced = .now
             status = .idle
+            // After the pull, so any place another phone already updated arrives first.
+            model.refreshStreets()
         } catch is CancellationError {
             status = .idle
         } catch {

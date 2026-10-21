@@ -298,6 +298,69 @@ class ProgressionModelTest {
         assertTrue(store.loadWalks().all { it.newTilesByPlace != null })
     }
 
+    /** Feedback: "I can't re-equip something I have bought". Buy a trail, switch back to the free one and between owned ones, through sync on two phones. */
+    @Test
+    fun boughtAndDefaultCosmeticsCanBeSwitchedFreelyThroughSync() = runBlocking {
+        val (store, _) = tempStore()
+        store.save(listOf(city(visited = 100)))
+        val model = model(store)
+        val server = FakeServer()
+        val engine = SyncEngine(model, store, { true }, { null }, makeClient = { ConvexClient(server.backend, "token", server) }, scope = this)
+
+        assertTrue(model.buy("trail.footprints"))
+        assertEquals("trail.footprints", model.equipped.trail)
+        engine.sync()
+        assertTrue(model.equip("trail.teal"))
+        assertEquals("trail.teal", model.equipped.trail)
+        engine.sync()
+        assertEquals(SyncEngine.Status.Idle, engine.status)
+        assertEquals("trail.teal", model.equipped.trail)
+        assertEquals("trail.teal", server.ledger!!.equipped.trail)
+
+        assertTrue(model.buy("trail.sparkles"))
+        assertTrue(model.equip("trail.footprints"))
+        engine.sync()
+        assertEquals("trail.footprints", model.equipped.trail)
+        assertEquals("trail.footprints", server.ledger!!.equipped.trail)
+
+        // The other phone pulls the choice, changes it, and the first phone follows.
+        val (otherStore, _) = tempStore()
+        val other = model(otherStore)
+        val otherEngine = SyncEngine(other, otherStore, { true }, { null }, makeClient = { ConvexClient(server.backend, "token", server) }, scope = this)
+        otherEngine.sync()
+        assertEquals("trail.footprints", other.equipped.trail)
+        assertTrue(other.owned.containsAll(listOf("trail.teal", "trail.footprints", "trail.sparkles")))
+        assertTrue(other.equip("trail.sparkles"))
+        otherEngine.sync()
+        engine.sync()
+        assertEquals("trail.sparkles", model.equipped.trail)
+        assertTrue(model.equip("trail.teal"))
+        engine.sync()
+        assertEquals("trail.teal", model.equipped.trail)
+        assertEquals("trail.teal", server.ledger!!.equipped.trail)
+    }
+
+    /** Every cosmetic group switches between a bought look and its free default, both ways through sync. */
+    @Test
+    fun everyGroupSwitchesBetweenOwnedAndDefaultLooksThroughSync() = runBlocking {
+        val (store, _) = tempStore()
+        val model = model(store)
+        val server = FakeServer()
+        server.ledger = Ledger(purchases = Progression.catalog.filter { it.group != null && !it.isFree }.map { Ledger.Purchase(item = it.id, cost = 0, at = 0.0) })
+        val engine = SyncEngine(model, store, { true }, { null }, makeClient = { ConvexClient(server.backend, "token", server) }, scope = this)
+        engine.sync()
+        for (group in Progression.Group.entries) {
+            val looks = Progression.catalog.filter { it.group == group }.map { it.id }
+            assertTrue(model.owned.containsAll(looks))
+            for (look in looks.drop(1) + looks.first()) {
+                assertTrue(model.equip(look))
+                engine.sync()
+                assertEquals(look, model.equipped[group])
+                assertEquals(look, server.ledger!!.resolvedEquipment[group])
+            }
+        }
+    }
+
     @Test
     fun overlappingPlaceFindsSecretsWithoutShellsAndSentinelSurvivesSync() = runBlocking {
         val (store, _) = tempStore()

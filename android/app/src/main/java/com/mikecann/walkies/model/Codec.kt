@@ -74,6 +74,7 @@ object Codec {
                 }
             }))
         }
+        c.streetsVersion?.let { put("streetsVersion", it) }
     }
 
     fun city(e: JsonElement): City {
@@ -95,6 +96,7 @@ object Codec {
                 val credit = it.obj()
                 City.TileCredit(credit.uuid("id"), credit.date("at"), hexes(credit.req("hexes")))
             },
+            streetsVersion = o.opt("streetsVersion")?.int(),
         )
     }
 

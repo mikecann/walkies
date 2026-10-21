@@ -128,7 +128,8 @@ class OSMClient(private val http: Http = Http.Default) {
 
     /** Lines for every street and path you could walk along inside the box. */
     suspend fun walkableWays(south: Double, west: Double, north: Double, east: Double): List<OSMWay> {
-        val excluded = "motorway|motorway_link|construction|proposed|raceway|bus_guideway|abandoned|razed"
+        val excluded = WalkableRule.EXCLUDED_HIGHWAYS.sorted().joinToString("|")
+        // `out geom` brings every tag, which WalkableRule needs (sidewalk, foot, maxspeed).
         val query = "[out:json][timeout:120];\n" +
             "way[\"highway\"][\"highway\"!~\"^($excluded)$\"][\"access\"!~\"^(private|no)$\"][\"foot\"!~\"^(private|no)$\"]" +
             "($south,$west,$north,$east);\nout geom;"
@@ -139,6 +140,7 @@ class OSMClient(private val http: Http = Http.Default) {
             val tags = (o["tags"] as? JsonObject)
                 ?.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.contentOrNull?.let { k to it } }
                 ?.toMap().orEmpty()
+            if (!WalkableRule.isWalkable(tags)) return@mapNotNull null
             OSMWay(tags, geometry.mapNotNull { point ->
                 val p = point as? JsonObject ?: return@mapNotNull null
                 val lat = (p["lat"] as? JsonPrimitive)?.doubleOrNull ?: return@mapNotNull null

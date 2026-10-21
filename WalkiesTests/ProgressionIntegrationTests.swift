@@ -337,6 +337,177 @@ struct ProgressionIntegrationTests {
         engine.reset()
     }
 
+    /// Feedback: "I can't re-equip something I have bought". Buy a trail, switch back
+    /// to the free one and between owned ones, through sync on two phones.
+    @Test func boughtAndDefaultCosmeticsCanBeSwitchedFreelyThroughSync() async throws {
+        let store = store()
+        let otherStore = self.store()
+        defer { store.wipe(); otherStore.wipe() }
+        store.save([city(visited: 100)])
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        let server = TestSyncServer()
+        let client = mockClient(server)
+        let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, makeClient: { client })
+
+        #expect(model.buy("trail.footprints"))
+        #expect(model.equipped.trail == "trail.footprints")
+        await engine.sync()
+        #expect(model.equip("trail.teal"))
+        #expect(model.equipped.trail == "trail.teal")
+        await engine.sync()
+        #expect(engine.status == .idle)
+        #expect(model.equipped.trail == "trail.teal")
+        #expect(await server.ledger.equipped.trail == "trail.teal")
+
+        #expect(model.buy("trail.sparkles"))
+        #expect(model.equip("trail.footprints"))
+        await engine.sync()
+        #expect(model.equipped.trail == "trail.footprints")
+        #expect(await server.ledger.equipped.trail == "trail.footprints")
+        engine.reset()
+
+        // The other phone pulls the choice, changes it, and the first phone follows.
+        let other = AppModel(store: otherStore, servicesEnabled: false, alwaysOn: false)
+        await other.waitForHistory()
+        let otherEngine = SyncEngine(model: other, store: otherStore, isSignedIn: { true }, makeClient: { client })
+        await otherEngine.sync()
+        #expect(other.equipped.trail == "trail.footprints")
+        #expect(other.owned.isSuperset(of: ["trail.teal", "trail.footprints", "trail.sparkles"]))
+        #expect(other.equip("trail.sparkles"))
+        await otherEngine.sync()
+        otherEngine.reset()
+        let again = SyncEngine(model: model, store: store, isSignedIn: { true }, makeClient: { client })
+        await again.sync()
+        #expect(model.equipped.trail == "trail.sparkles")
+        #expect(model.equip("trail.teal"))
+        await again.sync()
+        #expect(model.equipped.trail == "trail.teal")
+        #expect(await server.ledger.equipped.trail == "trail.teal")
+        again.reset()
+    }
+
+    /// Every cosmetic group switches between a bought look and its free default, both ways through sync.
+    @Test func everyGroupSwitchesBetweenOwnedAndDefaultLooksThroughSync() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        var ledger = Ledger()
+        ledger.purchases = Progression.catalog.filter { $0.group != nil && !$0.isFree }.map { .init(item: $0.id, cost: 0, at: 0) }
+        let server = TestSyncServer(ledger: ledger)
+        let client = mockClient(server)
+        let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, makeClient: { client })
+        await engine.sync()
+        for group in Progression.Group.allCases {
+            let looks = Progression.catalog.filter { $0.group == group }.map(\.id)
+            #expect(model.owned.isSuperset(of: looks))
+            for look in looks.dropFirst() + [looks[0]] {
+                #expect(model.equip(look))
+                await engine.sync()
+                #expect(model.equipped[group] == look)
+                #expect(await server.ledger.resolvedEquipment[group] == look)
+            }
+        }
+        engine.reset()
+    }
+
+    /// Places built before busy roads were left out get their street tiles redone once
+    /// (StreetUpdateTest.kt), keeping what you've done.
+    @Test func oldPlacesLoseUnwalkableRoadTilesOnceAndKeepWhatYouveDone() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let grid = HexGrid.world
+        let origin = grid.centre(of: grid.hex(containing: Coordinate(lat: 12.345, lon: 45.678)))
+        func at(_ x: Double, _ y: Double) -> Coordinate { grid.projection.unproject(origin + SIMD2(x, y)) }
+        func line(_ y: Double) -> [Coordinate] { stride(from: -800.0, through: 800, by: 50).map { at($0, y) } }
+        let boundary = Boundary(polygons: [GeoPolygon(outer: [at(-1000, -1000), at(1000, -1000), at(1000, 1000), at(-1000, 1000), at(-1000, -1000)], holes: [])])
+        let street = OSMWay(tags: ["highway": "residential"], points: line(300))
+        let highway = OSMWay(tags: ["highway": "trunk"], points: line(-300))
+        let inside = City.hexes(inside: BoundaryShape(boundary, projection: grid.projection), grid: grid)
+        let highwayTiles = CityBuilder.streetTiles(from: [highway], inside: inside).sorted { $0.q < $1.q }
+        let place = PlaceResult(id: 1, name: "Busselton", detail: "Tests", kind: "suburb", boundary: boundary, area: 4_000_000, osmId: 123)
+        var old = CityBuilder.build(from: place, ways: [street, highway], walks: [])
+        old.visited = Set(highwayTiles.prefix(3))
+        old.tileCredits = [.init(id: UUID(), at: Date(timeIntervalSince1970: 1_790_000_000), hexes: [highwayTiles[2]])]
+        old.updatedAt = Date(timeIntervalSince1970: 1_790_000_000)
+        #expect(old.streetsVersion == nil)
+        store.save([old])
+
+        let ring = boundary.polygons[0].outer.map { "[\($0.lon),\($0.lat)]" }.joined(separator: ",")
+        let points = street.points.map { "[\($0.lat),\($0.lon)]" }.joined(separator: ",")
+        let file = Data(#"{"boundary":[[[\#(ring)]]],"ways":[{"highway":"residential","points":[\#(points)]}]}"#.utf8)
+        let server = TestSyncServer(streets: file, streetsVersion: 2)
+        let client = mockClient(server)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        model.makePlaceClient = { client }
+        var synced = 0
+        model.requestSync = { synced += 1 }
+        let before = try #require(model.cities.first)
+
+        await model.updateStreets()
+        let city = try #require(model.cities.first)
+        let streetTiles = CityBuilder.streetTiles(from: [street], inside: inside)
+        #expect(city.streetsVersion == 2)
+        #expect(city.visited == before.visited)
+        #expect(city.tileCredits == old.tileCredits)
+        // Secrets are placed at launch; one hides on the highway and keeps its tile.
+        #expect(city.stickers == before.stickers)
+        #expect((before.stickers ?? [:]).values.contains { !streetTiles.contains($0) })
+        // The street's tiles, plus the walked, credited and secret highway tiles. No others.
+        #expect(city.tiles == streetTiles.union(before.visited).union((before.stickers ?? [:]).values))
+        #expect(city.tiles.count < before.tiles.count)
+        #expect(city.progress > before.progress)
+        // The rest of the highway is no-path now, so it clears beside walked tiles.
+        #expect(city.cloudCover().clear.count > before.visited.count)
+        #expect(city.lastChanged > old.lastChanged)
+        #expect(synced == 1)
+        store.flush()
+        #expect(store.loadCities().first?.tiles == city.tiles)
+        #expect(store.loadCities().first?.streetsVersion == 2)
+
+        // Once per place.
+        await model.updateStreets()
+        #expect(await server.calls.filter { $0 == "places:get" }.count == 1)
+
+        // A phone that hasn't updated yet can't bring the highway back.
+        var stale = old
+        stale.updatedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        await model.addRemote(cities: [stale], walks: [], progress: nil, secrets: [:])
+        #expect(model.cities.first?.tiles == city.tiles)
+        #expect(model.cities.first?.streetsVersion == 2)
+        // And an updated copy from another phone replaces an old one's street tiles.
+        let otherStore = self.store()
+        defer { otherStore.wipe() }
+        otherStore.save([old])
+        let other = AppModel(store: otherStore, servicesEnabled: false, alwaysOn: false)
+        await other.waitForHistory()
+        var updated = city
+        updated.updatedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        await other.addRemote(cities: [updated], walks: [], progress: nil, secrets: [:])
+        #expect(other.cities.first?.tiles == city.tiles)
+        #expect(other.cities.first?.streetsVersion == 2)
+    }
+
+    @Test func anOlderServerLeavesPlacesForLater() async throws {
+        let store = store()
+        defer { store.wipe() }
+        var place = city(visited: 3)
+        place.osmId = 123
+        store.save([place])
+        let ring = place.boundary.polygons[0].outer.map { "[\($0.lon),\($0.lat)]" }.joined(separator: ",")
+        let server = TestSyncServer(streets: Data(#"{"boundary":[[[\#(ring)]]],"ways":[]}"#.utf8), streetsVersion: nil)
+        let client = mockClient(server)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        model.makePlaceClient = { client }
+        let before = model.cities
+        await model.updateStreets()
+        #expect(model.cities == before)
+        #expect(await server.calls.contains("places:get"))
+    }
+
     @Test func rejectedProgressDoesNotBlockSecretUploads() async {
         let store = store()
         defer { store.wipe() }
@@ -458,7 +629,13 @@ private actor TestSyncServer {
     var snapshotWaiter: CheckedContinuation<Void, Never>?
     var snapshotResume: CheckedContinuation<Void, Never>?
 
-    init(ledger: Ledger = Ledger(), cities: [City] = [], walks: [Walk] = [], rejectProgress: Bool = false, pauseSnapshot: Bool = false) {
+    var streets: Data?
+    var streetsVersion: Int?
+
+    init(ledger: Ledger = Ledger(), cities: [City] = [], walks: [Walk] = [], rejectProgress: Bool = false, pauseSnapshot: Bool = false,
+         streets: Data? = nil, streetsVersion: Int? = nil) {
+        self.streets = streets
+        self.streetsVersion = streetsVersion
         self.ledger = ledger
         self.cities = cities
         self.walks = walks
@@ -475,6 +652,7 @@ private actor TestSyncServer {
     func respond(_ request: URLRequest) async throws -> Data {
         let url = request.url!
         if url.host == "files.walkies.test" {
+            if url.lastPathComponent == "streets", let streets { return streets }
             if let city = cities.first(where: { url.lastPathComponent == $0.id.uuidString }) { return try JSONEncoder().encode(city) }
             return try JSONEncoder().encode(walks.first { url.lastPathComponent == $0.id.uuidString }!)
         }
@@ -505,6 +683,10 @@ private actor TestSyncServer {
         switch path {
         case "teams:myTeams": value = [] as [String]
         case "places:warm": warmedLists.append(args["osmIds"] as! [Int])
+        case "places:get":
+            var file: [String: Any] = ["url": "https://files.walkies.test/streets", "fetchedAt": 1_790_000_000_000.0]
+            if let streetsVersion { file["version"] = streetsVersion }
+            value = file
         case "sync:generateUploadUrl": value = "https://sync.walkies.test/upload"
         case "sync:saveProgress":
             if rejectProgress { return Data(#"{"status":"error","errorMessage":"Rejected ledger"}"#.utf8) }

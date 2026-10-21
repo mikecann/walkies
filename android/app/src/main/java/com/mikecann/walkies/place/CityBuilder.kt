@@ -43,7 +43,7 @@ object CityBuilder {
             try {
                 val cached = PlaceData.fetch(osmId, client)
                 status("Laying out the tiles…")
-                return withContext(Dispatchers.Default) { build(place.copy(boundary = cached.boundary), cached.ways, walks) }
+                return withContext(Dispatchers.Default) { build(place.copy(boundary = cached.boundary), cached.ways, walks, cached.streetsVersion) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -57,12 +57,13 @@ object CityBuilder {
         val b = place.boundary.bounds
         val ways = osm.walkableWays(b.south, b.west, b.north, b.east)
         status("Laying out the tiles…")
-        return withContext(Dispatchers.Default) { build(place, ways, walks) }
+        // Straight from Overpass, with every tag, so WalkableRule has already filtered them.
+        return withContext(Dispatchers.Default) { build(place, ways, walks, WalkableRule.VERSION) }
     }
 
     /** Both network paths use the same tile selection, road hints and walk replay. */
-    fun build(place: PlaceResult, ways: List<OSMWay>, walks: List<Walk>): City {
-        var city = build(place.name, place.detail, place.osmId, place.boundary, ways)
+    fun build(place: PlaceResult, ways: List<OSMWay>, walks: List<Walk>, streetsVersion: Int? = null): City {
+        var city = build(place.name, place.detail, place.osmId, place.boundary, ways).copy(streetsVersion = streetsVersion)
         val shape = city.shape()
         for (walk in walks) city = city.visit(CoverageTracer.samples(walk.points), shape).first
         return city
@@ -70,24 +71,23 @@ object CityBuilder {
 
     /** Lays the world grid over the place and keeps the tiles with a street or path through them. */
     fun build(name: String, detail: String, osmId: Long?, boundary: Boundary, ways: List<OSMWay>): City {
-        val grid = HexGrid
-        val shape = BoundaryShape(boundary, grid.projection)
-        val inside = City.hexes(shape, grid)
+        val inside = City.hexes(BoundaryShape(boundary, HexGrid.projection), HexGrid)
+        return City(name = name, detail = detail, osmId = osmId, boundary = boundary, tiles = streetTiles(ways, inside), visited = emptySet(), roads = roadLines(ways))
+    }
 
-        var tiles: Set<Hex> = HashSet<Hex>().also { tiles ->
-            // A driveway leads onto someone's property, so it doesn't make a tile count.
-            for (way in ways) {
-                if (way.tags["service"] == "driveway") continue
-                for (point in samples(way.points)) {
-                    val h = grid.hex(containing = point)
-                    if (h in inside) tiles.add(h)
-                }
+    /** The tiles in the place with a walkable street or path through them. */
+    fun streetTiles(ways: List<OSMWay>, inside: Set<Hex>): Set<Hex> {
+        val tiles = HashSet<Hex>()
+        // A driveway leads onto someone's property, so it doesn't make a tile count.
+        for (way in ways) {
+            if (way.tags["service"] == "driveway") continue
+            for (point in samples(way.points)) {
+                val h = HexGrid.hex(containing = point)
+                if (h in inside) tiles.add(h)
             }
         }
         // Somewhere with no mapped paths at all: fall back to every tile.
-        if (tiles.isEmpty()) tiles = inside
-
-        return City(name = name, detail = detail, osmId = osmId, boundary = boundary, tiles = tiles, visited = emptySet(), roads = roadLines(ways))
+        return tiles.ifEmpty { inside }
     }
 
     /**
