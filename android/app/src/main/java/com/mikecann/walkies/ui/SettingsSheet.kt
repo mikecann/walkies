@@ -112,7 +112,8 @@ fun SettingsSheet(
         var notUploaded by remember { mutableStateOf<Int?>(null) }
         Column(
             verticalArrangement = Arrangement.spacedBy(24.dp),
-            modifier = Modifier.widthIn(max = 600.dp).verticalScroll(rememberScrollState()),
+            // Centred on a tablet, like a grouped Form on an iPad.
+            modifier = Modifier.align(Alignment.CenterHorizontally).widthIn(max = 600.dp).fillMaxWidth().verticalScroll(rememberScrollState()),
         ) {
             Section(footer = null, header = "Account") {
                 Labeled("Signed in as", account.signedInAs)
@@ -283,10 +284,10 @@ private fun Section(footer: String?, header: String? = null, content: @Composabl
     }
 }
 
-/** An iOS switch: green when it's on. */
+/** An iOS switch, in the app's burnt orange when it's on (the iPhone tints everything with it). */
 @Composable
 private fun Toggle(on: Boolean) {
-    val track by animateColorAsState(if (on) Color(0.2f, 0.78f, 0.35f) else Walkies.ink.copy(alpha = 0.15f), label = "track")
+    val track by animateColorAsState(if (on) Walkies.burnt else Walkies.ink.copy(alpha = 0.15f), label = "track")
     val knob by animateDpAsState(if (on) 22.dp else 2.dp, label = "knob")
     Box(Modifier.size(51.dp, 31.dp).clip(RoundedCornerShape(50)).background(track)) {
         Box(

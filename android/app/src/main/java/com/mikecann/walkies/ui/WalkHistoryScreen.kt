@@ -392,8 +392,8 @@ private fun RouteMap(walk: Walk) {
         Box(
             Modifier.fillMaxSize().drawBehind {
                 state.cameraTick.longValue
-                val controller = state.controller ?: return@drawBehind
-                if (!controller.measure(size.width, size.height, ground)) return@drawBehind
+                if (state.controller == null) return@drawBehind
+                if (!state.measure(size.width, size.height, ground)) return@drawBehind
                 projection.update(ground, size.width, size.height, ground[8], ground[9])
                 if (!projection.valid || route.size < 2) return@drawBehind
                 path.reset()

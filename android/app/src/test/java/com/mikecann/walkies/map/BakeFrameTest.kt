@@ -130,6 +130,25 @@ class BakeFrameTest {
         assertFalse(fits { pitch = 20.0 })
     }
 
+    /** Mid-pan a rough bake is left alone longer, but asked for again before its edge shows. */
+    @Test
+    fun aRoughBakeLastsWhileTheMapMoves() {
+        val frame = BakeFrame.around(projection(camera()), width, height, draft = true)
+        val warp = BakeWarp()
+        fun fits(moving: Boolean, move: StandInCamera.() -> Unit): Boolean {
+            val now = projection(camera(move))
+            return warp.update(now, frame) && warp.fits(frame, width, height, moving)
+        }
+        // Zoomed or turned further than a still map allows.
+        assertFalse(fits(moving = false) { zoomBy(1.4f) })
+        assertTrue(fits(moving = true) { zoomBy(1.4f) })
+        assertTrue(fits(moving = true) { rotate(6f) })
+        // A pan that's still on the bake, but past half its margin: asked for again while moving.
+        val pan = width * BakeFrame.DRAFT_MARGIN * 0.75f
+        assertFalse(fits(moving = true) { pan(pan, 0f) })
+        assertTrue(fits(moving = true) { pan(pan / 3, 0f) })
+    }
+
     @Test
     fun theFrameCoversTheScreenWithAMarginAndKeepsToItsBudget() {
         for (draft in listOf(false, true)) {
@@ -143,9 +162,9 @@ class BakeFrameTest {
             assertTrue(frame.pixelWidth <= BakeFrame.MAX_SIDE && frame.pixelHeight <= BakeFrame.MAX_SIDE)
             assertEquals(draft, frame.draft)
         }
-        // The tablet's screen plus its margin is just under the budget: baked at full size.
+        // The tablet's screen plus its margin is under the budget: baked at the usual scale.
         val full = BakeFrame.around(projection(camera()), width, height, draft = false)
-        assertTrue(full.scale > 0.95f)
+        assertEquals(BakeFrame.SCALE, full.scale, 0.001f)
         // A much bigger screen bakes softer rather than bigger.
         val big = BakeFrame.around(projection(camera { width = 2560f; height = 3200f }), 2560f, 3200f, draft = false)
         assertTrue(big.scale < 1f)

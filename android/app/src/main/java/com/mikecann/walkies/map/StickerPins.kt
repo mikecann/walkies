@@ -42,8 +42,8 @@ fun StickerPinLayer(pins: List<StickerPin>, state: MapState, onPick: (LoreEntry)
         val height = constraints.maxHeight
         layout(width, height) {
             state.cameraTick.longValue
-            val controller = state.controller ?: return@layout
-            if (!controller.measure(width.toFloat(), height.toFloat(), ground)) return@layout
+            if (state.controller == null) return@layout
+            if (!state.measure(width.toFloat(), height.toFloat(), ground)) return@layout
             projection.update(ground, width.toFloat(), height.toFloat(), ground[8], ground[9])
             if (!projection.valid) return@layout
             for ((i, placeable) in placeables.withIndex()) {

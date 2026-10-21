@@ -67,17 +67,22 @@ class BakeFrame(
 
     companion object {
         /** How far past each edge of the screen a bake reaches, as a fraction of its size. */
-        const val MARGIN = 0.15f
+        const val MARGIN = 0.12f
+        /**
+         * A still bake's bitmap pixels per screen pixel. The clouds are soft, so a bit
+         * under 1 looks the same and bakes and uploads in two thirds of the time.
+         */
+        const val SCALE = 0.8f
         /** While the map's moving: further, so a pan doesn't run off the edge before the next one's ready. */
-        const val DRAFT_MARGIN = 0.3f
+        const val DRAFT_MARGIN = 0.45f
         /** While the map's moving, a bake is this sharp, as it takes a fraction of the time. */
-        const val DRAFT_SCALE = 0.6f
+        const val DRAFT_SCALE = 0.45f
 
         /**
-         * The most pixels in a bake, about the tablet's screen plus the margin: bigger
+         * The most pixels in a bake, a bit more than the tablet's still bake: bigger
          * phone screens bake a touch softer rather than slower. 4 bytes each.
          */
-        const val MAX_PIXELS = 4_200_000
+        const val MAX_PIXELS = 3_000_000
         /** No bigger than this either way, which every GPU can hold as one texture. */
         const val MAX_SIDE = 4096
 
@@ -103,7 +108,7 @@ class BakeFrame(
                 val row = projection.nearestRowWithin(u.toDouble(), FAR)
                 if (row.isFinite() && row > top) top = min(row.toFloat(), bottom - 1)
             }
-            var scale = if (draft) DRAFT_SCALE else 1f
+            var scale = if (draft) DRAFT_SCALE else SCALE
             val w = (right - left) * scale
             val h = (bottom - top) * scale
             if (w * h > MAX_PIXELS) scale *= sqrt(MAX_PIXELS / (w * h))
@@ -177,26 +182,37 @@ class BakeWarp {
      * Whether a [width] x [height] screen now is still well served by [frame] (after
      * [update]): all of it inside the bake, and nowhere stretched, squashed or turned
      * so much that the clouds would look off. Past these the bake's redone.
+     *
+     * While the map moves, [moving] lets it stretch and turn further (it's hard to see
+     * mid-pan) but asks again once the screen's used up half the margin on any side,
+     * so the next bake's ready before the edge shows.
      */
-    fun fits(frame: BakeFrame, width: Float, height: Float): Boolean {
+    fun fits(frame: BakeFrame, width: Float, height: Float, moving: Boolean = false): Boolean {
         if (!valid) return false
+        val reach = if (moving) MOVING_REACH else 1f
+        val left = frame.left * reach
+        val right = width + (frame.right - width) * reach
+        val top = if (frame.top < 0) frame.top * reach else frame.top
+        val bottom = height + (frame.bottom - height) * reach
+        val stretch = if (moving) MOVING_STRETCH else STRETCH
+        val turn = if (moving) MOVING_TURN else TURN
         for (i in 0 until 5) {
             val sx = CHECK[i * 2] * width.toDouble()
             val sy = CHECK[i * 2 + 1] * height.toDouble()
             if (!unmap(sx, sy)) return false
             val bx = x
             val by = y
-            if (bx < frame.left || bx > frame.right || by < frame.top || by > frame.bottom) return false
-            if (!looksRight(bx, by)) return false
+            if (bx < left || bx > right || by < top || by > bottom) return false
+            if (!looksRight(bx, by, stretch, turn)) return false
         }
         return true
     }
 
     /**
-     * The warp's local stretch and turn at a bake point: within [STRETCH] either way
-     * along both axes, and turned less than [TURN] radians.
+     * The warp's local stretch and turn at a bake point: within [stretch] either way
+     * along both axes, and turned less than [turn] radians.
      */
-    private fun looksRight(bx: Double, by: Double): Boolean {
+    private fun looksRight(bx: Double, by: Double, stretch: Double, turn: Double): Boolean {
         val m = matrix
         val w = m[6] * bx + m[7] * by + m[8]
         val px = (m[0] * bx + m[1] * by + m[2]) / w
@@ -215,8 +231,8 @@ class BakeWarp {
         val r = hypot(f, g)
         val biggest = q + r
         val smallest = abs(q - r)
-        if (biggest > STRETCH || smallest < 1 / STRETCH) return false
-        return abs(atan2(c - b, a + d)) < TURN
+        if (biggest > stretch || smallest < 1 / stretch) return false
+        return abs(atan2(c - b, a + d)) < turn
     }
 
     /**
@@ -239,6 +255,12 @@ class BakeWarp {
         const val STRETCH = 1.25
         /** Or turned past about 4°. */
         const val TURN = 0.07
+        /** While the map moves: further either way before a new bake's asked for. */
+        const val MOVING_STRETCH = 2.0
+        /** About 9°. */
+        const val MOVING_TURN = 0.15
+        /** And half the margin used up on any side. */
+        const val MOVING_REACH = 0.5f
 
         /** The screen's corners and middle, as fractions of its width and height. */
         private val CHECK = doubleArrayOf(0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.5, 0.5)

@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.RectF
 import android.os.Process
 import android.util.Log
+import java.util.concurrent.atomic.AtomicReference
 
 /** What to bake: the clouds as [field] looks from [frame]'s camera, drifted to [clock]. */
 class BakeJob(
@@ -42,6 +43,16 @@ class CloudBake(
     var patchFor: Any? = null
     val patch = RectF()
     var patchNear: DoubleArray? = null
+
+    /**
+     * Frees the pictures' GPU memory now rather than whenever the GC gets round to it
+     * (they're 5 to 10 MB each). On the main thread, once nothing will draw them
+     * again: frames already recorded keep their own hold on them, so that's safe.
+     */
+    fun recycle(withHoneycomb: Boolean) {
+        clouds.recycle()
+        if (withHoneycomb) honeycomb?.recycle()
+    }
 }
 
 /**
@@ -55,9 +66,10 @@ class CloudBaker(density: Float) {
     private var waiting: BakeJob? = null
     private var working = false
     private var closed = false
-    @Volatile private var done: CloudBake? = null
+    private val done = AtomicReference<CloudBake?>()
 
-    // Drawn into, then copied to the GPU. Kept between bakes of the same size.
+    // Drawn into, then copied to the GPU. Kept between bakes, and resized in place
+    // when they're smaller, so baking doesn't allocate 10 MB each time.
     private var cloudScratch: Bitmap? = null
     private var honeycombScratch: Bitmap? = null
     private val canvas = Canvas()
@@ -83,12 +95,8 @@ class CloudBaker(density: Float) {
         }
     }
 
-    /** The newest finished bake, once. */
-    fun take(): CloudBake? {
-        val bake = done ?: return null
-        done = null
-        return bake
-    }
+    /** The newest finished bake, once. Yours to recycle. */
+    fun take(): CloudBake? = done.getAndSet(null)
 
     fun close() {
         synchronized(lock) {
@@ -96,10 +104,10 @@ class CloudBaker(density: Float) {
             waiting = null
             lock.notifyAll()
         }
+        done.getAndSet(null)?.recycle(withHoneycomb = true)
     }
 
     private fun run() {
-        Process.setThreadPriority(Process.THREAD_PRIORITY_DEFAULT + Process.THREAD_PRIORITY_LESS_FAVORABLE)
         while (true) {
             val job = synchronized(lock) {
                 while (waiting == null && !closed) lock.wait()
@@ -108,7 +116,13 @@ class CloudBaker(density: Float) {
                 waiting.also { waiting = null }
             } ?: continue
             try {
-                done = bake(job)
+                // Well behind the main thread and the map's renderer for the big cores,
+                // and a rough bake mid-pan further still: it's only there to keep up.
+                Process.setThreadPriority(if (job.frame.draft) Process.THREAD_PRIORITY_LOWEST else Process.THREAD_PRIORITY_BACKGROUND)
+                val bake = bake(job)
+                // One the main thread never took: free it now.
+                done.getAndSet(bake)?.recycle(withHoneycomb = true)
+                if (synchronized(lock) { closed }) done.getAndSet(null)?.recycle(withHoneycomb = true)
             } catch (e: Throwable) {
                 // Out of memory on a small phone, say: skip it, the next one may fit.
                 Log.w(TAG, "Couldn't bake the clouds", e)
@@ -157,14 +171,22 @@ class CloudBaker(density: Float) {
 
     /**
      * Draws into a [width] x [height] scratch bitmap, scaled so [frame]'s box fills
-     * it, then copies that to the GPU so the main thread doesn't have to upload it
-     * mid-frame and the scratch can be drawn over again next time.
+     * it, then copies that to an immutable hardware bitmap: uploaded to the GPU once,
+     * here, and drawn as a texture every frame after, never uploaded again. The
+     * scratch is drawn over again next time.
      */
     private inline fun render(width: Int, height: Int, frame: BakeFrame, scratch: Int, draw: (Canvas) -> Unit): Bitmap {
         var bitmap = if (scratch == 0) cloudScratch else honeycombScratch
-        if (bitmap == null || bitmap.width != width || bitmap.height != height) {
-            bitmap = null
-            if (scratch == 0) cloudScratch = null else honeycombScratch = null
+        if (bitmap != null && (bitmap.width != width || bitmap.height != height)) {
+            if (bitmap.allocationByteCount >= width * height * 4) {
+                bitmap.reconfigure(width, height, Bitmap.Config.ARGB_8888)
+            } else {
+                bitmap.recycle()
+                bitmap = null
+                if (scratch == 0) cloudScratch = null else honeycombScratch = null
+            }
+        }
+        if (bitmap == null) {
             bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         } else {
             bitmap.eraseColor(0)
@@ -185,6 +207,7 @@ class CloudBaker(density: Float) {
         // No hardware bitmaps here: hand this one over as it is (never to be drawn into
         // again, as the screen's using it), and start the upload now.
         hardware = false
+        if (scratch == 0) cloudScratch = null else honeycombScratch = null
         bitmap.prepareToDraw()
         return bitmap
     }

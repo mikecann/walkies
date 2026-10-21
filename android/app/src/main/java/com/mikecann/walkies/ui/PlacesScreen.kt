@@ -108,7 +108,8 @@ fun PlacesScreen(model: AppModel, onAddPlace: () -> Unit, onClose: () -> Unit) {
         )
         Column(
             verticalArrangement = Arrangement.spacedBy(22.dp),
-            modifier = Modifier.verticalScroll(rememberScrollState()).padding(vertical = 8.dp).widthIn(max = 600.dp),
+            modifier = Modifier.align(Alignment.CenterHorizontally).widthIn(max = 600.dp).fillMaxWidth()
+                .verticalScroll(rememberScrollState()).padding(vertical = 8.dp),
         ) {
             Column(
                 verticalArrangement = Arrangement.spacedBy(12.dp),

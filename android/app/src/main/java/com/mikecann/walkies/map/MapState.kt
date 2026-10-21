@@ -1,5 +1,6 @@
 package com.mikecann.walkies.map
 
+import android.view.animation.AnimationUtils
 import androidx.compose.runtime.mutableLongStateOf
 import com.mikecann.walkies.grid.Coordinate
 import com.mikecann.walkies.place.City
@@ -64,6 +65,36 @@ class MapState {
 
     fun cameraChanged() {
         cameraTick.longValue++
+    }
+
+    // The last measure(), kept for the rest of the frame: the clouds, the pins and the
+    // neighbours all ask, and each ask is five calls into Mapbox.
+    private val measured = DoubleArray(10)
+    private var measuredTick = -1L
+    private var measuredFrame = -1L
+    private var measuredWidth = 0f
+    private var measuredHeight = 0f
+    private var measuredBy: MapController? = null
+
+    /**
+     * [MapController.measure], asked of the map once a frame (per camera change and
+     * size). Reads [cameraTick], so whatever calls it redraws when the camera moves.
+     */
+    fun measure(width: Float, height: Float, out: DoubleArray): Boolean {
+        val controller = controller ?: return false
+        val tick = cameraTick.longValue
+        // The frame's vsync time while drawing, so a camera that moved without saying yet is still caught next frame.
+        val frame = AnimationUtils.currentAnimationTimeMillis()
+        if (tick != measuredTick || frame != measuredFrame || width != measuredWidth || height != measuredHeight || controller !== measuredBy) {
+            if (!controller.measure(width, height, measured)) return false
+            measuredTick = tick
+            measuredFrame = frame
+            measuredWidth = width
+            measuredHeight = height
+            measuredBy = controller
+        }
+        measured.copyInto(out)
+        return true
     }
 
     /** How much of the honeycomb to show: fades in as you drag and out after. */

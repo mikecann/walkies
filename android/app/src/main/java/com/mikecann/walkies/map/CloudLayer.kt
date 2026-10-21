@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
+import android.util.Log
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -22,6 +23,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalDensity
+import com.mikecann.walkies.BuildConfig
 import kotlin.math.max
 import kotlin.math.min
 
@@ -48,6 +50,11 @@ private class Reveal(
  * past a little), it's baked again, roughly while moving and sharp once the map
  * stops, fading from one to the next. Still, the clouds' drift is baked again every
  * few seconds and faded in, rather than redrawn 30 times a second.
+ *
+ * While the map moves it's left alone as long as it can be: a rough bake is only
+ * asked for once the screen's half way into the margin (or zoomed or turned well
+ * past), with the drift held where it was so it swaps in with no fade. The sharp
+ * one waits until the map's been still for a moment.
  *
  * Live each frame: the route, this walk's tiles, the spyglass's ring and where you
  * are, all a few paths; and for the second and a half that tiles take to clear, the
@@ -78,12 +85,22 @@ private class CloudScene(private val density: Float) {
 
     private var lastTick = -1L
     private var movedAt = 0L
+    private val stats = if (BuildConfig.DEBUG) FrameStats() else null
 
     fun draw(
-        canvas: Canvas, width: Float, height: Float, controller: MapController, tick: Long, dragging: Boolean, honeycombOpacity: Float,
+        canvas: Canvas, width: Float, height: Float, state: MapState, tick: Long, dragging: Boolean, honeycombOpacity: Float,
         field: CloudField, sprites: CloudSprites, clock: Double, route: DoubleArray, fresh: List<DoubleArray>, you: YouAreHere, cosmetics: MapCosmetics,
     ) {
-        if (!controller.measure(width, height, ground)) return
+        val started = System.nanoTime()
+        drawFrame(canvas, width, height, state, tick, dragging, honeycombOpacity, field, sprites, clock, route, fresh, you, cosmetics)
+        stats?.frame(started, System.nanoTime())
+    }
+
+    private fun drawFrame(
+        canvas: Canvas, width: Float, height: Float, state: MapState, tick: Long, dragging: Boolean, honeycombOpacity: Float,
+        field: CloudField, sprites: CloudSprites, clock: Double, route: DoubleArray, fresh: List<DoubleArray>, you: YouAreHere, cosmetics: MapCosmetics,
+    ) {
+        if (!state.measure(width, height, ground)) return
         projection.update(ground, width, height, ground[8], ground[9])
         if (!projection.valid) return
         val now = System.nanoTime()
@@ -100,6 +117,7 @@ private class CloudScene(private val density: Float) {
         // camera's swung so far the bake is partly behind it: draw it all live rather
         // than show the map bare for a moment.
         if (front == null || front.field.places != field.places || front.sprites !== sprites || !warp.update(projection, front.frame)) {
+            stats?.let { it.live++ }
             painter.draw(canvas, field, emptyList(), null, 1.0, projection, sprites, width, height, clock, honeycombOpacity, route, fresh, you, cosmetics)
             return
         }
@@ -108,26 +126,34 @@ private class CloudScene(private val density: Float) {
         val reveal = reveal
         val progress = if (reveal == null) 1.0 else min(1.0, (now - reveal.startedAt) / 1e9 / REVEAL_TIME)
         if (progress >= 1) this.reveal = null
+        if (progress < 1) stats?.let { it.reveals++ }
 
         val old = fading
         val t = if (old == null || fadeTime <= 0) 1.0 else (now - fadeStart) / 1e9 / fadeTime
         if (old != null && t < 1) {
             // A crossfade: the sum of both, weighted, so it never shows more of either than
             // one full bake (layered one over the other, the shadows would darken).
-            val layer = canvas.saveLayer(null, null)
+            stats?.let { it.fades++ }
+            val layer = canvas.saveLayer(0f, 0f, width, height, null)
             drawBake(canvas, old, 1 - t, false, progress)
             drawBake(canvas, front, t, true, progress)
             canvas.restoreToCount(layer)
         } else {
-            fading = null
+            if (old != null) {
+                fading = null
+                old.recycle(withHoneycomb = false)
+            }
             drawBake(canvas, front, 1.0, false, progress)
         }
 
+        // Only while it shows: it's a whole screen of texture to draw.
         val honey = honeycomb
         val honeyFrame = honeycombFrame
-        if (honeycombOpacity > 0 && honey != null && honeyFrame != null && warp.update(projection, honeyFrame)) {
+        val honeyAlpha = (honeycombOpacity * 255).toInt().coerceIn(0, 255)
+        if (honeyAlpha > 0 && honey != null && honeyFrame != null && warp.update(projection, honeyFrame)) {
+            stats?.let { it.honeycombs++ }
             matrix.setValues(warp.values)
-            paint.alpha = (honeycombOpacity * 255).toInt().coerceIn(0, 255)
+            paint.alpha = honeyAlpha
             paint.xfermode = null
             canvas.save()
             canvas.concat(matrix)
@@ -196,7 +222,10 @@ private class CloudScene(private val density: Float) {
     }
 
     private fun accept(bake: CloudBake, now: Long) {
+        stats?.let { it.bakes++ }
         if (bake.honeycomb != null) {
+            // The scene owns the honeycomb from here; the bake only ever frees its clouds.
+            honeycomb?.let { if (it !== bake.honeycomb) it.recycle() }
             honeycomb = bake.honeycomb
             honeycombFrame = bake.frame
             honeycombRect.set(bake.rect)
@@ -210,12 +239,17 @@ private class CloudScene(private val density: Float) {
         }
         fadeTime = when {
             shown == null || shown.sprites !== bake.sprites || shown.field.places != bake.field.places -> 0.0
-            // Same camera and drift, just tiles changing: nothing to fade.
-            bake.frame === shown.frame && bake.clock == shown.clock -> 0.0
+            // Same drift, just tiles changing or a rough bake from a moving camera: the same
+            // picture, so nothing to fade (and no layer for it to cost mid-pan).
+            bake.clock == shown.clock -> 0.0
             bake.frame === shown.frame -> DRIFT_FADE
             else -> CAMERA_FADE
         }
+        // Whatever's no longer drawn, freed now: a crossfade cut short, or the one replaced.
+        val wasFading = fading
         fading = if (fadeTime > 0) shown else null
+        if (wasFading != null && wasFading !== fading) wasFading.recycle(withHoneycomb = false)
+        if (shown != null && shown !== fading) shown.recycle(withHoneycomb = false)
         fadeStart = now
         front = bake
     }
@@ -225,19 +259,22 @@ private class CloudScene(private val density: Float) {
         if (!baker.idle) return
         val shown = front
         // Just taken, the newest bake's on screen: check against that.
-        val fits = shown != null && warp.update(projection, shown.frame) && warp.fits(shown.frame, width, height)
+        val usable = shown != null && warp.update(projection, shown.frame)
+        val fits = usable && warp.fits(shown!!.frame, width, height, moving)
         val job = when {
             shown == null || shown.field !== field || shown.sprites !== sprites -> {
                 // New tiles or a new look. From the same camera and drift as what's on
-                // screen if that still fits, so the new bake drops straight in.
+                // screen if that still fits, so the new bake drops straight in; mid-pan,
+                // the same drift at least.
                 val frame = if (fits) shown!!.frame else newFrame(width, height, moving)
-                BakeJob(frame, field, sprites, if (fits) shown!!.clock else clock, honeycomb = true, previous = shown?.field)
+                val sameDrift = shown != null && (fits || moving)
+                BakeJob(frame, field, sprites, if (sameDrift) shown!!.clock else clock, honeycomb = true, previous = shown?.field)
             }
-            !fits -> if (sameAsRequested(width, height)) null else
-                BakeJob(newFrame(width, height, moving), field, sprites, clock, honeycomb = dragging || !moving, previous = field)
-            moving -> null
+            // Moving: only once the picture's about to run out, roughly, with the drift held.
+            moving -> if (fits || sameAsRequested(width, height)) null else
+                BakeJob(newFrame(width, height, true), field, sprites, shown.clock, honeycomb = dragging, previous = field)
             // Stopped: sharpen a rough bake, or one from a camera a little off.
-            shown.frame.draft || !warp.exact(width, height) || honeycombFrame !== shown.frame ->
+            !fits || shown.frame.draft || !warp.exact(width, height) || honeycombFrame !== shown.frame ->
                 if (sameAsRequested(width, height) && lastJob?.let { !it.frame.draft && it.honeycomb } == true) null else
                     BakeJob(newFrame(width, height, false), field, sprites, clock, honeycomb = true, previous = field)
             // The clouds drifting on.
@@ -257,7 +294,15 @@ private class CloudScene(private val density: Float) {
     }
     private val sameWarp = BakeWarp()
 
-    fun close() = baker.close()
+    fun close() {
+        baker.close()
+        front?.recycle(withHoneycomb = false)
+        fading?.recycle(withHoneycomb = false)
+        honeycomb?.recycle()
+        front = null
+        fading = null
+        honeycomb = null
+    }
 
     companion object {
         /** The camera's still once it hasn't moved for this long. */
@@ -311,11 +356,10 @@ fun CloudLayer(
         modifier.fillMaxSize().drawBehind {
             val tick = state.cameraTick.longValue
             val now = clock
-            val controller = state.controller ?: return@drawBehind
-            if (sprites == null) return@drawBehind
+            if (state.controller == null || sprites == null) return@drawBehind
             drawIntoCanvas { canvas ->
                 scene.draw(
-                    canvas.nativeCanvas, size.width, size.height, controller, tick, state.dragging, state.honeycomb(System.nanoTime()),
+                    canvas.nativeCanvas, size.width, size.height, state, tick, state.dragging, state.honeycomb(System.nanoTime()),
                     field, sprites, now, route, fresh, you, cosmetics,
                 )
             }
@@ -324,3 +368,37 @@ fun CloudLayer(
 }
 
 const val REVEAL_TIME = 1.6
+
+/**
+ * Debug builds: how long the cloud layer takes to record each frame on the main
+ * thread, logged every 60 frames (`adb logcat -s CloudLayer CloudBaker`), with what
+ * it drew. The GPU's side of it isn't counted: `adb shell dumpsys gfxinfo` has that.
+ */
+private class FrameStats {
+    private var frames = 0
+    private var total = 0L
+    private var worst = 0L
+    private var since = 0L
+    var live = 0
+    var fades = 0
+    var honeycombs = 0
+    var reveals = 0
+    var bakes = 0
+
+    fun frame(started: Long, finished: Long) {
+        if (frames == 0) since = started
+        val took = finished - started
+        frames++
+        total += took
+        worst = max(worst, took)
+        if (frames < 60) return
+        val seconds = (finished - since) / 1e9
+        Log.d(
+            "CloudLayer",
+            "%d frames in %.1f s (%.0f fps): draw %.1f ms avg, %.1f ms worst; live %d, crossfading %d, honeycomb %d, tiles clearing %d; bakes taken %d".format(
+                frames, seconds, frames / seconds, total / frames / 1e6, worst / 1e6, live, fades, honeycombs, reveals, bakes,
+            ),
+        )
+        frames = 0; total = 0; worst = 0; live = 0; fades = 0; honeycombs = 0; reveals = 0; bakes = 0
+    }
+}

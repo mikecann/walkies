@@ -122,7 +122,7 @@ fun NeighbourLayer(
                 state.cameraTick.longValue
                 val controller = state.controller ?: return@drawBehind
                 if (outlines.isEmpty() || controller.cameraDistance <= NEIGHBOUR_DISTANCE) return@drawBehind
-                if (!controller.measure(size.width, size.height, ground)) return@drawBehind
+                if (!state.measure(size.width, size.height, ground)) return@drawBehind
                 outlineProjection.update(ground, size.width, size.height, ground[8], ground[9])
                 if (!outlineProjection.valid) return@drawBehind
                 path.rewind()
@@ -150,7 +150,7 @@ fun NeighbourLayer(
                 state.cameraTick.longValue
                 val controller = state.controller ?: return@layout
                 if (controller.cameraDistance <= NEIGHBOUR_DISTANCE) return@layout
-                if (!controller.measure(width.toFloat(), height.toFloat(), ground)) return@layout
+                if (!state.measure(width.toFloat(), height.toFloat(), ground)) return@layout
                 labelProjection.update(ground, width.toFloat(), height.toFloat(), ground[8], ground[9])
                 if (!labelProjection.valid) return@layout
                 val bounds = Rect(0f, 0f, width.toFloat(), height.toFloat())

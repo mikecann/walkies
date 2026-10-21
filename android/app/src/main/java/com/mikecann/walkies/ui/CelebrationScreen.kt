@@ -458,8 +458,8 @@ private fun ReplayEffects(recap: WalkRecap, player: ReplayPlayer, state: MapStat
     Canvas(Modifier.fillMaxSize()) {
         @Suppress("UNUSED_EXPRESSION") frame
         state.cameraTick.longValue
-        val controller = state.controller ?: return@Canvas
-        if (!controller.measure(size.width, size.height, ground)) return@Canvas
+        if (state.controller == null) return@Canvas
+        if (!state.measure(size.width, size.height, ground)) return@Canvas
         projection.update(ground, size.width, size.height, ground[8], ground[9])
         if (!projection.valid) return@Canvas
         val now = System.nanoTime()
