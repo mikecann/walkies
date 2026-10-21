@@ -210,7 +210,7 @@ class OSMClient(private val http: Http = Http.Default) {
 
     /** Runs an Overpass query, trying each server in turn. */
     private suspend fun overpass(query: String, timeout: Int = 150): JsonElement? {
-        val body = "data=" + URLEncoder.encode(query, Charsets.UTF_8)
+        val body = "data=" + URLEncoder.encode(query, "UTF-8")
         var lastError: Exception = OSMException(0)
         for (endpoint in OVERPASS) {
             try {
@@ -241,7 +241,7 @@ class OSMClient(private val http: Http = Http.Default) {
         )
 
         private fun form(vararg pairs: Pair<String, String>) =
-            pairs.joinToString("&") { (k, v) -> URLEncoder.encode(k, Charsets.UTF_8) + "=" + URLEncoder.encode(v, Charsets.UTF_8) }
+            pairs.joinToString("&") { (k, v) -> URLEncoder.encode(k, "UTF-8") + "=" + URLEncoder.encode(v, "UTF-8") }
 
         /** One Nominatim result, if it has an outline. */
         fun place(item: JsonObject): PlaceResult? {

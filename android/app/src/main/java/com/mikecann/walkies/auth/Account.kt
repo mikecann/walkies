@@ -142,7 +142,7 @@ object SignInCallback {
         return out
     }
 
-    private fun decode(s: String) = URLDecoder.decode(s, Charsets.UTF_8)
+    private fun decode(s: String) = URLDecoder.decode(s, "UTF-8")
 }
 
 /** A Google sign-in that's been started: the page to open, and the state to finish it with. */

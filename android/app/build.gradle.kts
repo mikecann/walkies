@@ -35,7 +35,8 @@ android {
 
     defaultConfig {
         // Every current Android phone (Dad's Pixel included) and the Apple-silicon emulator are 64-bit ARM.
-        ndk { abiFilters += "arm64-v8a" }
+        // Older 32-bit devices, like the Galaxy Tab A test tablet: -Pabis=armeabi-v7a,arm64-v8a
+        ndk { abiFilters += (findProperty("abis") as String?)?.split(",") ?: listOf("arm64-v8a") }
         applicationId = "com.mikecann.walkies"
         minSdk = 29
         targetSdk = 36
@@ -60,6 +61,9 @@ android {
     // with no test sign-in (src/release has a stand-in that does nothing).
     buildTypes {
         debug {
+            // -PfastDebug: still dev and test sign-in, but not debuggable, so ART compiles it
+            // and it runs at real speed. For judging performance on old test devices.
+            if (findProperty("fastDebug") != null) isDebuggable = false
             buildConfigField("String", "CONVEX_CLOUD_URL", "\"https://resolute-pig-177.ap-southeast-2.convex.cloud\"")
             buildConfigField("String", "CONVEX_SITE_URL", "\"https://resolute-pig-177.ap-southeast-2.convex.site\"")
         }
