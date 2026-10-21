@@ -68,8 +68,90 @@ class Projection {
             b[0] = 0.0; b[1] = 0.0; b[2] = 0.0; b[3] = gx; b[4] = gy; b[5] = 1.0
             b[6] = -gx * v; b[7] = -gy * v; b[8] = v
         }
-        valid = ground.all { it.isFinite() } && solve()
+        valid = ground.all { it.isFinite() } && solve() && Mat3.invert(homography(), inverse)
         centreScale = if (valid) ellipseWidth(centreX, centreY, 1000.0) / 2000 else 0.0
+    }
+
+    /** The homography as a 3x3 matrix, into [matrix]. */
+    private fun homography(): DoubleArray {
+        for (i in 0 until 8) matrix[i] = h[i]
+        matrix[8] = 1.0
+        return matrix
+    }
+    private val matrix = DoubleArray(9)
+    /** Screen (over width) back to ground (relative to the origin, over unit). */
+    private val inverse = DoubleArray(9)
+
+    /** Makes this the same projection as [other], so a bake can keep the camera it was drawn from. */
+    fun copyFrom(other: Projection) {
+        other.h.copyInto(h)
+        other.inverse.copyInto(inverse)
+        originX = other.originX
+        originY = other.originY
+        unit = other.unit
+        width = other.width
+        valid = other.valid
+        centreScale = other.centreScale
+    }
+
+    /**
+     * The perspective matrix (row-major, 3x3) taking [from]'s screen pixels to this
+     * one's, through the ground: how a picture drawn with [from] has to be warped to
+     * sit on the map as it is now. Worked out relative to each origin so the huge map
+     * point numbers cancel before they can cost precision.
+     */
+    fun relativeTo(from: Projection, out: DoubleArray) {
+        // From's screen pixels to its normalised screen, then back onto its ground.
+        Mat3.set(scratchA, 1 / from.width, 0.0, 0.0, 0.0, 1 / from.width, 0.0, 0.0, 0.0, 1.0)
+        Mat3.multiply(from.inverse, scratchA, scratchB)
+        // Its ground to this one's: both are map points less an origin, over a unit.
+        val s = from.unit / unit
+        Mat3.set(scratchA, s, 0.0, (from.originX - originX) / unit, 0.0, s, (from.originY - originY) / unit, 0.0, 0.0, 1.0)
+        Mat3.multiply(scratchA, scratchB, scratchC)
+        Mat3.multiply(homography(), scratchC, scratchB)
+        Mat3.set(scratchA, width, 0.0, 0.0, 0.0, width, 0.0, 0.0, 0.0, 1.0)
+        Mat3.multiply(scratchA, scratchB, out)
+    }
+    private val scratchA = DoubleArray(9)
+    private val scratchB = DoubleArray(9)
+    private val scratchC = DoubleArray(9)
+
+    // Results of unproject(): the map point under a screen pixel.
+    var groundX = 0.0
+        private set
+    var groundY = 0.0
+        private set
+
+    /**
+     * The map point under screen pixel [u], [v], into [groundX], [groundY]. False if
+     * the pixel's above the horizon, or the ground there is more than [far] times as
+     * far away as at the reference spot.
+     */
+    fun unproject(u: Double, v: Double, far: Double = Double.POSITIVE_INFINITY): Boolean {
+        val a = u / width
+        val b = v / width
+        val gx = inverse[0] * a + inverse[1] * b + inverse[2]
+        val gy = inverse[3] * a + inverse[4] * b + inverse[5]
+        // One over the depth-like z the forward projection divides by.
+        val c = inverse[6] * a + inverse[7] * b + inverse[8]
+        if (c <= 0 || c < 1 / far) return false
+        groundX = gx / c * unit + originX
+        groundY = gy / c * unit + originY
+        return true
+    }
+
+    /**
+     * The lowest y on screen column [u] whose ground is no more than [far] times as far
+     * away as at the reference spot, so a bake can stop short of the horizon. NaN if
+     * the whole column is.
+     */
+    fun nearestRowWithin(u: Double, far: Double): Double {
+        // 1 / z is linear across the screen: solve for where it's 1 / far.
+        val a = u / width
+        val i7 = inverse[7]
+        // Flat on, or upside down: no horizon to stop short of.
+        if (i7 <= 0.0) return Double.NaN
+        return (1 / far - inverse[6] * a - inverse[8]) / i7 * width
     }
 
     /** Screen position before dividing by depth (z), which is about 1 everywhere on a flat map. */

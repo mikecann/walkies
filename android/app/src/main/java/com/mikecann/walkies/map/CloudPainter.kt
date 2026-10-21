@@ -12,6 +12,7 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import com.mikecann.walkies.place.RoadLine
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -133,6 +134,12 @@ class CloudPainter(private val density: Float) {
     private var cr = 0f
     private var cb = 0f
 
+    /**
+     * Everything, live, straight onto a [width] x [height] screen through this frame's
+     * projection. Slow on old phones (thousands of sprites a frame), so the layer only
+     * does this until its first bake is ready; after that it's [drawUnder], a baked
+     * picture of [drawClouds] and [drawHoneycomb], then [drawOver].
+     */
     fun draw(
         canvas: Canvas,
         field: CloudField,
@@ -153,17 +160,65 @@ class CloudPainter(private val density: Float) {
         you: YouAreHere,
         cosmetics: MapCosmetics = MapCosmetics.none,
     ) {
-        val scale = projection.centreScale / density
-        drawBoundary(canvas, field, projection)
+        drawUnder(canvas, projection, width, height, clock, route, fresh, cosmetics)
+        liveBounds.set(-width * 0.2f, -height * 0.2f, width * 1.2f, height * 1.2f)
+        liveLayer.set(0f, 0f, width, height)
+        drawClouds(canvas, field, leaving, freshClearings, reveal, projection, sprites, liveBounds, clock, liveLayer)
+        if (honeycomb > 0) drawHoneycomb(canvas, field, projection, liveLayer, honeycomb)
+        drawOver(canvas, projection, clock, you, cosmetics)
+    }
+    private val liveBounds = RectF()
+    private val liveLayer = RectF()
+
+    /**
+     * What sits under the clouds and changes as you walk, drawn live each frame:
+     * this walk's orange tiles and the route, in the equipped trail.
+     */
+    fun drawUnder(
+        canvas: Canvas, projection: Projection, width: Float, height: Float, clock: Double,
+        route: DoubleArray, fresh: List<DoubleArray>, cosmetics: MapCosmetics,
+    ) {
         drawFresh(canvas, fresh, projection)
         // Footprints and the rainbow replace the teal line; sparkles go along it.
         if (cosmetics.trail != "trail.footprints" && cosmetics.trail != "trail.rainbow") drawRoute(canvas, route, projection, width, height)
         drawCosmeticTrail(canvas, route, projection, width, height, clock, cosmetics)
+    }
 
-        val visibleL = -width * 0.2f
-        val visibleT = -height * 0.2f
-        val visibleR = width * 1.2f
-        val visibleB = height * 1.2f
+    /** What goes over the clouds, live each frame: the spyglass's ring and where you are. */
+    fun drawOver(canvas: Canvas, projection: Projection, clock: Double, you: YouAreHere, cosmetics: MapCosmetics) {
+        cosmetics.ring?.let { drawRing(canvas, it, cosmetics.spyglass, projection) }
+        drawYouAreHere(canvas, you, projection, clock, cosmetics.marker)
+    }
+
+    /**
+     * The place's outline, the clouds with their shadows, the faint honeycomb and the
+     * hidden streets, with soft holes over walked tiles: everything that only changes
+     * when the tiles or the camera do, so it can be baked into a picture. Draws what
+     * falls in [bounds] (screen pixels of [projection]); the clouds' own layer is
+     * [layer]. With [near] (min x, min y, max x, max y in map points), it skips
+     * whatever's nowhere near that box, for redrawing just the bit round tiles
+     * clearing; everything else is drawn exactly as for the whole, so the two match.
+     */
+    fun drawClouds(
+        canvas: Canvas,
+        field: CloudField,
+        leaving: List<CloudField.Puff>,
+        freshClearings: BooleanArray?,
+        reveal: Double,
+        projection: Projection,
+        sprites: CloudSprites,
+        bounds: RectF,
+        clock: Double,
+        layer: RectF = bounds,
+        near: DoubleArray? = null,
+    ) {
+        val scale = projection.centreScale / density
+        drawBoundary(canvas, field, projection, near)
+
+        val visibleL = bounds.left
+        val visibleT = bounds.top
+        val visibleR = bounds.right
+        val visibleB = bounds.bottom
         val ease = 1 - (1 - reveal).pow(3)
 
         val capacity = field.puffs.size + leaving.size
@@ -178,6 +233,7 @@ class CloudPainter(private val density: Float) {
         var n = 0
         for (i in field.puffs.indices) {
             val puff = field.puffs[i]
+            if (away(near, puff.x, puff.y, puff.radius * PUFF_REACH)) continue
             if (!capped(projection, puff.x, puff.y, puff.radius)) continue
             if (cr < visibleL || cl > visibleR || cb < visibleT || ct > visibleB) continue
             place(n++, puff.phase, 1f, puff.variant, clock)
@@ -186,6 +242,7 @@ class CloudPainter(private val density: Float) {
             for (i in leaving.indices) {
                 val puff = leaving[i]
                 val radius = puff.radius * (1 + 0.5 * ease)
+                if (away(near, puff.x, puff.y, radius * PUFF_REACH)) continue
                 if (!capped(projection, puff.x, puff.y, radius)) continue
                 if (cr < visibleL || cl > visibleR || cb < visibleT || ct > visibleB) continue
                 place(n++, puff.phase, (1 - ease).toFloat(), puff.variant, clock)
@@ -200,7 +257,7 @@ class CloudPainter(private val density: Float) {
 
             // Shadows on the ground, with the sun to the north-west. Straight onto the
             // map rather than through a layer of their own, which costs a whole extra
-            // screen of drawing every frame.
+            // screen of drawing.
             if (detail > 0) {
                 for (i in 0 until n) {
                     bitmapPaint.alpha = alpha(0.35f * placedFade[i] * detail)
@@ -212,7 +269,7 @@ class CloudPainter(private val density: Float) {
                 }
             }
 
-            val layer = canvas.saveLayer(0f, 0f, width, height, null)
+            val saved = canvas.saveLayer(layer, null)
             // Every shaded underside first, then every sunlit top, so the middle of the
             // blanket is one continuous white and the grey only shows round its edges.
             if (detail > 0) {
@@ -228,27 +285,56 @@ class CloudPainter(private val density: Float) {
                 canvas.drawBitmap(sprites.tops[placedVariant[i]], null, rect, bitmapPaint)
             }
             bitmapPaint.alpha = 255
-            drawGrid(canvas, field, projection, scale, width, height)
+            drawGrid(canvas, field, projection, scale, bounds, near)
             // Leaves the canvas clipped to the place outlines, as in Swift, so the
             // clearings below are too.
-            drawRoads(canvas, field, projection, scale, width, height)
+            drawRoads(canvas, field, projection, scale, bounds, near)
 
             // Soft holes over walked tiles. New ones open up rather than just appearing.
             for (i in field.clearings.indices) {
                 val clearing = field.clearings[i]
                 val grow = if (freshClearings != null && i < freshClearings.size && freshClearings[i]) 0.3 + 0.7 * ease else 1.0
+                if (away(near, clearing.x, clearing.y, clearing.radius * 1.5)) continue
                 if (!capped(projection, clearing.x, clearing.y, clearing.radius * grow)) continue
                 if (cr < visibleL || cl > visibleR || cb < visibleT || ct > visibleB) continue
                 rect.set(cl, ct, cr, cb)
                 canvas.drawBitmap(sprites.eraser, null, rect, eraserPaint)
             }
-            canvas.restoreToCount(layer)
+            canvas.restoreToCount(saved)
         }
-
-        if (honeycomb > 0) drawHoneycomb(canvas, field, projection, width, height, honeycomb)
-        cosmetics.ring?.let { drawRing(canvas, it, cosmetics.spyglass, projection) }
-        drawYouAreHere(canvas, you, projection, clock, cosmetics.marker)
     }
+
+    /**
+     * The box of screen pixels (of [projection]) that tiles clearing change as they
+     * open: the clearings growing and the clouds drifting off them, with room for
+     * their shadows. Into [out]; false if there's nothing.
+     */
+    fun revealBounds(field: CloudField, leaving: List<CloudField.Puff>, freshClearings: BooleanArray?, projection: Projection, out: RectF): Boolean {
+        out.setEmpty()
+        var any = false
+        fun add(x: Double, y: Double, radius: Double) {
+            if (!capped(projection, x, y, radius)) return
+            // Drift, swell and the shadow's offset all reach past the cloud itself.
+            val padX = (cr - cl) * 0.4f
+            val padY = (cb - ct) * 0.4f
+            if (!any) out.set(cl - padX, ct - padY, cr + padX, cb + padY) else out.union(cl - padX, ct - padY, cr + padX, cb + padY)
+            any = true
+        }
+        for (puff in leaving) add(puff.x, puff.y, puff.radius * 1.5)
+        if (freshClearings != null) {
+            for (i in field.clearings.indices) {
+                if (i < freshClearings.size && freshClearings[i]) add(field.clearings[i].x, field.clearings[i].y, field.clearings[i].radius)
+            }
+        }
+        return any
+    }
+
+    /** True if a circle of [reach] round [x], [y] can't touch the [near] box. Never without one. */
+    private fun away(near: DoubleArray?, x: Double, y: Double, reach: Double) =
+        near != null && (x + reach < near[0] || x - reach > near[2] || y + reach < near[1] || y - reach > near[3])
+
+    private fun away(near: DoubleArray?, bounds: DoubleArray, i: Int) =
+        near != null && (bounds[i * 4 + 2] < near[0] || bounds[i * 4] > near[2] || bounds[i * 4 + 3] < near[1] || bounds[i * 4 + 1] > near[3])
 
     /**
      * The decorated trails, a fixed size on screen: footprints, twinkling sparkles, or
@@ -488,16 +574,27 @@ class CloudPainter(private val density: Float) {
     }
 
     /** A faint dashed honeycomb over the clouds, fading in as you zoom closer. */
-    private fun drawGrid(canvas: Canvas, field: CloudField, projection: Projection, scale: Double, width: Float, height: Float) {
+    private fun drawGrid(canvas: Canvas, field: CloudField, projection: Projection, scale: Double, bounds: RectF, near: DoubleArray?) {
         if (scale <= 0.15 || field.gridEdges.isEmpty()) return
         val pad = 40 * density
+        val l = bounds.left - pad
+        val t = bounds.top - pad
+        val r = bounds.right + pad
+        val b = bounds.bottom + pad
         path.rewind()
         val edges = field.gridEdges
         var i = 0
         while (i < edges.size) {
+            if (near != null) {
+                val reach = abs(edges[i + 2] - edges[i]) + abs(edges[i + 3] - edges[i + 1])
+                if (away(near, edges[i], edges[i + 1], reach)) {
+                    i += 4
+                    continue
+                }
+            }
             if (projection.segment(edges[i], edges[i + 1], edges[i + 2], edges[i + 3])) {
-                val aIn = projection.x >= -pad && projection.x <= width + pad && projection.y >= -pad && projection.y <= height + pad
-                val bIn = projection.x2 >= -pad && projection.x2 <= width + pad && projection.y2 >= -pad && projection.y2 <= height + pad
+                val aIn = projection.x >= l && projection.x <= r && projection.y >= t && projection.y <= b
+                val bIn = projection.x2 >= l && projection.x2 <= r && projection.y2 >= t && projection.y2 <= b
                 if (aIn || bIn) {
                     path.moveTo(projection.x, projection.y)
                     path.lineTo(projection.x2, projection.y2)
@@ -511,10 +608,11 @@ class CloudPainter(private val density: Float) {
     }
 
     /** The hidden streets as light dashed lines, inside the place only. */
-    private fun drawRoads(canvas: Canvas, field: CloudField, projection: Projection, scale: Double, width: Float, height: Float) {
+    private fun drawRoads(canvas: Canvas, field: CloudField, projection: Projection, scale: Double, bounds: RectF, near: DoubleArray?) {
         if (scale <= 0.05) return
         clip.rewind()
         for (r in field.outline.indices) {
+            if (away(near, field.outlineBounds, r)) continue
             projection.polygon(field.outline[r]) { x, y, first -> if (first) clip.moveTo(x, y) else clip.lineTo(x, y) }
             clip.close()
         }
@@ -523,12 +621,17 @@ class CloudPainter(private val density: Float) {
         // Only the bits on screen. Zoomed in, every street in every place adds up to
         // hundreds of thousands of points of dashed line, which is slow to dash.
         val pad = 20 * density
+        val left = bounds.left - pad
+        val top = bounds.top - pad
+        val right = bounds.right + pad
+        val bottom = bounds.bottom + pad
         for (kind in KINDS) {
             if (kind == RoadLine.Kind.Path && scale <= 0.12) continue
             path.rewind()
             for (l in field.lines.indices) {
                 val line = field.lines[l]
                 if (line.kind != kind) continue
+                if (away(near, field.lineBounds, l)) continue
                 val points = line.points
                 var drawing = false
                 var j = 2
@@ -542,7 +645,7 @@ class CloudPainter(private val density: Float) {
                     val ay = projection.y
                     val bx = projection.x2
                     val by = projection.y2
-                    val visible = max(ax, bx) >= -pad && min(ax, bx) <= width + pad && max(ay, by) >= -pad && min(ay, by) <= height + pad
+                    val visible = max(ax, bx) >= left && min(ax, bx) <= right && max(ay, by) >= top && min(ay, by) <= bottom
                     if (visible) {
                         if (!drawing) path.moveTo(ax, ay)
                         path.lineTo(bx, by)
@@ -556,9 +659,10 @@ class CloudPainter(private val density: Float) {
     }
 
     /** The place's outline, which MapKit draws as a map overlay under the clouds. */
-    private fun drawBoundary(canvas: Canvas, field: CloudField, projection: Projection) {
+    private fun drawBoundary(canvas: Canvas, field: CloudField, projection: Projection, near: DoubleArray?) {
         path.rewind()
         for (r in field.outline.indices) {
+            if (away(near, field.outlineBounds, r)) continue
             projection.polygon(field.outline[r]) { x, y, first -> if (first) path.moveTo(x, y) else path.lineTo(x, y) }
             path.close()
         }
@@ -589,8 +693,12 @@ class CloudPainter(private val density: Float) {
      * walked, orange where you walked this time, white outlines still to walk, and grey
      * where there's no street or path (those clear when you walk beside them).
      */
-    private fun drawHoneycomb(canvas: Canvas, field: CloudField, projection: Projection, width: Float, height: Float, opacity: Float) {
+    fun drawHoneycomb(canvas: Canvas, field: CloudField, projection: Projection, bounds: RectF, opacity: Float) {
         val pad = 60 * density
+        val left = bounds.left - pad
+        val top = bounds.top - pad
+        val right = bounds.right + pad
+        val bottom = bounds.bottom + pad
         for (k in honeycombPaths.indices) {
             honeycombPaths[k].rewind()
             honeycombUsed[k] = false
@@ -599,7 +707,7 @@ class CloudPainter(private val density: Float) {
             val outline = field.outlines[o]
             if (!projection.isInFront(outline.x, outline.y)) continue
             projection.point(outline.x, outline.y)
-            if (projection.x < -pad || projection.x > width + pad || projection.y < -pad || projection.y > height + pad) continue
+            if (projection.x < left || projection.x > right || projection.y < top || projection.y > bottom) continue
             val p = honeycombPaths[outline.kind]
             honeycombUsed[outline.kind] = true
             val c = outline.corners
@@ -625,6 +733,12 @@ class CloudPainter(private val density: Float) {
     companion object {
         /** Below this many points across, a puff is drawn as just its top. Its shadow and underside fade in up to twice this. */
         const val SIMPLE_PUFF = 8.0
+
+        /**
+         * How far a puff's sprite, shadow and drift can reach on the ground, as a
+         * multiple of its radius, for leaving out the ones that can't touch a patch.
+         */
+        private const val PUFF_REACH = 2.5
 
         private val KINDS = arrayOf(RoadLine.Kind.Road, RoadLine.Kind.Path)
 

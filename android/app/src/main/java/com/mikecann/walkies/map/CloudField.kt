@@ -117,6 +117,12 @@ class CloudField(cities: List<City>, walkTiles: Set<Hex> = emptySet()) {
         gridEdges = edges.toDoubleArray()
     }
 
+    // After init, which they're worked out from.
+    /** Each line's box of map points, as min x, min y, max x, max y, for skipping the ones nowhere near. */
+    val lineBounds: DoubleArray = bounds(lines.map { it.points })
+    /** The same for each of [outline]. */
+    val outlineBounds: DoubleArray = bounds(outline)
+
     companion object {
         /** Cloud sprite radius as a multiple of the hex size. */
         const val SPREAD = 1.6
@@ -154,6 +160,25 @@ class CloudField(cities: List<City>, walkTiles: Set<Hex> = emptySet()) {
                 val c = corners[i / 2]
                 if (i % 2 == 0) MapPoints.x(c.lon) else MapPoints.y(c.lat)
             }
+        }
+
+        private fun bounds(polylines: List<DoubleArray>): DoubleArray {
+            val out = DoubleArray(polylines.size * 4)
+            for (i in polylines.indices) {
+                val p = polylines[i]
+                var x0 = Double.POSITIVE_INFINITY
+                var y0 = Double.POSITIVE_INFINITY
+                var x1 = Double.NEGATIVE_INFINITY
+                var y1 = Double.NEGATIVE_INFINITY
+                var j = 0
+                while (j + 1 < p.size) {
+                    x0 = minOf(x0, p[j]); x1 = maxOf(x1, p[j])
+                    y0 = minOf(y0, p[j + 1]); y1 = maxOf(y1, p[j + 1])
+                    j += 2
+                }
+                out[i * 4] = x0; out[i * 4 + 1] = y0; out[i * 4 + 2] = x1; out[i * 4 + 3] = y1
+            }
+            return out
         }
 
         private fun hash(hex: Hex): Long = (hex.q.toLong() * 73_856_093L) xor (hex.r.toLong() * 19_349_663L)
