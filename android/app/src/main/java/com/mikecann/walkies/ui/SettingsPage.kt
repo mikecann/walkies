@@ -82,6 +82,9 @@ fun SettingsPage(
     onSyncNow: () -> Unit,
     /** Sync stops first, so nothing from this account comes back after the wipe. */
     onSignOut: () -> Unit,
+    countSteps: Boolean,
+    onCountSteps: (Boolean) -> Unit,
+    motionDenied: Boolean,
     alwaysOn: Boolean,
     onAlwaysOn: (Boolean) -> Unit,
     /** Always on is on but location isn't allowed all the time, so walks won't record with the app closed. */
@@ -139,6 +142,22 @@ fun SettingsPage(
                 ) {
                     BasicText("Always on", style = Type.body, modifier = Modifier.weight(1f))
                     Toggle(alwaysOn)
+                }
+            }
+            Section(footer = "Uses the phone's motion chip, no extra battery") {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                        .clickable(role = Role.Switch) { onCountSteps(!countSteps) }
+                        .semantics { contentDescription = "Count steps" }
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                ) {
+                    BasicText("Count steps", style = Type.body, modifier = Modifier.weight(1f))
+                    Toggle(countSteps)
+                }
+                if (countSteps && motionDenied) {
+                    BasicText("Step counting needs physical activity access.", style = Type.body, modifier = Modifier.padding(16.dp))
+                    RowButton("Open Settings", Walkies.burnt, enabled = true, onClick = onOpenSettings)
                 }
             }
             if (locationWarning) {

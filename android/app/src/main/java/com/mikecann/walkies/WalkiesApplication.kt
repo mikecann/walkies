@@ -18,6 +18,7 @@ import com.mikecann.walkies.location.MotionActivity
 import com.mikecann.walkies.location.Permissions
 import com.mikecann.walkies.location.TrackingService
 import com.mikecann.walkies.location.WalkState
+import com.mikecann.walkies.location.StepCounter
 import com.mikecann.walkies.lore.LoreLibrary
 import com.mikecann.walkies.lore.SecretNotifier
 import com.mikecann.walkies.store.Store
@@ -49,6 +50,8 @@ class WalkiesApplication : Application() {
         private set
     /** Main-thread work that outlives any one screen: sync, sign-in, adding places. */
     val scope = MainScope()
+    lateinit var steps: StepCounter
+        private set
     private lateinit var motion: ActivityMotion
     private lateinit var tracking: AlwaysOnTracking
     private lateinit var transitions: ActivityTransitions
@@ -58,6 +61,7 @@ class WalkiesApplication : Application() {
         set(value) {
             field = value
             refreshTracking()
+            if (value) { steps.refreshToday(); steps.refreshLive(model.activeWalk) } else steps.stopLive()
         }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -69,6 +73,14 @@ class WalkiesApplication : Application() {
         }
     }
     private var ticking = false
+    private var stepsTicking = false
+    private var stepWalkId: java.util.UUID? = null
+    private val stepsTick = object : Runnable {
+        override fun run() {
+            steps.refreshLive(model.activeWalk)
+            handler.postDelayed(this, 20_000)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -84,7 +96,9 @@ class WalkiesApplication : Application() {
         LoreLibrary.reader = { name -> runCatching { assets.open("lore/$name.json").bufferedReader().use { it.readText() } }.getOrNull() }
         // Application Support/Walkies on the iPhone.
         val store = Store(File(filesDir, "Walkies"))
-        model = AppModel(store, prefs, tracker, motion, historyScope = scope)
+        steps = StepCounter(this, scope)
+        steps.configure(prefs.countSteps)
+        model = AppModel(store, prefs, tracker, motion, historyScope = scope, stepQuery = steps::count)
         // With the app open the secret pops up instead.
         model.secretsFound = { if (!onScreen) SecretNotifier.stickersFound(this, it) }
         model.services = scope
@@ -139,6 +153,15 @@ class WalkiesApplication : Application() {
      * whenever anything changes.
      */
     fun refreshTracking() {
+        steps.configure(model.countSteps)
+        val pollSteps = onScreen && model.activeWalk != null && model.countSteps
+        if (pollSteps && (!stepsTicking || stepWalkId != model.activeWalk?.id)) {
+            steps.refreshLive(model.activeWalk)
+        }
+        stepWalkId = model.activeWalk?.id
+        if (pollSteps && !stepsTicking) handler.postDelayed(stepsTick, 20_000)
+        if (!pollSteps) { handler.removeCallbacks(stepsTick); steps.stopLive() }
+        stepsTicking = pollSteps
         val located = Permissions.location(this)
         val alwaysOn = model.alwaysOn && located
         val walk = when {
@@ -188,6 +211,10 @@ class Prefs(context: Context) : Settings, SyncPrefs {
     override var alwaysOn: Boolean
         get() = prefs.getBoolean("alwaysOn", false)
         set(value) = prefs.edit().putBoolean("alwaysOn", value).apply()
+
+    override var countSteps: Boolean
+        get() = prefs.getBoolean("countSteps", true)
+        set(value) = prefs.edit().putBoolean("countSteps", value).apply()
 
     override var autoWalkGap: Double
         get() = prefs.getFloat("autoWalkGap", 0f).toDouble()

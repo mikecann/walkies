@@ -201,6 +201,10 @@ struct FixtureExportTests {
             #expect(walk.startedAt == expected.startedAt)
             #expect(walk.endedAt == expected.endedAt)
             #expect(walk.points == expected.points)
+            #expect(walk.steps == expected.steps)
+            var withSteps = walk
+            withSteps.steps = 1234
+            #expect(try JSONDecoder().decode(Walk.self, from: JSONEncoder().encode(withSteps)).steps == 1234)
             #expect(walk.distance == expected.distance)
             #expect(walk.gridVersion == expected.gridVersion)
             #expect(walk.newTiles == expected.newTiles)

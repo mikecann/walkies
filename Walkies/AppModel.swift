@@ -24,7 +24,9 @@ final class AppModel {
     /// Set when the app opens, so the next fix selects the place you're in. Otherwise the
     /// selection only follows you on a walk, so looking at another place sticks.
     @ObservationIgnored var placeYouOnNextFix = true
-    private(set) var activeWalk: Walk?
+    private(set) var activeWalk: Walk? {
+        didSet { updateLiveSteps() }
+    }
     /// Accepted fixes from the current walk, for drawing the line on the map.
     private(set) var activePath: [Coordinate] = []
     /// Tiles uncovered on the current walk, per city, so the map can make a fuss of them.
@@ -72,6 +74,58 @@ final class AppModel {
 
     let tracker = LocationTracker()
     let motion = MotionMonitor()
+    let stepCounter = StepCounter()
+    var countSteps = UserDefaults.standard.object(forKey: "countSteps") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(countSteps, forKey: "countSteps")
+            stepSettingRevision += 1
+            stepCounter.clear()
+            updateLiveSteps()
+            Task { await refreshStepsToday() }
+        }
+    }
+    @ObservationIgnored private var stepsInForeground = false
+    @ObservationIgnored private var stepSettingRevision = 0
+    @ObservationIgnored private var finishingWalkID: UUID?
+    /// Tests can supply a delayed count without Core Motion.
+    @ObservationIgnored var querySteps: ((Date, Date) async -> Int?)?
+
+    func stepsForeground(_ foreground: Bool) {
+        stepsInForeground = foreground
+        updateLiveSteps()
+        if foreground { Task { await refreshStepsToday() } }
+    }
+
+    private func updateLiveSteps() {
+        stepCounter.updateLive(from: servicesEnabled && countSteps && stepsInForeground && finishingWalkID == nil ? activeWalk?.startedAt : nil)
+    }
+
+    func refreshStepsToday() async {
+        await stepCounter.refreshToday(enabled: servicesEnabled && countSteps && setupDone)
+    }
+
+    /// Keep the unfinished walk in place until its count arrives. Repeated End taps,
+    /// GPS fixes and account wipes can't finish it twice or attach the count elsewhere.
+    private func withSteps(_ walk: Walk, endingAt end: Date, finish: @escaping (Walk) -> Void) {
+        guard finishingWalkID == nil else { return }
+        var snapshot = walk
+        snapshot.endedAt = end
+        guard countSteps, servicesEnabled || querySteps != nil else { finish(snapshot); return }
+        finishingWalkID = walk.id
+        saveNow(waiting: true)
+        updateLiveSteps()
+        let generation = dataGeneration
+        let setting = stepSettingRevision
+        Task {
+            let count: Int?
+            if let querySteps { count = await querySteps(walk.startedAt, end) }
+            else { count = await stepCounter.count(from: walk.startedAt, to: end) }
+            guard generation == dataGeneration, activeWalk?.id == walk.id, finishingWalkID == walk.id else { return }
+            finishingWalkID = nil
+            snapshot.steps = countSteps && setting == stepSettingRevision ? count : nil
+            finish(snapshot)
+        }
+    }
     @ObservationIgnored private let store: Store
     /// Wired by the app with Account.client(), just like sync. Tests leave it nil.
     @ObservationIgnored var makePlaceClient: (() async -> ConvexClient?)?
@@ -102,9 +156,10 @@ final class AppModel {
     /// Loading sets these as they were saved, which isn't turning them on or off.
     @ObservationIgnored private var loading = false
 
-    init(store: Store = Store(), servicesEnabled: Bool = true, alwaysOn: Bool? = nil, waitForUnlock: Bool = false) {
+    init(store: Store = Store(), servicesEnabled: Bool = true, alwaysOn: Bool? = nil, waitForUnlock: Bool = false, stepQuery: ((Date, Date) async -> Int?)? = nil) {
         self.store = store
         self.servicesEnabled = servicesEnabled
+        self.querySteps = stepQuery
         tracker.onLocation = { [weak self] in self?.record($0) }
         tracker.onAuthorizationChange = { [weak self] in self?.authorizationChanged() }
         tracker.isWalking = { [weak self] in self?.activeWalk != nil }
@@ -134,7 +189,8 @@ final class AppModel {
 
         // A walk without an end means the app was killed mid-walk. If iOS has just
         // relaunched us during an always-on walk, carry on with it; otherwise close it off.
-        for var walk in store.loadWalks() {
+        var recoveredWalks: [Walk] = []
+        for walk in store.loadWalks() {
             if walk.endedAt == nil {
                 if !worldGridResetPending, self.alwaysOn, walk.isAutomatic, let last = walk.points.last,
                    Date.now.timeIntervalSince1970 - last.time < Self.autoWalkGap {
@@ -143,8 +199,7 @@ final class AppModel {
                     activePath = autoWalkPending ? [] : walk.points.map(\.coordinate)
                     continue
                 }
-                walk.endedAt = walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt
-                store.save(walk)
+                recoveredWalks.append(walk)
             }
             walks.append(walk)
         }
@@ -159,7 +214,25 @@ final class AppModel {
         rebuildCountingTiles()
         // Migration can be sizeable on an older phone. Never trace saved routes
         // while opening the app, reading balance or processing a location fix.
-        historyTask = Task { await prepareHistory() }
+        let generation = dataGeneration
+        historyTask = Task {
+            // Unfinished files stay out of sync until their final count is known.
+            for var walk in recoveredWalks {
+                let end = walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt
+                let setting = stepSettingRevision
+                if countSteps {
+                    if let querySteps { walk.steps = await querySteps(walk.startedAt, end) }
+                    else if servicesEnabled { walk.steps = await stepCounter.count(from: walk.startedAt, to: end) }
+                }
+                guard generation == dataGeneration else { return }
+                if !countSteps || setting != stepSettingRevision { walk.steps = nil }
+                walk.endedAt = end
+                if let i = walks.firstIndex(where: { $0.id == walk.id }) { walks[i] = walk }
+                store.save(walk)
+            }
+            guard generation == dataGeneration else { return }
+            await prepareHistory()
+        }
         fillInLastWalked()
     }
 
@@ -436,13 +509,27 @@ final class AppModel {
     }
 
     func endWalk() {
+        guard activeWalk != nil else { return }
+        // GPS stops now rather than once the step count is in, so turning on always on
+        // mid-walk can start its own tracking straight after without this undoing it.
+        tracker.stop()
+        finishManualWalk()
+    }
+
+    private func finishManualWalk() {
         guard historyReady else {
-            Task { await historyTask?.value; if historyReady { endWalk() } }
+            let id = activeWalk?.id
+            Task { await historyTask?.value; if historyReady, id != nil, activeWalk?.id == id { finishManualWalk() } }
             return
         }
-        guard var walk = activeWalk else { return }
-        tracker.stop()
-        walk.endedAt = .now
+        guard let walk = activeWalk else { return }
+        withSteps(walk, endingAt: .now) { [self] finished in
+            completeWalk(finished)
+        }
+    }
+
+    private func completeWalk(_ finished: Walk) {
+        var walk = finished
         finishCoverage(of: &walk)
         let history = walks
         let fresh = freshTiles
@@ -458,7 +545,9 @@ final class AppModel {
         store.save(walk)
         store.save(cities)
         recapRequest += 1
-        recap = WalkRecap.make(walk: walk, cities: cities, fresh: fresh, found: foundStickers, history: history, counts: counts)
+        if !alwaysOn {
+            recap = WalkRecap.make(walk: walk, cities: cities, fresh: fresh, found: foundStickers, history: history, counts: counts)
+        }
         refreshProgressPicks()
         requestSync?()
     }
@@ -525,6 +614,7 @@ final class AppModel {
     }
 
     private func record(_ location: CLLocation) {
+        guard finishingWalkID == nil else { return }
         // iOS can hand over a cached fix from wherever you last were when tracking starts.
         guard !locked, !worldGridResetPending, location.timestamp.timeIntervalSinceNow > -10 else { return }
         lastLocation = location
@@ -655,7 +745,15 @@ final class AppModel {
             Task { await historyTask?.value; if historyReady, id != nil, activeWalk?.id == id { finishAutoWalk(byYou: byYou) } }
             return
         }
-        guard var walk = activeWalk, walk.isAutomatic else { return }
+        guard let walk = activeWalk, walk.isAutomatic else { return }
+        let end = byYou ? Date.now : walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt
+        withSteps(walk, endingAt: end) { [self] finished in
+            completeAutoWalk(finished, byYou: byYou)
+        }
+    }
+
+    private func completeAutoWalk(_ finished: Walk, byYou: Bool) {
+        var walk = finished
         let wasPending = autoWalkPending
         finishCoverage(of: &walk)
         let fresh = freshTiles
@@ -666,7 +764,6 @@ final class AppModel {
         addedTiles = [:]
         tracer = CoverageTracer()
         tilesRevision += 1
-        walk.endedAt = byYou ? .now : walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt
         // Measure again by today's rules, so walks logged by older versions (or GPS
         // wobble at home) don't get kept as real ones. Tiles already uncovered stay.
         walk.distance = CoverageTracer.distance(for: walk.points)
@@ -1292,6 +1389,8 @@ final class AppModel {
 
     /// Forgets everything on this phone, for signing out. It's all in the account.
     func wipeLocalData() {
+        finishingWalkID = nil
+        stepCounter.clear()
         dataGeneration += 1
         teamMembershipRevision += 1
         historyTask?.cancel()

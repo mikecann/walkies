@@ -77,6 +77,20 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Toggle("Count steps", isOn: $model.countSteps)
+                    if model.countSteps && model.stepCounter.needsMotionAccess {
+                        Text("Step counting needs Motion & Fitness access.")
+                        Button("Open Settings") {
+                            if let url = URL(string: UIApplication.openSettingsURLString) {
+                                UIApplication.shared.open(url)
+                            }
+                        }
+                    }
+                } footer: {
+                    Text("Uses the phone's motion chip, no extra battery")
+                }
+
+                Section {
                     Button {
                         ChefKit.present()
                     } label: {
@@ -102,6 +116,7 @@ struct SettingsView: View {
             }
             .scrollContentBackground(.hidden)
             .background(Color.cream)
+            .task { await model.refreshStepsToday() }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
         }

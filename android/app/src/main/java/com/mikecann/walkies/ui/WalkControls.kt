@@ -47,6 +47,8 @@ import java.util.Locale
 
 /** Format in Theme.swift. */
 object Format {
+    fun steps(count: Int): String = "${java.text.NumberFormat.getIntegerInstance().format(count)} steps"
+
     fun distance(metres: Double): String =
         if (metres < 1000) "${metres.toInt()} m" else String.format(Locale.US, "%.2f km", metres / 1000)
 
@@ -69,6 +71,7 @@ object Format {
 @Composable
 fun WalkControls(
     walk: Walk?,
+    liveSteps: Int?,
     /** How far a pending always-on walk has got, while it's pending. */
     pendingDistance: Double?,
     alwaysOn: Boolean,
@@ -103,6 +106,7 @@ fun WalkControls(
                 Stat(Format.distance(walk.distance), "Distance")
                 Stat("${walk.newTiles}", "New tiles", tint = Walkies.orange)
             }
+            liveSteps?.let { BasicText(Format.steps(it), style = Type.subheadline) }
             StickerButton(onClick = onEnd) {
                 BasicText("End walk", style = Type.headline.copy(color = Color.White))
             }

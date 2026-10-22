@@ -70,6 +70,7 @@ interface Motion {
 /** Settings kept between launches (UserDefaults on iOS, SharedPreferences here). */
 interface Settings {
     var alwaysOn: Boolean
+    var countSteps: Boolean
     /** Seconds; zero means the usual ten minutes. Overridable for testing on the emulator. */
     var autoWalkGap: Double
     var selectedCity: String?
@@ -109,7 +110,36 @@ class AppModel(
     private val osm: OSMClient = OSMClient(),
     /** Where the launch history backfill runs. Null works it out before the constructor returns. */
     private val historyScope: CoroutineScope? = null,
+    stepQuery: ((SwiftDate, SwiftDate, (Int?) -> Unit) -> Unit)? = null,
 ) {
+    var countSteps: Boolean
+        get() = settings.countSteps
+        set(value) {
+            settings.countSteps = value
+            stepSettingRevision++
+            onChange()
+        }
+    /** Wired to the phone service. Tests may return a delayed count. */
+    var querySteps: ((SwiftDate, SwiftDate, (Int?) -> Unit) -> Unit)? = stepQuery
+    private var finishingWalkId: UUID? = null
+    private var stepSettingRevision = 0
+
+    private fun withSteps(walk: Walk, end: SwiftDate, finish: (Walk) -> Unit) {
+        if (finishingWalkId != null) return
+        val snapshot = walk.copy(endedAt = end)
+        val query = querySteps
+        if (!countSteps || query == null) { finish(snapshot); return }
+        finishingWalkId = walk.id
+        saveNow(waiting = true)
+        val generation = dataGeneration
+        val setting = stepSettingRevision
+        query(walk.startedAt, end) { count ->
+            if (generation != dataGeneration || activeWalk?.id != walk.id || finishingWalkId != walk.id) return@query
+            finishingWalkId = null
+            finish(snapshot.copy(steps = count.takeIf { countSteps && setting == stepSettingRevision }))
+        }
+    }
+
     private val listeners = ArrayList<() -> Unit>()
 
     /** Calls [listener] after anything changes. Returns a function that stops it. */
@@ -262,8 +292,9 @@ class AppModel(
         // A walk without an end means the app was killed mid-walk. If it's an always-on
         // walk that's still going, carry on with it; otherwise close it off.
         val loaded = ArrayList<Walk>()
+        val recovered = ArrayList<Walk>()
         for (saved in store.loadWalks()) {
-            var walk = saved
+            val walk = saved
             if (walk.endedAt == null) {
                 val last = walk.points.lastOrNull()
                 if (alwaysOn && walk.isAutomatic && last != null && clock() - last.time < autoWalkGap) {
@@ -272,8 +303,7 @@ class AppModel(
                     activePath = if (autoWalkPending) emptyList() else walk.points.map { it.coordinate }
                     continue
                 }
-                walk = walk.copy(endedAt = last?.let { SwiftDate.epoch(it.time) } ?: walk.startedAt)
-                store.save(walk)
+                recovered.add(walk)
             }
             loaded.add(walk)
         }
@@ -293,8 +323,28 @@ class AppModel(
         placeStickers()
         rebuildCountingTiles()
         // Never trace saved routes while opening the app or handling a location fix.
-        prepareHistory()
+        finishRecovered(recovered, 0, dataGeneration)
         fillInLastWalked()
+    }
+
+    /** Recovered files keep their nil end until steps are attached, so sync can't upload early. */
+    private fun finishRecovered(recovered: List<Walk>, index: Int, generation: Int) {
+        if (generation != dataGeneration) return
+        val walk = recovered.getOrNull(index)
+        if (walk == null) { prepareHistory(); return }
+        val end = walk.points.lastOrNull()?.let { SwiftDate.epoch(it.time) } ?: walk.startedAt
+        val setting = stepSettingRevision
+        val done: (Int?) -> Unit = { count ->
+            if (generation == dataGeneration) {
+                val finished = walk.copy(endedAt = end, steps = count.takeIf { countSteps && setting == stepSettingRevision })
+                walks = walks.map { if (it.id == walk.id) finished else it }
+                store.save(finished)
+                finishRecovered(recovered, index + 1, generation)
+                onChange()
+            }
+        }
+        val query = querySteps
+        if (countSteps && query != null) query(walk.startedAt, end, done) else done(null)
     }
 
     private fun rebuildCountingTiles() {
@@ -384,8 +434,12 @@ class AppModel(
             whenHistoryReady { if (activeWalk?.id == id) endWalk() }
             return
         }
-        var walk = activeWalk ?: return
-        walk = finishCoverage(walk.copy(endedAt = now()))
+        val walk = activeWalk ?: return
+        withSteps(walk, now(), ::completeWalk)
+    }
+
+    private fun completeWalk(finished: Walk) {
+        val walk = finishCoverage(finished)
         val history = walks
         val fresh = freshTiles
         val counts = questTileCounts
@@ -400,7 +454,7 @@ class AppModel(
         store.save(walk)
         store.save(cities)
         recapRequest++
-        recap = WalkRecap.make(walk, cities, fresh, foundStickers, history, clock(), counts)
+        if (!alwaysOn) recap = WalkRecap.make(walk, cities, fresh, foundStickers, history, clock(), counts)
         refreshProgressPicks()
         requestSync?.invoke()
         onChange()
@@ -475,6 +529,7 @@ class AppModel(
 
     /** A GPS fix. */
     fun record(fix: TrackPoint) {
+        if (finishingWalkId != null) return
         // A cached fix from wherever you last were when tracking starts.
         if (clock() - fix.time > 10) return
         lastLocation = fix
@@ -612,8 +667,14 @@ class AppModel(
             whenHistoryReady { if (activeWalk?.id == id) finishAutoWalk(byYou) }
             return
         }
-        var walk = activeWalk ?: return
+        val walk = activeWalk ?: return
         if (!walk.isAutomatic) return
+        val end = if (byYou) now() else walk.points.lastOrNull()?.let { SwiftDate.epoch(it.time) } ?: walk.startedAt
+        withSteps(walk, end) { completeAutoWalk(it, byYou) }
+    }
+
+    private fun completeAutoWalk(finished: Walk, byYou: Boolean) {
+        var walk = finished
         val wasPending = autoWalkPending
         walk = finishCoverage(walk)
         val fresh = freshTiles
@@ -624,7 +685,6 @@ class AppModel(
         addedTiles = emptyMap()
         tracer = CoverageTracer()
         tilesRevision++
-        walk = walk.copy(endedAt = if (byYou) now() else walk.points.lastOrNull()?.let { SwiftDate.epoch(it.time) } ?: walk.startedAt)
         // Measure again by today's rules, so walks logged by older versions (or GPS
         // wobble at home) don't get kept as real ones. Tiles already uncovered stay.
         walk = walk.copy(distance = CoverageTracer.distance(walk.points))
@@ -1340,6 +1400,7 @@ class AppModel(
 
     /** Forgets everything on this phone, for signing out. It's all in the account. */
     fun wipeLocalData() {
+        finishingWalkId = null
         dataGeneration++
         // Dropped rather than finished, so turning always-on off below can't save it.
         activeWalk = null

@@ -9,6 +9,7 @@ kotlinxSerialization = "1.9.0"
 coroutines = "1.10.2"
 browser = "1.9.0"
 playServicesLocation = "21.3.0"
+playServicesFitness = "21.3.0"
 junit = "4.13.2"
 
 [libraries]
@@ -24,6 +25,7 @@ mapbox-maps = { group = "com.mapbox.maps", name = "android-ndk27", version.ref =
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 androidx-browser = { group = "androidx.browser", name = "browser", version.ref = "browser" }
+play-services-fitness = { group = "com.google.android.gms", name = "play-services-fitness", version.ref = "playServicesFitness" }
 play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "playServicesLocation" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 

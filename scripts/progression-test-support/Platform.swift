@@ -23,6 +23,12 @@ final class MotionMonitor {
     var still = false
     func start() {}
 }
+final class StepCounter {
+    func updateLive(from: Date?) {}
+    func clear() {}
+    func refreshToday(enabled: Bool) async {}
+    func count(from: Date, to: Date) async -> Int? { nil }
+}
 enum Notifier {
     static func requestPermission() {}
     static func stickersFound(_ entries: [LoreEntry]) {}

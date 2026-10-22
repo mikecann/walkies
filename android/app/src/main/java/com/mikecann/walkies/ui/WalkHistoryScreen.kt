@@ -113,7 +113,8 @@ private fun format(date: SwiftDate, skeleton: String): String =
 
 /** The Walks tab (WalkHistoryView.swift): your totals, then every walk by month, newest first. */
 @Composable
-fun WalkHistoryScreen(model: AppModel, onOpen: (Walk) -> Unit) {
+fun WalkHistoryScreen(model: AppModel, stepsToday: Int?, onRefreshSteps: () -> Unit, onOpen: (Walk) -> Unit) {
+    androidx.compose.runtime.LaunchedEffect(Unit) { onRefreshSteps() }
     @Suppress("UNUSED_VARIABLE") val revision = rememberRevision(model::listen)
     val walks = model.walks
     val months = remember(walks) {
@@ -135,6 +136,7 @@ fun WalkHistoryScreen(model: AppModel, onOpen: (Walk) -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier.fillMaxWidth().stickerCard(RoundedCornerShape(24.dp)).padding(20.dp),
                 ) {
+                    stepsToday?.let { BasicText("Steps today: ${java.text.NumberFormat.getIntegerInstance().format(it)}", style = Type.headline) }
                     BasicText("Every walk adds up", style = heavy(22).copy(fontFamily = rounded))
                     WalkStats(
                         listOf(
@@ -207,6 +209,7 @@ private fun WalkRow(walk: Walk, onClick: () -> Unit) {
                 "${walk.newTiles} new ${if (walk.newTiles == 1) "tile" else "tiles"}",
                 style = Type.caption.copy(color = Walkies.ink.copy(alpha = 0.6f)),
             )
+            walk.steps?.let { BasicText(Format.steps(it), style = Type.subheadline) }
             if (walk.isAutomatic) {
                 BasicText(
                     "Always on",

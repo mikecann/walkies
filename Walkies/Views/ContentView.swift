@@ -118,6 +118,7 @@ struct ContentView: View {
         }
         .sensoryFeedback(.success, trigger: model.revealCount)
         .onChange(of: scenePhase, initial: true) { _, phase in
+            model.stepsForeground(phase == .active)
             if phase == .background { model.saveNow(waiting: true) }
             if phase == .active {
                 model.placeYouOnNextFix = true
@@ -537,6 +538,9 @@ struct WalkControls: View {
                     }
                     Stat(value: Format.distance(walk.distance), label: "Distance")
                     Stat(value: "\(walk.newTiles)", label: "New tiles", tint: .walkiesOrange)
+                }
+                if let steps = model.stepCounter.live {
+                    Text("\(steps.formatted()) steps").font(.subheadline.weight(.semibold))
                 }
                 Button("End walk") {
                     walk.isAutomatic ? model.endAutoWalk() : model.endWalk()

@@ -18,6 +18,10 @@ struct WalkHistoryView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 16) {
+                    if let steps = model.stepCounter.today, model.countSteps {
+                        LabeledContent("Steps today", value: steps.formatted())
+                            .font(.headline)
+                    }
                     Text("Every walk adds up")
                         .font(.system(.title2, design: .rounded, weight: .heavy))
                     WalkStats(items: [
@@ -58,6 +62,7 @@ struct WalkHistoryView: View {
         }
         .background(Color.cream)
         .foregroundStyle(Color.ink)
+        .task { await model.refreshStepsToday() }
         .navigationTitle("Past walks")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -94,6 +99,9 @@ private struct WalkHistoryRow: View {
                 Text("\(walk.newTiles) new \(walk.newTiles == 1 ? "tile" : "tiles")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let steps = walk.steps {
+                    Text("\(steps.formatted()) steps").font(.subheadline.weight(.semibold))
+                }
                 if walk.isAutomatic {
                     Text("Always on")
                         .font(.caption.weight(.semibold))
@@ -219,6 +227,7 @@ struct WalkDetailView: View {
                     Text(walk.startedAt.formatted(date: .omitted, time: .shortened))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                    if let steps = walk.steps { Text("\(steps.formatted()) steps").font(.headline) }
                     WalkStats(items: [
                         ("Distance", Format.distance(walk.distance)),
                         ("Time", Format.duration(walk.duration)),

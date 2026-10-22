@@ -34,7 +34,7 @@ struct SetupView: View {
 
             VStack(spacing: 14) {
                 if step == .location {
-                    Text("iOS asks a couple of things. Tap Allow While Using App, then Change to Always Allow when it checks back later. Motion & Fitness lets Walkies tell walking from cycling or driving.")
+                    Text("iOS asks a couple of things. Tap Allow While Using App, then Change to Always Allow when it checks back later. Motion & Fitness lets Walkies tell walking from cycling or driving, and count your steps.")
                         .font(.footnote)
                         .foregroundStyle(Color.ink.opacity(0.6))
                         .multilineTextAlignment(.center)

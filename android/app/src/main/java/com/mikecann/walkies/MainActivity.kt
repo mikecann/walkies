@@ -218,6 +218,7 @@ class MainActivity : ComponentActivity() {
                 MapScreen(
                     app.model,
                     app.tracker,
+                    liveSteps = app.steps.live,
                     alwaysOnWarning = alwaysOnWarning(),
                     name = app.account.displayName,
                     picture = app.account.picture,
@@ -251,7 +252,7 @@ class MainActivity : ComponentActivity() {
             AppTab.Walks -> {
                 val id = walkDetail
                 if (id == null) {
-                    WalkHistoryScreen(app.model, onOpen = { walkDetail = it.id })
+                    WalkHistoryScreen(app.model, app.steps.today, app.steps::refreshToday, onOpen = { walkDetail = it.id })
                 } else {
                     WalkDetailScreen(
                         app.model, id,
@@ -283,6 +284,9 @@ class MainActivity : ComponentActivity() {
                         navigation.showMap()
                         app.signOut()
                     },
+                    countSteps = app.model.countSteps,
+                    onCountSteps = { app.model.countSteps = it; app.steps.refreshToday() },
+                    motionDenied = !Permissions.activity(this),
                     alwaysOn = app.model.alwaysOn,
                     onAlwaysOn = {
                         app.model.alwaysOn = it
@@ -409,6 +413,8 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         permissionsRevision++
+        app.refreshTracking()
+        app.steps.refreshToday()
         // Back from the Custom Tab without a sign-in: closed it, which needs no message.
         if (signingIn == SignInProvider.Google && !completingSignIn) {
             handler.postDelayed({

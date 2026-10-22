@@ -38,6 +38,8 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
     /// Every fix we got, good or bad. Coverage is always recomputed from these,
     /// so changing the filters or adding a city later uses the full history.
     var points: [TrackPoint] = []
+    /// Nil when step counting was off or the motion chip had no count.
+    var steps: Int?
     var distance: Double = 0
     var gridVersion: Int? = HexGrid.version
     var newTiles = 0

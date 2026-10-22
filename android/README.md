@@ -2,6 +2,8 @@
 
 Kotlin and Jetpack Compose, following the iPhone app in `../Walkies`. See `../design/android.md` for the plan.
 
+Steps are counted by the phone's motion chip through Play services, with no extra battery use. Each walk keeps its steps, and Walks shows Steps today once a full day is available. Play services only keeps steps from when counting was switched on, so partial walks and the first partial day stay hidden. Count steps in Settings turns it off.
+
 ## Setup
 
 1. JDK 17: `export JAVA_HOME=~/Library/Java/JavaVirtualMachines/jdk-17.0.20.1+1/Contents/Home`
