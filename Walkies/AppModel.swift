@@ -133,6 +133,7 @@ final class AppModel {
     @ObservationIgnored private var warmingNeighbours = false
     @ObservationIgnored private let servicesEnabled: Bool
     @ObservationIgnored private var tracer = CoverageTracer()
+    @ObservationIgnored private var rodeSinceLastPoint = false
     @ObservationIgnored private var shapes: [UUID: BoundaryShape] = [:]
     @ObservationIgnored private var lastSave = Date.distantPast
     @ObservationIgnored private var startWhenAllowed = false
@@ -538,6 +539,7 @@ final class AppModel {
         questTileCounts[walk.id] = fresh.mapValues(\.count)
         historyRevision += 1
         activeWalk = nil
+        rodeSinceLastPoint = false
         activePath = []
         freshTiles = [:]
         addedTiles = [:]
@@ -657,17 +659,29 @@ final class AppModel {
     }
 
     /// Always on: a walk starts the moment you're moving on foot and ends once you've
-    /// stopped for a while. Only on-foot fixes are kept, so drives don't fill the phone.
+    /// stopped for a while or ridden somewhere. Only on-foot fixes are kept, so drives
+    /// don't fill the phone.
     private func recordAlwaysOn(_ point: TrackPoint) {
         if let last = activeWalk?.points.last, point.time - last.time > Self.autoWalkGap {
             finishAutoWalk()
-            // Still waiting on history to finish it. Leave these fixes out rather than
+            // Still waiting on history or steps. Leave these fixes out rather than
             // run the next outing onto the end of this one.
             if activeWalk != nil { return }
+        }
+        // In a car or on a bike, by the motion chip or a trustworthy GPS speed.
+        if activeWalk != nil, point.wheels == true
+            || (point.accuracy >= 0 && point.accuracy <= CoverageTracer.maxAccuracy && (point.speed ?? 0) > CoverageTracer.maxSpeed) {
+            rodeSinceLastPoint = true
         }
         let anchor = tracer.anchor
         let step = tracer.add(point)
         guard !step.samples.isEmpty else { return }
+        // Only decided once you're walking on from the new spot, so one bad fix can't
+        // end a walk.
+        if let last = activeWalk?.points.last, let anchor, rode(from: last, to: anchor) {
+            finishAutoWalk()
+            if activeWalk != nil { return }
+        }
         if activeWalk == nil {
             activeWalk = Walk(startedAt: Date(timeIntervalSince1970: anchor?.time ?? point.time), newTilesByPlace: [:], newTileHexesByPlace: [:], addedTilesByPlace: [:], automatic: true)
             activePath = []
@@ -680,6 +694,7 @@ final class AppModel {
         // route, distance and tiles as recording them did.
         if let anchor, walk.points.last != anchor { walk.points.append(anchor) }
         walk.points.append(point)
+        rodeSinceLastPoint = false
         if autoWalkPending {
             walk.distance += step.distance
             if Self.displacement(of: walk.points) >= Self.autoWalkConfirmDistance {
@@ -697,6 +712,23 @@ final class AppModel {
         activeWalk = walk
         saveIfDue()
     }
+
+    /// You've turned up somewhere you can't have walked to from the walk's last spot:
+    /// too far too fast, or the phone saw you riding in between.
+    private func rode(from last: TrackPoint, to start: TrackPoint) -> Bool {
+        let distance = last.coordinate.distance(to: start.coordinate)
+        guard distance > CoverageTracer.maxGap else { return false }
+        let elapsed = start.time - last.time
+        return rodeSinceLastPoint || elapsed <= 0 || distance / elapsed > CoverageTracer.maxSpeed
+    }
+
+    #if DEBUG
+    /// Feeds motion-tagged fixes into always-on tests without Core Motion.
+    func recordAlwaysOnForTesting(_ point: TrackPoint) {
+        guard finishingWalkID == nil else { return }
+        recordAlwaysOn(point)
+    }
+    #endif
 
     /// How far a pending walk has got from where it started, in metres.
     var pendingWalkDistance: Double {
@@ -759,6 +791,7 @@ final class AppModel {
         let fresh = freshTiles
         autoWalkPending = false
         activeWalk = nil
+        rodeSinceLastPoint = false
         activePath = []
         freshTiles = [:]
         addedTiles = [:]
@@ -1402,6 +1435,7 @@ final class AppModel {
         tracker.stop()
         tracker.stopAlwaysOn()
         activeWalk = nil
+        rodeSinceLastPoint = false
         activePath = []
         freshTiles = [:]
         recap = nil
