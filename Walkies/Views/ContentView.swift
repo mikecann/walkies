@@ -15,6 +15,9 @@ struct ContentView: View {
     @State private var stickerDismissed = false
     /// Goes up each time a discovery card closes, to give the Secrets tab a wiggle and a "+1".
     @State private var bookNudge = 0
+    /// The last nudge that played right through. The view's tasks start again when the
+    /// celebration closes, and this stops a nudge that's already played from playing again.
+    @State private var playedNudge = 0
     @State private var bookTilt = 0.0
     @State private var bookPlusOne = false
 
@@ -142,7 +145,7 @@ struct ContentView: View {
     /// three quick wiggles and a "+1" badge. The tab bar draws the icon itself, so the
     /// wiggle is a few tilted copies of the art, one after another.
     private func nudgeBook() async {
-        guard bookNudge > 0 else { return }
+        guard bookNudge > playedNudge else { return }
         do {
             bookPlusOne = true
             if !reduceMotion {
@@ -153,8 +156,9 @@ struct ContentView: View {
             }
             try await Task.sleep(for: .seconds(1.2))
             bookPlusOne = false
+            playedNudge = bookNudge
         } catch {
-            // A newer nudge has taken over.
+            // A newer nudge has taken over, or the celebration came up and this one plays again after.
         }
     }
 
