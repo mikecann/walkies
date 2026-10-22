@@ -21,12 +21,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+/** The map continues this far under the sheet, so it shows through the corners. */
+val TabBarCornerRadius = 22.dp
 
 /**
  * The tabs along the bottom, laid out like Material 3's NavigationBar (an indicator
@@ -36,8 +44,29 @@ import androidx.compose.ui.unit.sp
  */
 @Composable
 fun TabBar(selected: AppTab, rewardWaiting: Boolean, onSelect: (AppTab) -> Unit) {
-    Column(Modifier.fillMaxWidth().background(Walkies.cream).navigationBarsPadding()) {
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Walkies.ink.copy(alpha = 0.1f)))
+    val sheet = RoundedCornerShape(topStart = TabBarCornerRadius, topEnd = TabBarCornerRadius)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            // The other pages end above the bar; keep the map beneath them covered.
+            .then(if (selected != AppTab.Map) Modifier.background(Walkies.cream) else Modifier)
+            .softShadow(sheet, 12.dp, (-3).dp, 0.24f, Walkies.cream)
+            .background(Walkies.cream, sheet)
+            .drawWithCache {
+                val radius = TabBarCornerRadius.toPx()
+                val stroke = 2.dp.toPx()
+                val inset = stroke / 2
+                val rim = Path().apply {
+                    arcTo(Rect(inset, inset, radius * 2 - inset, radius * 2 - inset), 180f, 90f, true)
+                    lineTo(size.width - radius, inset)
+                    arcTo(Rect(size.width - radius * 2 + inset, inset, size.width - inset, radius * 2 - inset), 270f, 90f, false)
+                }
+                onDrawBehind { drawPath(rim, Color.White, style = Stroke(stroke)) }
+            }
+            .navigationBarsPadding()
+            // Keep the row exactly where it was when the divider occupied this space.
+            .padding(top = 1.dp),
+    ) {
         Row(
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
