@@ -156,7 +156,9 @@ final class MapHandle {
     @ObservationIgnored weak var map: MKMapView?
     /// True while the map is being dragged, pinched or flown somewhere, so the
     /// clouds redraw every frame and keep up with it.
-    var moving = false
+    var moving = false {
+        didSet { if moving != oldValue { cameraChanged?() } }
+    }
     /// Projected by the Canvas for the equipped decorative trail.
     @ObservationIgnored var route: [MKMapPoint] = []
     /// True while your finger's moving the map, for the colour-coded honeycomb.
@@ -164,20 +166,40 @@ final class MapHandle {
         didSet { if dragging != oldValue { draggingChangedAt = .now } }
     }
     @ObservationIgnored var draggingChangedAt = Date.distantPast
+    /// Set by the `-perfRun` harness while it moves the camera itself, standing in for
+    /// a finger on the map. Always false otherwise.
+    var simulatedGesture = false {
+        didSet { if simulatedGesture != oldValue { draggingChangedAt = .now } }
+    }
+
+    // The harness's flag first, so while it's on, `moving` flipping every frame as it
+    // sets the camera doesn't redraw SwiftUI views that only read these.
+    var isMoving: Bool { simulatedGesture || moving }
+    var isDragging: Bool { simulatedGesture || dragging }
+
+    /// Counts every change of the map's camera, for the baked clouds to follow it in
+    /// step with MapKit rather than a frame behind.
+    @ObservationIgnored private(set) var cameraVersion = 0
+    @ObservationIgnored var cameraChanged: (() -> Void)?
+
+    /// From the map's delegate, every frame the visible region changes.
+    func cameraDidChange() {
+        cameraVersion &+= 1
+        cameraChanged?()
+    }
 
     /// How much of the honeycomb to show: fades in as you drag and out after.
     func honeycomb(at date: Date) -> Double {
         // `-alwaysHoneycomb YES` keeps it showing, for checking it in the simulator.
         if UserDefaults.standard.bool(forKey: "alwaysHoneycomb") { return 1 }
         let since = date.timeIntervalSince(draggingChangedAt)
-        return dragging ? min(1, since / 0.15) : max(0, 1 - since / 0.6)
+        return isDragging ? min(1, since / 0.15) : max(0, 1 - since / 0.6)
     }
 }
 
-/// The clouds, drawn on top of the map about 30 times a second so they can drift
-/// and breathe, and every frame while the map moves. They follow the map by asking
-/// it where the ground is on screen. Your position is drawn on top, since MapKit's
-/// own dot would be hidden under them.
+/// The clouds over the map, and your position on top of them, since MapKit's own dot
+/// would be hidden under them. Baked into a picture that Core Animation warps to
+/// follow the map (`BakedCloudLayer`), unless launched with `-cloudRenderer live`.
 struct CloudLayer: View {
     let field: CloudField
     /// Changes whenever the field does, to spot tiles that have just cleared.
@@ -186,6 +208,30 @@ struct CloudLayer: View {
     /// Tiles uncovered on this walk, for the honeycomb.
     var walkTiles: Set<CloudField.Tile> = []
 
+    static let revealTime = 1.6
+
+    var body: some View {
+        switch CloudRenderer.current {
+        case .baked:
+            BakedCloudLayer(field: field, key: key, handle: handle, walkTiles: walkTiles)
+        case .live:
+            LiveCloudLayer(field: field, key: key, handle: handle, walkTiles: walkTiles)
+        }
+    }
+}
+
+/// The clouds drawn on top of the map about 30 times a second so they can drift and
+/// breathe, and every frame while the map moves. They follow the map by asking it
+/// where the ground is on screen.
+struct LiveCloudLayer: View {
+    let field: CloudField
+    let key: String
+    let handle: MapHandle
+    var walkTiles: Set<CloudField.Tile> = []
+    /// The spyglass's ring and where you are. Off when this stands in for the baked
+    /// clouds for a moment, which draw those themselves.
+    var overlays = true
+
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var shown: (key: String, field: CloudField)?
@@ -193,16 +239,14 @@ struct CloudLayer: View {
     @State private var leaving: [CloudField.Puff] = []
     @State private var changedAt = Date.distantPast
 
-    static let revealTime = 1.6
-
     var body: some View {
         ZStack {
-            TimelineView(.animation(minimumInterval: handle.moving ? nil : 1.0 / 30)) { timeline in
+            TimelineView(.animation(minimumInterval: handle.isMoving ? nil : 1.0 / 30)) { timeline in
                 Canvas { context, size in
                     guard let map = handle.map, size.width > 0 else { return }
                     let now = timeline.date
                     let clock = reduceMotion ? 0 : now.timeIntervalSinceReferenceDate
-                    let reveal = min(1, now.timeIntervalSince(changedAt) / Self.revealTime)
+                    let reveal = min(1, now.timeIntervalSince(changedAt) / CloudLayer.revealTime)
                     let projection = Projection(map: map)
                     let bounds = CGRect(origin: .zero, size: size)
                     CosmeticTrail(points: handle.route, style: model.equipped[.trail], projection: projection, bounds: bounds, clock: clock)
@@ -216,7 +260,7 @@ struct CloudLayer: View {
                 }
             }
             .drawingGroup()
-            TimelineView(.animation(minimumInterval: handle.moving ? nil : 1.0 / 30)) { timeline in
+            TimelineView(.animation(minimumInterval: handle.isMoving ? nil : 1.0 / 30)) { timeline in
                 Canvas { context, size in
                     guard let map = handle.map, size.width > 0 else { return }
                     let now = timeline.date
@@ -224,9 +268,10 @@ struct CloudLayer: View {
                     let projection = Projection(map: map)
                     let honeycomb = handle.honeycomb(at: now)
                     if honeycomb > 0 {
-                        Honeycomb(field: field, walkTiles: walkTiles, projection: projection, bounds: CGRect(origin: .zero, size: size))
+                        HoneycombScene(field: field, walkTiles: walkTiles, projection: projection, bounds: CGRect(origin: .zero, size: size))
                             .draw(in: &context, opacity: honeycomb)
                     }
+                    guard overlays else { return }
                     // Read inside the timeline so a ring expires even while the map is idle.
                     if let ring = model.activeSpyglassRing {
                         SpyglassRing(ring: ring, projection: projection).draw(in: &context)
@@ -249,188 +294,6 @@ struct CloudLayer: View {
                 leaving = []
             }
             shown = (key, field)
-        }
-    }
-}
-
-/// Turns map points into screen points. The ground is flat, so wherever the camera
-/// is, flat or tilted, one perspective transform (a homography) maps it onto the
-/// screen. It's measured each frame from four spots spread across the screen: far
-/// enough apart that MapKit's rounding doesn't make the clouds wobble when you're
-/// zoomed out.
-private struct Projection {
-    let map: MKMapView
-    /// Ground to screen, h33 = 1. Ground is in map points relative to `origin`, over `unit`.
-    private let h: [Double]?
-    private let origin: MKMapPoint
-    private let unit: Double
-    private let width: Double
-
-    init(map: MKMapView) {
-        self.map = map
-        let size = map.bounds.size
-        let width = max(1, Double(size.width))
-        let screen = [(0.1, 0.4), (0.9, 0.4), (0.9, 0.95), (0.1, 0.95)].map {
-            CGPoint(x: $0.0 * size.width, y: $0.1 * size.height)
-        }
-        let coordinates = screen.map { map.convert($0, toCoordinateFrom: map) }
-        let ground = coordinates.map(MKMapPoint.init)
-        let origin = ground[0]
-        let unit = max(1, hypot(ground[2].x - origin.x, ground[2].y - origin.y))
-        self.width = width
-        self.origin = origin
-        self.unit = unit
-        if coordinates.allSatisfy(CLLocationCoordinate2DIsValid) {
-            h = Self.solve(
-                ground: ground.map { (($0.x - origin.x) / unit, ($0.y - origin.y) / unit) },
-                screen: screen.map { (Double($0.x) / width, Double($0.y) / width) }
-            )
-        } else {
-            h = nil
-        }
-    }
-
-    /// How close to the camera's own plane the ground can come before it's treated
-    /// as behind the camera. 1 is the ground at the 10%, 40% spot on screen.
-    private static let near = 0.02
-
-    /// Screen position before dividing by depth (z), which is about 1 everywhere on a
-    /// flat map and shrinks towards 0 as the ground nears the camera when tilted.
-    private func homogeneous(_ p: MKMapPoint) -> SIMD3<Double> {
-        guard let h else {
-            let s = map.convert(p.coordinate, toPointTo: map)
-            return SIMD3(Double(s.x) / width, Double(s.y) / width, 1)
-        }
-        let x = (p.x - origin.x) / unit, y = (p.y - origin.y) / unit
-        return SIMD3(h[0] * x + h[1] * y + h[2], h[3] * x + h[4] * y + h[5], h[6] * x + h[7] * y + 1)
-    }
-
-    private func screen(_ v: SIMD3<Double>) -> CGPoint {
-        let z = max(v.z, Self.near)
-        return CGPoint(x: v.x / z * width, y: v.y / z * width)
-    }
-
-    func point(_ p: MKMapPoint) -> CGPoint {
-        screen(homogeneous(p))
-    }
-
-    func isInFront(_ p: MKMapPoint) -> Bool {
-        homogeneous(p).z >= Self.near
-    }
-
-    /// A closed outline on screen, with any part behind the camera cut off.
-    func polygon(_ points: [MKMapPoint]) -> [CGPoint] {
-        let v = points.map(homogeneous)
-        var out: [CGPoint] = []
-        for i in v.indices {
-            let previous = v[(i + v.count - 1) % v.count], current = v[i]
-            let inFront = current.z >= Self.near, wasInFront = previous.z >= Self.near
-            if inFront != wasInFront { out.append(screen(crossing(previous, current))) }
-            if inFront { out.append(screen(current)) }
-        }
-        return out
-    }
-
-    /// One straight line on screen, cut where it passes behind the camera, or nil if
-    /// it's wholly behind. Allocates nothing, since the grid and streets call it tens of
-    /// thousands of times a frame.
-    func segment(_ a: MKMapPoint, _ b: MKMapPoint) -> (CGPoint, CGPoint)? {
-        var ha = homogeneous(a), hb = homogeneous(b)
-        let aIn = ha.z >= Self.near, bIn = hb.z >= Self.near
-        guard aIn || bIn else { return nil }
-        if !aIn { ha = crossing(ha, hb) }
-        if !bIn { hb = crossing(ha, hb) }
-        return (screen(ha), screen(hb))
-    }
-
-    private func crossing(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> SIMD3<Double> {
-        a + (b - a) * ((Self.near - a.z) / (b.z - a.z))
-    }
-
-    /// Screen points per map point in the middle of the screen, to decide what's
-    /// worth drawing at this zoom and how big a cloud right by the camera may get.
-    var centreScale: Double {
-        let c = MKMapPoint(map.centerCoordinate)
-        return ellipse(centre: c, radius: 1000).width / 2000
-    }
-
-    /// A circle on the ground as it looks on screen: squashed when the map is tilted.
-    /// Null if it's behind the camera.
-    func ellipse(centre: MKMapPoint, radius: Double) -> CGRect {
-        guard isInFront(centre) else { return .null }
-        let c = point(centre)
-        let east = point(MKMapPoint(x: centre.x + radius, y: centre.y))
-        let south = point(MKMapPoint(x: centre.x, y: centre.y + radius))
-        let rx = hypot(east.x - c.x, east.y - c.y)
-        let ry = hypot(south.x - c.x, south.y - c.y)
-        return CGRect(x: c.x - rx, y: c.y - ry, width: rx * 2, height: ry * 2)
-    }
-
-    /// The eight unknowns of the homography taking four ground points to four screen
-    /// points, by Gaussian elimination.
-    private static func solve(ground: [(Double, Double)], screen: [(Double, Double)]) -> [Double]? {
-        var m: [[Double]] = []
-        for ((x, y), (u, v)) in zip(ground, screen) {
-            m.append([x, y, 1, 0, 0, 0, -x * u, -y * u, u])
-            m.append([0, 0, 0, x, y, 1, -x * v, -y * v, v])
-        }
-        for col in 0..<8 {
-            guard let pivot = (col..<8).max(by: { abs(m[$0][col]) < abs(m[$1][col]) }), abs(m[pivot][col]) > 1e-12 else { return nil }
-            m.swapAt(col, pivot)
-            for row in 0..<8 where row != col {
-                let f = m[row][col] / m[col][col]
-                guard f != 0 else { continue }
-                for k in col...8 { m[row][k] -= f * m[col][k] }
-            }
-        }
-        return (0..<8).map { m[$0][8] / m[$0][$0] }
-    }
-}
-
-/// The colour-coded tiles that show while you drag the map: green where you've
-/// walked, orange where you walked this time, white outlines still to walk, and grey
-/// where there's no street or path (those clear when you walk beside them).
-private struct Honeycomb {
-    let field: CloudField
-    let walkTiles: Set<CloudField.Tile>
-    let projection: Projection
-    let bounds: CGRect
-
-    static let green = Color(red: 0.36, green: 0.72, blue: 0.4)
-    static let grey = Color(red: 0.35, green: 0.37, blue: 0.42)
-
-    func draw(in context: inout GraphicsContext, opacity: Double) {
-        let near = bounds.insetBy(dx: -60, dy: -60)
-        var paths: [Int: Path] = [:]
-        for outline in field.outlines {
-            let c = projection.point(outline.centre)
-            guard near.contains(c), projection.isInFront(outline.centre) else { continue }
-            let kind = walkTiles.contains(outline.tile) ? 4 : Self.index(outline.kind)
-            var path = paths[kind] ?? Path()
-            path.addLines(outline.corners.map(projection.point))
-            path.closeSubpath()
-            paths[kind] = path
-        }
-        let styles: [(fill: Color, fillAlpha: Double, stroke: Color, strokeAlpha: Double)] = [
-            (Self.green, 0.3, Self.green, 0.9),  // visited
-            (Self.green, 0.12, Self.green, 0.45),  // cleared
-            (.white, 0.06, .white, 0.85),  // open
-            (Self.grey, 0.35, Self.grey, 0.5),  // blocked
-            (.walkiesOrange, 0.35, .walkiesOrange, 1),  // this walk
-        ]
-        for (kind, path) in paths.sorted(by: { $0.key < $1.key }) {
-            let style = styles[kind]
-            context.fill(path, with: .color(style.fill.opacity(style.fillAlpha * opacity)))
-            context.stroke(path, with: .color(style.stroke.opacity(style.strokeAlpha * opacity)), lineWidth: 1.2)
-        }
-    }
-
-    private static func index(_ kind: CloudField.Outline.Kind) -> Int {
-        switch kind {
-        case .visited: 0
-        case .cleared: 1
-        case .open: 2
-        case .blocked: 3
         }
     }
 }
@@ -482,7 +345,7 @@ private struct YouAreHere {
 
 /// Decorative routes share the cloud projection, keeping stamps a fixed size on
 /// screen and allowing the existing 30 Hz timeline to twinkle the sparkles.
-private struct CosmeticTrail {
+struct CosmeticTrail {
     let points: [MKMapPoint]
     let style: String
     let projection: Projection
@@ -564,7 +427,7 @@ private struct CosmeticTrail {
     }
 }
 
-private struct SpyglassRing {
+struct SpyglassRing {
     let ring: Progression.Ring
     let projection: Projection
 
@@ -602,51 +465,30 @@ private struct SpyglassRing {
 }
 
 private struct CloudPainter {
-    let field: CloudField
-    let leaving: [CloudField.Puff]
-    /// 0 to 1 through the latest tiles clearing.
-    let reveal: Double
-    let fresh: Set<CloudField.Tile>
-    let projection: Projection
-    let bounds: CGRect
-    let clock: Double
+    let scene: CloudScene
     let theme: String
 
+    init(field: CloudField, leaving: [CloudField.Puff], reveal: Double, fresh: Set<CloudField.Tile>, projection: Projection, bounds: CGRect, clock: Double, theme: String) {
+        scene = CloudScene(field: field, leaving: leaving, reveal: reveal, fresh: fresh, projection: projection, bounds: bounds, clock: clock)
+        self.theme = theme
+    }
+
     func draw(in context: inout GraphicsContext) {
+        guard !scene.isEmpty else { return }
         let sprites = CloudSprites.sprites(for: theme)
-        let visible = bounds.insetBy(dx: -bounds.width * 0.2, dy: -bounds.height * 0.2)
-        let ease = 1 - pow(1 - reveal, 3)
-
-        // Where each cloud is this frame: bobbing gently around its tile and swelling a touch.
-        var placed: [(puff: CloudField.Puff, rect: CGRect, top: CGRect, fade: Double)] = []
-        for puff in field.puffs {
-            let base = capped(projection.ellipse(centre: puff.centre, radius: puff.radius), radius: puff.radius)
-            guard base.intersects(visible) else { continue }
-            placed.append((puff, drift(base, puff.phase), drift(base, puff.phase + 0.7), 1))
-        }
-        for puff in leaving {
-            let radius = puff.radius * (1 + 0.5 * ease)
-            let base = capped(projection.ellipse(centre: puff.centre, radius: radius), radius: radius)
-            guard base.intersects(visible) else { continue }
-            placed.append((puff, drift(base, puff.phase), drift(base, puff.phase + 0.7), 1 - ease))
-        }
-        guard !placed.isEmpty else { return }
-
-        // Zoomed out, a puff is only a few points across and its shadow and underside
-        // barely show, so they fade away and only the tops are drawn.
-        let detail = min(1, max(0, (puffSize - Self.simplePuff) / Self.simplePuff))
         let tops = sprites.tops.map { context.resolve(Image(decorative: $0, scale: 1)) }
         let eraser = context.resolve(Image(decorative: sprites.eraser, scale: 1))
+        let detail = scene.detail
 
         // Shadows on the ground, with the sun to the north-west. Straight onto the
         // map rather than through a layer of their own: a layer costs a whole extra
         // screen of drawing every frame, which the phone feels when zoomed in.
         if detail > 0 {
             let shadows = sprites.shadows.map { context.resolve(Image(decorative: $0, scale: 1)) }
-            for p in placed {
+            for p in scene.placed {
                 context.opacity = 0.35 * p.fade * detail
                 let r = p.rect
-                context.draw(shadows[p.puff.variant], in: r.offsetBy(dx: r.width * 0.15, dy: r.height * 0.18))
+                context.draw(shadows[p.variant], in: r.offsetBy(dx: r.width * 0.15, dy: r.height * 0.18))
             }
             context.opacity = 1
         }
@@ -656,134 +498,40 @@ private struct CloudPainter {
             // blanket is one continuous white and the grey only shows round its edges.
             if detail > 0 {
                 let bases = sprites.bases.map { layer.resolve(Image(decorative: $0, scale: 1)) }
-                for p in placed {
+                for p in scene.placed {
                     layer.opacity = p.fade * detail
-                    layer.draw(bases[p.puff.variant], in: p.rect)
+                    layer.draw(bases[p.variant], in: p.rect)
                 }
             }
-            for p in placed {
+            for p in scene.placed {
                 layer.opacity = p.fade
-                layer.draw(tops[p.puff.variant], in: p.top)
+                layer.draw(tops[p.variant], in: p.top)
             }
             layer.opacity = 1
-            drawGrid(in: &layer)
-            drawRoads(in: &layer)
+            if let grid = scene.grid {
+                layer.stroke(
+                    grid,
+                    with: .color(CloudScene.gridColour.color(0.5 * scene.gridFade)),
+                    style: StrokeStyle(lineWidth: 1.2, lineCap: .round, dash: [3, 4])
+                )
+            }
+            if let clip = scene.roadClip {
+                layer.clip(to: clip)
+                for road in scene.roads {
+                    let style = CloudScene.roadStyle(road.kind)
+                    layer.stroke(
+                        road.path,
+                        with: .color(CloudScene.roadColour.color(style.alpha)),
+                        style: StrokeStyle(lineWidth: style.width, lineCap: .round, dash: style.dash)
+                    )
+                }
+            }
 
             // Soft holes over walked tiles. New ones open up rather than just appearing.
             layer.blendMode = .destinationOut
-            for clearing in field.clearings {
-                let grow = fresh.contains(clearing.tile) ? 0.3 + 0.7 * ease : 1
-                let rect = capped(projection.ellipse(centre: clearing.centre, radius: clearing.radius * grow), radius: clearing.radius * grow)
-                guard rect.intersects(visible) else { continue }
+            for rect in scene.erasers {
                 layer.draw(eraser, in: rect)
             }
-        }
-    }
-
-    private func drift(_ rect: CGRect, _ phase: Double) -> CGRect {
-        let dx = sin(clock * 0.23 + phase) * 0.07 * rect.width
-        let dy = cos(clock * 0.19 + phase * 1.7) * 0.06 * rect.height
-        let swell = 1 + 0.05 * sin(clock * 0.31 + phase * 2.3)
-        return rect.offsetBy(dx: dx, dy: dy).insetBy(dx: rect.width * (1 - swell) / 2, dy: rect.height * (1 - swell) / 2)
-    }
-
-    /// Screen points per map point mid-screen, worked out once a frame.
-    private let centreScale: Double
-
-    init(field: CloudField, leaving: [CloudField.Puff], reveal: Double, fresh: Set<CloudField.Tile>, projection: Projection, bounds: CGRect, clock: Double, theme: String) {
-        self.field = field
-        self.leaving = leaving
-        self.reveal = reveal
-        self.fresh = fresh
-        self.projection = projection
-        self.bounds = bounds
-        self.clock = clock
-        self.theme = theme
-        centreScale = projection.centreScale
-    }
-
-    /// Clouds right by a tilted camera would balloon to fill the screen, so none get
-    /// more than twice the size they'd be mid-screen.
-    private func capped(_ rect: CGRect, radius: Double) -> CGRect {
-        guard !rect.isNull else { return rect }
-        let limit = radius * 2 * centreScale * 2
-        let biggest = max(rect.width, rect.height)
-        guard limit > 0, biggest > limit else { return rect }
-        let f = limit / biggest
-        return CGRect(x: rect.midX - rect.width * f / 2, y: rect.midY - rect.height * f / 2, width: rect.width * f, height: rect.height * f)
-    }
-
-    /// Below this many points across, a puff is drawn as just its top. Its shadow
-    /// and underside fade in up to twice this.
-    private static let simplePuff = 8.0
-
-    /// How many points across a typical puff is mid-screen.
-    private var puffSize: Double {
-        ((field.puffs.first ?? leaving.first)?.radius ?? 0) * 2 * centreScale
-    }
-
-    /// Screen points per map point mid-screen, to decide what's worth drawing at this zoom.
-    private var scale: Double? {
-        field.puffs.isEmpty ? nil : centreScale
-    }
-
-    /// A faint dashed honeycomb over the clouds, fading in as you zoom closer.
-    private func drawGrid(in context: inout GraphicsContext) {
-        guard let scale, scale > 0.15, !field.gridEdges.isEmpty else { return }
-        var path = Path()
-        var i = 0
-        let near = bounds.insetBy(dx: -40, dy: -40)
-        while i < field.gridEdges.count {
-            if let (a, b) = projection.segment(field.gridEdges[i], field.gridEdges[i + 1]), near.contains(a) || near.contains(b) {
-                path.move(to: a)
-                path.addLine(to: b)
-            }
-            i += 2
-        }
-        let fade = min(1, (scale - 0.15) / 0.2)
-        context.stroke(
-            path,
-            with: .color(Color(red: 0.42, green: 0.5, blue: 0.62).opacity(0.5 * fade)),
-            style: StrokeStyle(lineWidth: 1.2, lineCap: .round, dash: [3, 4])
-        )
-    }
-
-    /// The hidden streets as light dashed lines, inside the place only.
-    private func drawRoads(in context: inout GraphicsContext) {
-        guard let scale, scale > 0.05 else { return }
-
-        var clip = Path()
-        for ring in field.outline {
-            clip.addLines(projection.polygon(ring))
-            clip.closeSubpath()
-        }
-        context.clip(to: clip)
-
-        // Only the bits on screen. Zoomed in, every street in every place adds up to
-        // hundreds of thousands of points of dashed line, which is slow to dash.
-        let onScreen = bounds.insetBy(dx: -20, dy: -20)
-        for kind in [RoadLine.Kind.road, .path] where kind == .road || scale > 0.12 {
-            var path = Path()
-            for line in field.lines where line.kind == kind {
-                var drawing = false
-                for j in line.points.indices.dropFirst() {
-                    guard let (a, b) = projection.segment(line.points[j - 1], line.points[j]) else {
-                        drawing = false
-                        continue
-                    }
-                    let visible = onScreen.intersects(CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y)))
-                    if visible {
-                        if !drawing { path.move(to: a) }
-                        path.addLine(to: b)
-                    }
-                    drawing = visible
-                }
-            }
-            context.stroke(
-                path,
-                with: .color(Color(red: 0.36, green: 0.45, blue: 0.6).opacity(kind == .road ? 0.6 : 0.45)),
-                style: StrokeStyle(lineWidth: kind == .road ? 1.8 : 1.4, lineCap: .round, dash: kind == .road ? [6, 5] : [3, 4])
-            )
         }
     }
 }

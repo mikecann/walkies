@@ -178,6 +178,14 @@ struct ContentView: View {
             JoinTeamView(initialCode: model.pendingTeamInvite ?? "")
         }
         .task { await account.refreshProfile() }
+        .task {
+            // `-perfRun`: fly the map about and print how smoothly it drew.
+            if PerfRun.requested { await PerfRun(handle: mapHandle, model: model).run() }
+        }
+        .overlay(alignment: .bottomLeading) {
+            // Just above the Maps logo, clear of the chips and buttons.
+            if PerfOverlay.requested { PerfOverlay().padding(.leading, 10).padding(.bottom, 32) }
+        }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             while !Task.isCancelled {

@@ -352,6 +352,7 @@ struct FogMapView: UIViewRepresentable {
         }
 
         func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
+            handle?.cameraDidChange()
             placeNeighbourLabels(on: mapView)
         }
 

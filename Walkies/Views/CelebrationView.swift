@@ -348,6 +348,10 @@ private struct ReplayMap: UIViewRepresentable {
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             handle?.moving = false
         }
+
+        func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
+            handle?.cameraDidChange()
+        }
     }
 
     private func frame(_ map: MKMapView, animated: Bool) {
