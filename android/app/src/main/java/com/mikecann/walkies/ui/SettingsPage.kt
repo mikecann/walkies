@@ -17,7 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -99,7 +99,7 @@ fun SettingsPage(
         modifier = Modifier
             .fillMaxSize()
             .background(Walkies.cream)
-            .systemBarsPadding()
+            .statusBarsPadding()
             .padding(horizontal = 16.dp),
     ) {
         SheetBar("Settings", leading = null, onLeading = {}, trailing = null, onTrailing = {})
@@ -110,7 +110,7 @@ fun SettingsPage(
         Column(
             verticalArrangement = Arrangement.spacedBy(24.dp),
             // Centred on a tablet, like a grouped Form on an iPad.
-            modifier = Modifier.align(Alignment.CenterHorizontally).widthIn(max = 600.dp).fillMaxWidth().verticalScroll(rememberScrollState()),
+            modifier = Modifier.align(Alignment.CenterHorizontally).widthIn(max = 600.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = LocalTabBarClearance.current + 16.dp),
         ) {
             Section(footer = null, header = "Account") {
                 Labeled("Signed in as", account.signedInAs)

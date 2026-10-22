@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
@@ -42,7 +41,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -256,22 +254,12 @@ fun MapScreen(
     }
 
     Box(Modifier.fillMaxSize()) {
-        // Only the map layers extend under the sheet's corners. The controls keep
-        // their old bounds, and the logo stays above the sheet too.
-        Box(
-            Modifier.fillMaxSize().layout { measurable, constraints ->
-                val overlap = TabBarCornerRadius.roundToPx()
-                val map = measurable.measure(constraints.copy(
-                    minHeight = constraints.minHeight + overlap,
-                    maxHeight = constraints.maxHeight + overlap,
-                ))
-                layout(map.width, map.height - overlap) { map.placeRelative(0, 0) }
-            },
-        ) {
+        // All map layers run to the screen's bottom, beneath the floating pill.
+        Box(Modifier.fillMaxSize()) {
             if (hasToken) {
                 MapboxMap(
                     state, onTap = {}, onReady = { mapReady = true }, modifier = Modifier.fillMaxSize(),
-                    systemBarInset = false, bottomOverlay = TabBarCornerRadius,
+                    systemBarInset = false, bottomClearance = LocalTabBarClearance.current,
                 )
             } else {
                 StandInMap(state, onTap = {}, onReady = { mapReady = true })
@@ -314,9 +302,8 @@ fun MapScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .navigationBarsPadding()
                 // Clear of the Mapbox logo and attribution along the bottom of the map.
-                .padding(start = 16.dp, end = 16.dp, bottom = 32.dp)
+                .padding(start = 16.dp, end = 16.dp, bottom = LocalTabBarClearance.current + 26.dp)
                 .mapButton("bottom", buttonFrames),
         ) {
             if (!hasToken) MissingToken()

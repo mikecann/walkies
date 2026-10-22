@@ -24,42 +24,37 @@ struct ContentView: View {
     var body: some View {
         @Bindable var navigation = navigation
 
-        TabView(selection: $navigation.tab) {
-            Tab(value: AppNavigation.Tab.map) {
-                MapScreen()
-                    .tint(.burnt)
-            } label: {
-                tabLabel("Map", art: "icon-map", tab: .map)
+        GeometryReader { geometry in
+            let bottom = geometry.safeAreaInsets.bottom
+            // On home-indicator phones the pill dips 8 pt into the bottom safe area.
+            let gap = bottom > 0 ? max(12, bottom - 8) : 12
+            // From the bottom of the screen to a little above the raised hex.
+            let clearance = gap + FloatingTabBar.height + 8
+            let room = max(0, clearance - bottom)
+
+            // The system's tab view still swaps the pages, so they appear and disappear
+            // as before (the clouds stop off the map), with its own bar hidden for ours.
+            TabView(selection: $navigation.tab) {
+                tabPage(.map, room: room) { MapScreen(dockRoom: room) }
+                tabPage(.secrets, room: room) { StickerBookView() }
+                tabPage(.progress, room: room) { ProgressPage() }
+                tabPage(.walks, room: room) { NavigationStack { WalkHistoryView() } }
+                tabPage(.settings, room: room) { SettingsView() }
             }
-            Tab(value: AppNavigation.Tab.secrets) {
-                StickerBookView()
-                    .tint(.burnt)
-            } label: {
-                tabLabel("Secrets", art: "icon-book", tab: .secrets, tilt: bookTilt)
-            }
-            .badge(bookPlusOne ? Text("+1") : nil)
-            Tab(value: AppNavigation.Tab.progress) {
-                ProgressPage()
-                    .tint(.burnt)
-            } label: {
-                tabLabel("Progress", art: "progress-shell", tab: .progress)
-            }
-            // The orange badge, like the dot on the shells chip, while a level-up reward waits.
-            .badge(model.pendingPicks.count)
-            Tab(value: AppNavigation.Tab.walks) {
-                NavigationStack { WalkHistoryView() }
-                    .tint(.burnt)
-            } label: {
-                tabLabel("Walks", art: "icon-walk", tab: .walks)
-            }
-            Tab(value: AppNavigation.Tab.settings) {
-                SettingsView()
-                    .tint(.burnt)
-            } label: {
-                tabLabel("Settings", art: "icon-gear", tab: .settings)
+            .overlay(alignment: .bottom) {
+                FloatingTabBar(
+                    selection: $navigation.tab,
+                    rewards: model.pendingPicks.count,
+                    bookTilt: bookTilt,
+                    bookPlusOne: bookPlusOne
+                )
+                .padding(.horizontal, 12)
+                // Position from the measured screen safe area, including on iOS 18.
+                .offset(y: bottom - gap)
             }
         }
-        .tint(.walkiesOrange)
+        // The keyboard covers the dock instead of lifting it into the page.
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .environment(navigation)
         .alert("Team membership changed", isPresented: Binding(get: { model.teamNotice != nil }, set: { if !$0 { model.teamNotice = nil } })) {
             Button("OK") { model.teamNotice = nil }
@@ -129,13 +124,16 @@ struct ContentView: View {
         }
     }
 
-    private func tabLabel(_ title: String, art: String, tab: AppNavigation.Tab, tilt: Double = 0) -> some View {
-        Label {
-            Text(title)
-        } icon: {
-            Image(uiImage: TabArt.icon(art, selected: navigation.tab == tab, tilt: tilt))
-                .renderingMode(.original)
-        }
+    /// A page with `room` at the bottom for the dock: scrolling content runs underneath
+    /// it but can come up clear of the pill and the raised hex. The map ignores it.
+    private func tabPage<Content: View>(_ tab: AppNavigation.Tab, room: CGFloat, @ViewBuilder content: () -> Content) -> some View {
+        content()
+            .tint(.burnt)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                Color.clear.frame(height: room).allowsHitTesting(false)
+            }
+            .toolbarVisibility(.hidden, for: .tabBar)
+            .tag(tab)
     }
 
     private var sheetOpen: Bool {
@@ -143,8 +141,7 @@ struct ContentView: View {
     }
 
     /// A receipt at the book once a discovery card has closed, so you know where it went:
-    /// three quick wiggles and a "+1" badge. The tab bar draws the icon itself, so the
-    /// wiggle is a few tilted copies of the art, one after another.
+    /// three quick wiggles of the image and a "+1" badge.
     private func nudgeBook() async {
         guard bookNudge > playedNudge else { return }
         do {
@@ -182,100 +179,10 @@ struct ContentView: View {
     }
 }
 
-/// The app's own art for the tab bar, in colour rather than as a silhouette, shrunk to
-/// tab size. The tabs you're not on are faded, and the selected one's title goes orange.
-enum TabArt {
-    private static var cache: [String: UIImage] = [:]
-
-    /// `tilt` turns the art that many degrees about its middle, for the Secrets tab's wiggle.
-    static func icon(_ name: String, selected: Bool, tilt: Double = 0) -> UIImage {
-        let key = "\(name)-\(selected)-\(Int(tilt.rounded()))"
-        if let cached = cache[key] { return cached }
-        guard let art = UIImage(named: name) else { return UIImage() }
-        let size = CGSize(width: 28, height: 28)
-        let fit = min(size.width / art.size.width, size.height / art.size.height)
-        let drawn = CGSize(width: art.size.width * fit, height: art.size.height * fit)
-        let image = UIGraphicsImageRenderer(size: size).image { context in
-            context.cgContext.translateBy(x: size.width / 2, y: size.height / 2)
-            context.cgContext.rotate(by: tilt.rounded() * .pi / 180)
-            context.cgContext.translateBy(x: -size.width / 2, y: -size.height / 2)
-            art.draw(
-                in: CGRect(x: (size.width - drawn.width) / 2, y: (size.height - drawn.height) / 2, width: drawn.width, height: drawn.height),
-                blendMode: .normal, alpha: selected ? 1 : 0.55
-            )
-        }.withRenderingMode(.alwaysOriginal)
-        cache[key] = image
-        return image
-    }
-
-    /// A cream sheet with the same white edge and soft shadow as the map's stickers.
-    private static func sheetImages() -> (background: UIImage, shadow: UIImage) {
-        let radius: CGFloat = 22
-        let shadowHeight: CGFloat = 24
-        let width: CGFloat = 128
-        let fixedTop = radius + 2
-        let image = UIGraphicsImageRenderer(size: CGSize(width: width, height: shadowHeight + fixedTop + 1)).image { context in
-            // The bottom runs beyond the image, so only the top edge casts a shadow.
-            let sheet = UIBezierPath(
-                roundedRect: CGRect(x: 0, y: shadowHeight, width: width, height: 100),
-                byRoundingCorners: [.topLeft, .topRight],
-                cornerRadii: CGSize(width: radius, height: radius)
-            )
-            context.cgContext.saveGState()
-            context.cgContext.setShadow(offset: CGSize(width: 0, height: -3), blur: 12, color: UIColor.black.withAlphaComponent(0.24).cgColor)
-            UIColor(Color.cream).setFill()
-            sheet.fill()
-            context.cgContext.restoreGState()
-
-            // Only the top edge has a rim, with its stroke kept inside the sheet.
-            let rim = UIBezierPath()
-            rim.addArc(withCenter: CGPoint(x: radius, y: shadowHeight + radius), radius: radius - 1, startAngle: .pi, endAngle: .pi * 1.5, clockwise: true)
-            rim.addLine(to: CGPoint(x: width - radius, y: shadowHeight + 1))
-            rim.addArc(withCenter: CGPoint(x: width - radius, y: shadowHeight + radius), radius: radius - 1, startAngle: .pi * 1.5, endAngle: 0, clockwise: true)
-            rim.lineWidth = 2
-            UIColor.white.setStroke()
-            rim.stroke()
-        }
-
-        // UIKit puts the shadow above the bar. Splitting the drawing there keeps
-        // the bar's height and safe area unchanged, including on home-button phones.
-        func slice(y: CGFloat, height: CGFloat, top: CGFloat) -> UIImage {
-            UIGraphicsImageRenderer(size: CGSize(width: width, height: height)).image { _ in
-                image.draw(at: CGPoint(x: 0, y: -y))
-            }
-            .resizableImage(withCapInsets: UIEdgeInsets(top: top, left: radius + shadowHeight, bottom: 0, right: radius + shadowHeight), resizingMode: .stretch)
-            .withRenderingMode(.alwaysOriginal)
-        }
-        return (
-            // Leave a plain cream row below the rim's ends for vertical stretching.
-            slice(y: shadowHeight, height: fixedTop + 1, top: fixedTop),
-            slice(y: 0, height: shadowHeight, top: shadowHeight - 1)
-        )
-    }
-
-    /// The tab bar in cream, with the reward badge in the app's orange.
-    static func styleTabBar() {
-        let appearance = UITabBarAppearance()
-        appearance.configureWithTransparentBackground()
-        let sheet = sheetImages()
-        appearance.backgroundImage = sheet.background
-        appearance.backgroundImageContentMode = .scaleToFill
-        appearance.shadowColor = .clear
-        appearance.shadowImage = sheet.shadow
-        for layout in [appearance.stackedLayoutAppearance, appearance.inlineLayoutAppearance, appearance.compactInlineLayoutAppearance] {
-            layout.normal.titleTextAttributes = [.foregroundColor: UIColor(Color.ink.opacity(0.6))]
-            layout.selected.titleTextAttributes = [.foregroundColor: UIColor.walkiesOrange]
-            layout.normal.badgeBackgroundColor = .walkiesOrange
-            layout.selected.badgeBackgroundColor = .walkiesOrange
-        }
-        UITabBar.appearance().standardAppearance = appearance
-        UITabBar.appearance().scrollEdgeAppearance = appearance
-    }
-}
-
 /// The map with the clouds over it, the chips top left, and the walk controls along
 /// the bottom, above the tab bar.
 struct MapScreen: View {
+    let dockRoom: CGFloat
     @Environment(AppModel.self) private var model
     @Environment(AppNavigation.self) private var navigation
     @Environment(\.scenePhase) private var scenePhase
@@ -304,7 +211,8 @@ struct MapScreen: View {
             onSelectSticker: { navigation.openSecret = LoreLibrary.entry(id: $0) },
             neighbours: addingStatus == nil ? model.neighbours : [],
             onPickNeighbour: { pickedNeighbour = $0 },
-            buttons: Array(buttonFrames.values)
+            buttons: Array(buttonFrames.values),
+            dockRoom: dockRoom
         )
         .overlay {
             CloudLayer(field: model.cloudField, key: model.cloudKey, handle: mapHandle, walkTiles: walkTiles)
@@ -315,8 +223,8 @@ struct MapScreen: View {
                 .frame(height: 100)
                 .allowsHitTesting(false)
         }
-        // Edge to edge, under the status bar and the tab bar (which floats over it on
-        // newer iOS). MapKit keeps its legal link inside the safe area, above the tabs.
+        // Edge to edge beneath the floating dock. MapKit's margins keep its legal
+        // link above the raised hex, even though the map fills the screen.
         .ignoresSafeArea()
         .safeAreaInset(edge: .top) {
             HStack(alignment: .top) {

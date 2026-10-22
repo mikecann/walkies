@@ -122,6 +122,9 @@ struct FogMapView: UIViewRepresentable {
     var onPickNeighbour: (PlaceResult) -> Void = { _ in }
     /// The app's buttons over the map, in window coordinates.
     var buttons: [CGRect] = []
+    /// Room for the floating dock and its raised hex above the bottom safe area.
+    /// MapKit adds its layout margins to the safe area when placing its legal link.
+    var dockRoom: CGFloat = 0
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -136,6 +139,7 @@ struct FogMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
+        map.layoutMargins.bottom = dockRoom
         context.coordinator.handle = handle
         context.coordinator.update(map, with: self)
     }

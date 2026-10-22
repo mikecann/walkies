@@ -17,7 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -78,7 +78,7 @@ private fun Page(back: String?, title: String, onBack: () -> Unit, content: @Com
         modifier = Modifier
             .fillMaxSize()
             .background(Walkies.cream)
-            .systemBarsPadding(),
+            .statusBarsPadding(),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)) {
             Box(Modifier.weight(1f)) {
@@ -128,7 +128,7 @@ fun WalkHistoryScreen(model: AppModel, stepsToday: Int?, onRefreshSteps: () -> U
     Page(null, "Past walks", onBack = {}) {
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(20.dp),
-            contentPadding = PaddingValues(16.dp),
+            contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp + LocalTabBarClearance.current),
             modifier = Modifier.fillMaxSize(),
         ) {
             item(key = "totals") {
@@ -298,7 +298,7 @@ fun WalkDetailScreen(model: AppModel, walkId: UUID, onWatch: (Walk) -> Unit, onO
     Page("Past walks", "Your walk", onBack) {
         Column(
             verticalArrangement = Arrangement.spacedBy(20.dp),
-            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp + LocalTabBarClearance.current),
         ) {
             if (walk.points.isEmpty()) {
                 Box(

@@ -145,7 +145,7 @@ fun ProgressPage(model: AppModel, section: ProgressSection, onSection: (Progress
             key(section) {
                 Column(
                     verticalArrangement = Arrangement.spacedBy(22.dp),
-                    modifier = Modifier.fillMaxSize().verticalScroll(scrolls[section.ordinal]).padding(16.dp),
+                    modifier = Modifier.fillMaxSize().verticalScroll(scrolls[section.ordinal]).padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp + LocalTabBarClearance.current),
                 ) {
                     val wear = { item: Progression.Item ->
                         if (model.equip(item.id)) {
@@ -179,7 +179,7 @@ fun ProgressPage(model: AppModel, section: ProgressSection, onSection: (Progress
             notice != null,
             enter = scaleIn(spring(dampingRatio = 0.8f, stiffness = 500f)) + fadeIn(),
             exit = scaleOut() + fadeOut(),
-            modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = 16.dp + LocalTabBarClearance.current),
         ) {
             BasicText(
                 shown,

@@ -18,14 +18,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -55,6 +54,8 @@ import com.mikecann.walkies.ui.AppTab
 import com.mikecann.walkies.ui.ProgressPage
 import com.mikecann.walkies.ui.ProgressSection
 import com.mikecann.walkies.ui.SettingsPage
+import com.mikecann.walkies.ui.LocalTabBarClearance
+import com.mikecann.walkies.ui.tabBarBottomGap
 import com.mikecann.walkies.ui.TabBar
 import com.mikecann.walkies.ui.Walkies
 import com.mikecann.walkies.ui.SetupScreen
@@ -212,9 +213,10 @@ class MainActivity : ComponentActivity() {
         if (tab == AppTab.Walks && walkDetail != null) BackHandler { walkDetail = null }
         else if (tab != AppTab.Map) BackHandler { navigation.showMap() }
 
-        Column(Modifier.fillMaxSize().background(Walkies.cream)) {
-            // The tab bar looks after the phone's navigation bar, so the pages don't.
-            Box(Modifier.weight(1f).fillMaxWidth().consumeWindowInsets(WindowInsets.navigationBars)) {
+        val bottomGap = tabBarBottomGap()
+        val clearance = bottomGap + 96.dp + 8.dp
+        CompositionLocalProvider(LocalTabBarClearance provides clearance) {
+            Box(Modifier.fillMaxSize().background(Walkies.cream)) {
                 MapScreen(
                     app.model,
                     app.tracker,
@@ -238,8 +240,10 @@ class MainActivity : ComponentActivity() {
                         pages.SaveableStateProvider(page) { Page(tab) }
                     }
                 }
+                Box(Modifier.align(Alignment.BottomCenter).padding(bottom = bottomGap)) {
+                    TabBar(tab, rewards = app.model.pendingPicks.size) { navigation.tab = it }
+                }
             }
-            TabBar(tab, rewardWaiting = app.model.pendingPicks.isNotEmpty()) { navigation.tab = it }
         }
     }
 

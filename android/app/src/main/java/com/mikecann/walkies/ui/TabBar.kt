@@ -1,117 +1,129 @@
 package com.mikecann.walkies.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.drawWithCache
-import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/** The map continues this far under the sheet, so it shows through the corners. */
-val TabBarCornerRadius = 22.dp
+/** Space for a page's last row to scroll above the dock and its raised hex. */
+val LocalTabBarClearance = staticCompositionLocalOf { 0.dp }
 
-/**
- * The tabs along the bottom, laid out like Material 3's NavigationBar (an indicator
- * pill behind the selected icon, the label under it) in the app's cream and orange,
- * with the app's own art for the icons. [rewardWaiting] puts the orange dot on Progress,
- * like the one on the shells chip.
- */
+/** The pill sits above either gesture navigation or the three-button navigation bar. */
 @Composable
-fun TabBar(selected: AppTab, rewardWaiting: Boolean, onSelect: (AppTab) -> Unit) {
-    val sheet = RoundedCornerShape(topStart = TabBarCornerRadius, topEnd = TabBarCornerRadius)
-    Column(
-        Modifier
-            .fillMaxWidth()
-            // The other pages end above the bar; keep the map beneath them covered.
-            .then(if (selected != AppTab.Map) Modifier.background(Walkies.cream) else Modifier)
-            .softShadow(sheet, 12.dp, (-3).dp, 0.24f, Walkies.cream)
-            .background(Walkies.cream, sheet)
-            .drawWithCache {
-                val radius = TabBarCornerRadius.toPx()
-                val stroke = 2.dp.toPx()
-                val inset = stroke / 2
-                val rim = Path().apply {
-                    arcTo(Rect(inset, inset, radius * 2 - inset, radius * 2 - inset), 180f, 90f, true)
-                    lineTo(size.width - radius, inset)
-                    arcTo(Rect(size.width - radius * 2 + inset, inset, size.width - inset, radius * 2 - inset), 270f, 90f, false)
-                }
-                onDrawBehind { drawPath(rim, Color.White, style = Stroke(stroke)) }
-            }
-            .navigationBarsPadding()
-            // Keep the row exactly where it was when the divider occupied this space.
-            .padding(top = 1.dp),
-    ) {
-        Row(
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().height(72.dp).selectableGroup(),
-        ) {
+fun tabBarBottomGap() = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 12.dp
+
+/** The B2 dock, with the current tab lifted out of the pill into an orange hex. */
+@Composable
+fun TabBar(selected: AppTab, rewards: Int, onSelect: (AppTab) -> Unit) {
+    Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        Box(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(64.dp)
+                .softShadow(CircleShape, 24.dp, 10.dp, 0.16f, Walkies.cream)
+                .softShadow(CircleShape, 8.dp, 3.dp, 0.18f, Walkies.cream)
+                .background(Walkies.cream, CircleShape)
+                .border(3.dp, Color.White, CircleShape),
+        )
+        Row(Modifier.fillMaxWidth().height(96.dp).padding(horizontal = 5.dp).selectableGroup()) {
             for (tab in AppTab.entries) {
                 val isSelected = tab == selected
-                val badge = tab == AppTab.Progress && rewardWaiting
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .selectable(isSelected, role = Role.Tab) { onSelect(tab) }
-                        .semantics { contentDescription = if (badge) "${tab.title}, reward waiting" else tab.title }
-                        .padding(vertical = 6.dp),
-                ) {
+                val badge = if (tab == AppTab.Progress && rewards > 0) rewards else null
+                // Compose's animation clock respects the system animation duration scale,
+                // including disabled animations in accessibility settings.
+                val pop by animateFloatAsState(
+                    if (isSelected) 1f else 0.7f,
+                    spring(dampingRatio = 0.65f, stiffness = 700f), label = "tab pop",
+                )
+                Box(Modifier.weight(1f).height(96.dp)) {
+                    // Taps above the pill reach the page, except on the raised hex.
                     Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .size(56.dp, 32.dp)
-                            .background(if (isSelected) Walkies.orange.copy(alpha = 0.18f) else Walkies.cream, RoundedCornerShape(50)),
-                    ) {
-                        assetImage(tab.art)?.let {
-                            Image(it, contentDescription = null, modifier = Modifier.size(26.dp).alpha(if (isSelected) 1f else 0.55f))
+                        Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(if (isSelected) 96.dp else 64.dp)
+                            .selectable(isSelected, role = Role.Tab) { if (!isSelected) onSelect(tab) }
+                            .semantics {
+                                contentDescription = if (badge != null) "${tab.title}, $badge ${if (badge == 1) "reward" else "rewards"} waiting" else tab.title
+                            },
+                    )
+                    if (isSelected) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.align(Alignment.TopCenter).offset(y = 1.dp)
+                                .size(56.dp, 64.dp).scale(pop)
+                                .softShadow(Hexagon(), 5.dp, 3.dp, 0.28f, Walkies.orange)
+                                .background(Walkies.orange, Hexagon())
+                                .border(3.5.dp, Color.White, Hexagon()),
+                        ) {
+                            TabIcon(tab, true, badge)
                         }
-                        if (badge) {
-                            Box(
-                                Modifier
-                                    .align(Alignment.TopEnd)
-                                    .offset(x = (-10).dp, y = 3.dp)
-                                    .size(8.dp)
-                                    .background(Walkies.orange, CircleShape),
-                            )
-                        }
+                    } else {
+                        TabIcon(tab, false, badge, Modifier.align(Alignment.TopCenter).offset(y = 40.5.dp))
                     }
                     BasicText(
                         tab.title,
                         style = Type.caption.copy(
-                            fontSize = 12.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
                             color = if (isSelected) Walkies.orange else Walkies.ink.copy(alpha = 0.6f),
                         ),
+                        maxLines = 1,
+                        modifier = Modifier.align(Alignment.TopCenter).offset(y = 72.dp).clearAndSetSemantics {},
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TabIcon(tab: AppTab, selected: Boolean, badge: Int?, modifier: Modifier = Modifier) {
+    Box(modifier.size(27.dp)) {
+        assetImage(tab.art)?.let {
+            Image(
+                it, contentDescription = null, modifier = Modifier.size(27.dp),
+                alpha = if (selected) 1f else 0.85f,
+                colorFilter = if (selected) ColorFilter.tint(Color.White) else null,
+            )
+        }
+        if (badge != null) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.align(Alignment.TopEnd).offset(x = 11.dp, y = (-5).dp)
+                    .widthIn(min = 18.dp).height(18.dp)
+                    .background(Walkies.orange, CircleShape).border(1.5.dp, Color.White, CircleShape)
+                    .padding(horizontal = 4.dp),
+            ) {
+                BasicText(
+                    "$badge", style = Type.caption.copy(color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
+                    modifier = Modifier.clearAndSetSemantics {},
+                )
             }
         }
     }
