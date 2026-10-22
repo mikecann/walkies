@@ -335,6 +335,8 @@ fun CloudLayer(
     modifier: Modifier = Modifier,
     /** What's equipped from the shop: the trail, the marker and the spyglass's ring. */
     cosmetics: MapCosmetics = MapCosmetics.none,
+    /** Off while another tab covers the map, so it stops redrawing 30 times a second. */
+    animate: Boolean = true,
 ) {
     val density = LocalDensity.current.density
     val scene = remember(density) { CloudScene(density) }
@@ -342,7 +344,8 @@ fun CloudLayer(
 
     // 30 frames a second while the map's still, for the drift and the pulse. Camera changes redraw on top.
     var clock by remember { mutableDoubleStateOf(0.0) }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(animate) {
+        if (!animate) return@LaunchedEffect
         var last = 0L
         while (true) {
             withFrameNanos { now ->

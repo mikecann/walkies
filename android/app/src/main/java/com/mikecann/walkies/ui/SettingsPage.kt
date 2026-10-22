@@ -4,7 +4,6 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -72,13 +71,13 @@ fun syncText(status: SyncEngine.Status, waiting: Int, lastSynced: Double?): Stri
 }
 
 /**
- * Settings (SettingsView.swift): the account and sync, past walks, the Always on switch,
- * a warning when location isn't allowed all the time, and a way back into the setup
- * when something's missing. Laid out like the iPhone's grouped Form. The iPhone's
+ * Settings, a tab of its own (SettingsView.swift): the account and sync, the Always on
+ * switch, a warning when location isn't allowed all the time, and a way back into the
+ * setup when something's missing. Laid out like the iPhone's grouped Form. The iPhone's
  * "Suggest a feature" (Chef) is iPhone-only, so it isn't here.
  */
 @Composable
-fun SettingsSheet(
+fun SettingsPage(
     account: AccountRows,
     onSyncNow: () -> Unit,
     /** Sync stops first, so nothing from this account comes back after the wipe. */
@@ -92,20 +91,15 @@ fun SettingsSheet(
     /** Something the setup asks for is missing. */
     permissionsMissing: Boolean,
     onFixPermissions: () -> Unit,
-    /** How many walks there are, for the Past walks row. */
-    walkCount: Int,
-    onShowHistory: () -> Unit,
-    onClose: () -> Unit,
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Walkies.cream)
-            .clickable(remember { MutableInteractionSource() }, indication = null) {}
             .systemBarsPadding()
             .padding(horizontal = 16.dp),
     ) {
-        SheetBar("Settings", leading = null, onLeading = {}, trailing = "Done", onTrailing = onClose)
+        SheetBar("Settings", leading = null, onLeading = {}, trailing = null, onTrailing = {})
         Spacer(Modifier.height(12.dp))
         var confirmingSignOut by remember { mutableStateOf(false) }
         var cantSignOut by remember { mutableStateOf<String?>(null) }
@@ -132,20 +126,6 @@ fun SettingsSheet(
                         account.waiting > 0 -> notUploaded = account.waiting
                         else -> confirmingSignOut = true
                     }
-                }
-            }
-            Section(footer = null, header = "History") {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(role = Role.Button, onClick = onShowHistory)
-                        .padding(horizontal = 16.dp, vertical = 11.dp),
-                ) {
-                    BasicText("Past walks", style = Type.body, modifier = Modifier.weight(1f))
-                    BasicText("$walkCount", style = Type.body.copy(color = Walkies.ink.copy(alpha = 0.5f)))
-                    ChevronRight(Modifier.size(8.dp, 13.dp), Walkies.ink.copy(alpha = 0.3f))
                 }
             }
             Section(footer = "Records walks in the background. Walking and jogging count; bikes and cars don't.") {

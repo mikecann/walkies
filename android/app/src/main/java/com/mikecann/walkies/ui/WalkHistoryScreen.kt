@@ -5,7 +5,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -69,31 +68,36 @@ import java.util.UUID
 import kotlin.math.max
 import kotlin.math.min
 
-/** A full-screen page with a back button and a title, like a NavigationStack push. */
+/**
+ * A full-screen page with a title, like a NavigationStack: pushed ones have a back
+ * button, the Walks tab's own page doesn't.
+ */
 @Composable
-private fun Page(back: String, title: String, onBack: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+private fun Page(back: String?, title: String, onBack: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Walkies.cream)
-            .clickable(remember { MutableInteractionSource() }, indication = null) {}
             .systemBarsPadding(),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(role = Role.Button, onClick = onBack)
-                    .padding(6.dp),
-            ) {
-                // chevron.left: the right one, mirrored.
-                ChevronRight(Modifier.size(12.dp, 18.dp).graphicsLayer { scaleX = -1f }, Walkies.burnt)
-                BasicText(back, style = Type.body.copy(color = Walkies.burnt))
+            Box(Modifier.weight(1f)) {
+                if (back != null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(role = Role.Button, onClick = onBack)
+                            .padding(6.dp),
+                    ) {
+                        // chevron.left: the right one, mirrored.
+                        ChevronRight(Modifier.size(12.dp, 18.dp).graphicsLayer { scaleX = -1f }, Walkies.burnt)
+                        BasicText(back, style = Type.body.copy(color = Walkies.burnt))
+                    }
+                }
             }
-            BasicText(title, style = Type.headline)
+            BasicText(title, style = Type.headline, modifier = Modifier.padding(vertical = 6.dp))
             Spacer(Modifier.weight(1f))
         }
         content()
@@ -107,9 +111,9 @@ private fun pattern(skeleton: String) = DateFormat.getBestDateTimePattern(Locale
 private fun format(date: SwiftDate, skeleton: String): String =
     java.text.SimpleDateFormat(pattern(skeleton), Locale.getDefault()).format(Date((date.epochSeconds * 1000).toLong()))
 
-/** Settings > Past walks (WalkHistoryView.swift): your totals, then every walk by month, newest first. */
+/** The Walks tab (WalkHistoryView.swift): your totals, then every walk by month, newest first. */
 @Composable
-fun WalkHistoryScreen(model: AppModel, onOpen: (Walk) -> Unit, onBack: () -> Unit) {
+fun WalkHistoryScreen(model: AppModel, onOpen: (Walk) -> Unit) {
     @Suppress("UNUSED_VARIABLE") val revision = rememberRevision(model::listen)
     val walks = model.walks
     val months = remember(walks) {
@@ -120,7 +124,7 @@ fun WalkHistoryScreen(model: AppModel, onOpen: (Walk) -> Unit, onBack: () -> Uni
         }.toSortedMap(compareByDescending { it }).map { (_, inMonth) -> inMonth.sortedByDescending { it.startedAt } }
     }
     val rounded = roundedFont()
-    Page("Settings", "Past walks", onBack) {
+    Page(null, "Past walks", onBack = {}) {
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(20.dp),
             contentPadding = PaddingValues(16.dp),

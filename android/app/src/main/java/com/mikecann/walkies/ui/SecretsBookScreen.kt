@@ -6,7 +6,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -32,6 +31,8 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,17 +63,17 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * The secrets book (StickerBookView in Stickers.swift): every secret in the library,
+ * The secrets book, a tab of its own (StickerBookView in Stickers.swift): every secret in the library,
  * grouped by area, nearest first. Areas start collapsed except the one you're in,
  * and load six at a time as you scroll. Sort and filter stick between visits.
  */
 @Composable
-fun SecretsBookScreen(model: AppModel, onOpen: (LoreEntry) -> Unit, onClose: () -> Unit) {
+fun SecretsBookScreen(model: AppModel, onOpen: (LoreEntry) -> Unit) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("walkies", Context.MODE_PRIVATE) }
     var sort by remember { mutableStateOf(SecretsBook.Sort.from(prefs.getString("secretsBookSort", null))) }
     var filter by remember { mutableStateOf(SecretsBook.Filter.from(prefs.getString("secretsBookFilter", null))) }
-    var expanded by remember { mutableStateOf(emptySet<String>()) }
+    var expanded by rememberSaveable(stateSaver = listSaver<Set<String>, String>({ it.toList() }, { it.toSet() })) { mutableStateOf(emptySet<String>()) }
     var menuOpen by remember { mutableStateOf(false) }
     val revision = rememberRevision(model::listen)
 
@@ -91,7 +92,6 @@ fun SecretsBookScreen(model: AppModel, onOpen: (LoreEntry) -> Unit, onClose: () 
         modifier = Modifier
             .fillMaxSize()
             .background(Walkies.cream)
-            .clickable(remember { MutableInteractionSource() }, indication = null) {}
             .systemBarsPadding(),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -120,17 +120,12 @@ fun SecretsBookScreen(model: AppModel, onOpen: (LoreEntry) -> Unit, onClose: () 
                         )
                     }
                 }
-                BasicText(
-                    "Done",
-                    style = Type.body.copy(color = Walkies.burnt, fontWeight = FontWeight.SemiBold),
-                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(role = Role.Button, onClick = onClose).padding(6.dp),
-                )
             }
         }
 
         // A new sort or filter starts again from the top with the first six.
         key(sort, filter) {
-            var visibleCount by remember { mutableIntStateOf(6) }
+            var visibleCount by rememberSaveable { mutableIntStateOf(6) }
             val shown = areas.take(visibleCount)
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(24.dp),

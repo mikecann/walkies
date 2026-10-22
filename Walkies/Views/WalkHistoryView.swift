@@ -157,7 +157,7 @@ private struct RouteSketch: View {
 struct WalkDetailView: View {
     let walk: Walk
     @Environment(AppModel.self) private var model
-    @State private var open: LoreEntry?
+    @Environment(AppNavigation.self) private var navigation
 
     private var secrets: [LoreEntry] {
         guard let end = walk.endedAt else { return [] }
@@ -230,6 +230,8 @@ struct WalkDetailView: View {
                 .stickerCard(in: RoundedRectangle(cornerRadius: 24))
 
                 Button {
+                    // Plays over the map, so go there first.
+                    navigation.showMap()
                     model.replay(walk)
                 } label: {
                     Label("Watch this walk again", systemImage: "play.fill")
@@ -244,7 +246,7 @@ struct WalkDetailView: View {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 12)], spacing: 16) {
                             ForEach(secrets) { entry in
                                 Button {
-                                    open = entry
+                                    navigation.openSecret = entry
                                 } label: {
                                     VStack(spacing: 8) {
                                         StickerArt(entry: entry, size: 88)
@@ -267,9 +269,6 @@ struct WalkDetailView: View {
         .foregroundStyle(Color.ink)
         .navigationTitle("Your walk")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $open) { entry in
-            LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id])
-        }
     }
 
     private func region(for coordinates: [CLLocationCoordinate2D]) -> MKCoordinateRegion {

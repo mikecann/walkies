@@ -13,11 +13,11 @@ struct CelebrationView: View {
     let tilted: Bool
 
     @Environment(AppModel.self) private var model
+    @Environment(AppNavigation.self) private var navigation
     @Environment(\.dismiss) private var dismiss
     @State private var player: ReplayPlayer
     @State private var handle = MapHandle()
     @State private var openSecret: LoreEntry?
-    @State private var showingProgress = false
     /// You've moved the map yourself, so offer to put it back on the walk.
     @State private var moved = false
     @State private var recentre = 0
@@ -75,7 +75,11 @@ struct CelebrationView: View {
                     SummaryCard(
                         recap: recap, endingXP: model.xp,
                         hasReward: !recap.isRewatch && !model.pendingPicks.isEmpty,
-                        onReward: { showingProgress = true },
+                        // Over to the progress tab's rewards, with the map under it when you come back.
+                        onReward: {
+                            navigation.showProgress(.level)
+                            dismiss()
+                        },
                         onSecret: { openSecret = $0 }, onReplay: { player.replay() }, onDone: { dismiss() }
                     )
                 }
@@ -87,9 +91,6 @@ struct CelebrationView: View {
         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: player.phase)
         .animation(.snappy, value: moved)
         .task { await player.run() }
-        .sheet(isPresented: $showingProgress) {
-            ProgressionSheet(initialSection: .level)
-        }
         .sheet(item: $openSecret) { entry in
             LoreCardView(entry: entry, foundAt: nil)
         }

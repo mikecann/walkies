@@ -127,6 +127,8 @@ fun MapboxMap(
     modifier: Modifier = Modifier,
     /** Draw into a TextureView, so it can be clipped to rounded corners (the small map in walk history). */
     textureView: Boolean = false,
+    /** Lift the logo and attribution clear of the phone's navigation bar. Off when the map stops above a tab bar. */
+    systemBarInset: Boolean = true,
 ) {
     val subscriptions = remember { ArrayList<Cancelable>() }
     val tap by rememberUpdatedState(onTap)
@@ -152,9 +154,11 @@ fun MapboxMap(
             }
             view.scalebar.enabled = false
             view.compass.enabled = false
-            ViewCompat.setOnApplyWindowInsetsListener(view) { v, insets ->
+            val margin = 4 * view.resources.displayMetrics.density
+            view.logo.marginBottom = margin
+            view.attribution.marginBottom = margin
+            if (systemBarInset) ViewCompat.setOnApplyWindowInsetsListener(view) { _, insets ->
                 val bottom = insets.getInsets(WindowInsetsCompat.Type.systemBars()).bottom.toFloat()
-                val margin = 4 * v.resources.displayMetrics.density
                 view.logo.marginBottom = bottom + margin
                 view.attribution.marginBottom = bottom + margin
                 insets

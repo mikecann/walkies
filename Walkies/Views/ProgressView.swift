@@ -1,52 +1,34 @@
 import SwiftUI
 
-struct ProgressionSheet: View {
-    enum Section: String, CaseIterable {
-        case level = "Level", quests = "Quests", shop = "Shop", wardrobe = "Wardrobe", spyglass = "Spyglass"
-    }
+/// Your progress, a tab of its own: your level and rewards, this week's quests, the
+/// shell shop, the wardrobe and the spyglass. One part at a time, picked from the row
+/// along the top, and each keeps its own place as you scroll.
+struct ProgressPage: View {
+    typealias Section = AppNavigation.ProgressSection
 
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    var initialSection: Section = .level
+    @Environment(AppNavigation.self) private var navigation
     @State private var purchase: Progression.Item?
     @State private var notice: String?
     @State private var noticeID = UUID()
 
     var body: some View {
         NavigationStack {
-            ScrollViewReader { proxy in
-                VStack(spacing: 0) {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(Section.allCases, id: \.self) { section in
-                                Button(section.rawValue) {
-                                    withAnimation { proxy.scrollTo(section, anchor: .top) }
-                                }
-                                .font(.subheadline.weight(.semibold))
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 10)
-                                .background(Color.cream, in: .capsule)
-                            }
-                        }
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
-                    }
-                    // The model deliberately has no timer. Keep quests and ring expiry
-                    // current while this sheet stays open over midnight or a week rollover.
-                    TimelineView(.periodic(from: .now, by: 1)) { timeline in
+            VStack(spacing: 0) {
+                sectionPicker
+                ZStack {
+                    // All kept alive, so each part stays scrolled where you left it.
+                    ForEach(Section.allCases) { section in
+                        let showing = navigation.progressSection == section
                         ScrollView {
-                            VStack(spacing: 22) {
-                                levelSection.id(Section.level)
-                                questsSection(now: timeline.date).id(Section.quests)
-                                shopSection.id(Section.shop)
-                                wardrobeSection.id(Section.wardrobe)
-                                spyglassSection(now: timeline.date).id(Section.spyglass)
-                            }
-                            .padding()
+                            content(for: section)
+                                .padding()
                         }
+                        .opacity(showing ? 1 : 0)
+                        .allowsHitTesting(showing)
+                        .accessibilityHidden(!showing)
                     }
                 }
-                .task { proxy.scrollTo(initialSection, anchor: .top) }
             }
             .background(Color.sand.opacity(0.45))
             .foregroundStyle(Color.ink)
@@ -54,7 +36,6 @@ struct ProgressionSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { ShellBalance(balance: model.balance) }
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
             .overlay(alignment: .bottom) {
                 if let notice {
@@ -90,6 +71,50 @@ struct ProgressionSheet: View {
         }
         .tint(.burnt)
         .environment(\.colorScheme, .light)
+    }
+
+    /// The row of pills along the top. The one you're on is filled in.
+    private var sectionPicker: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Section.allCases) { section in
+                        let selected = navigation.progressSection == section
+                        Button {
+                            withAnimation(.snappy) { navigation.progressSection = section }
+                        } label: {
+                            Text(section.rawValue)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(selected ? Color.cream : Color.burnt)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
+                                .background(selected ? Color.burnt : Color.cream, in: .capsule)
+                                .contentShape(.capsule)
+                        }
+                        .buttonStyle(PressScale())
+                        .accessibilityAddTraits(selected ? [.isSelected] : [])
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+            }
+            .onChange(of: navigation.progressSection, initial: true) { _, section in
+                withAnimation { proxy.scrollTo(section) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func content(for section: Section) -> some View {
+        switch section {
+        case .level: levelSection
+        // The model deliberately has no timer. Keep quests and ring expiry current
+        // while this page stays open over midnight or a week rollover.
+        case .quests: TimelineView(.periodic(from: .now, by: 1)) { questsSection(now: $0.date) }
+        case .shop: shopSection
+        case .wardrobe: wardrobeSection
+        case .spyglass: TimelineView(.periodic(from: .now, by: 1)) { spyglassSection(now: $0.date) }
+        }
     }
 
     private var levelSection: some View {
@@ -227,7 +252,7 @@ struct ProgressionSheet: View {
                 Label("Equipped", systemImage: "checkmark")
                     .font(.caption.weight(.semibold)).foregroundStyle(Color.badgeTeal)
             } else if model.owned.contains(item.id) {
-                // Owned looks are worn from here too, not only from the wardrobe below.
+                // Owned looks are worn from here too, not only from the Wardrobe.
                 if item.group != nil {
                     Button("Wear") { wear(item) }
                         .font(.subheadline.weight(.bold))
@@ -307,7 +332,7 @@ struct ProgressionSheet: View {
                 } else if !hasSecret {
                     Text("No unfound secrets in \(model.selectedCity?.name ?? "this place").").font(.footnote)
                 } else if model.spyglasses <= 0 {
-                    Text("Pick one up in the shell shop above.").font(.footnote)
+                    Text("Pick one up in the Shop.").font(.footnote)
                 } else {
                     Text("Looking in \(model.selectedCity?.name ?? "your selected place")").font(.footnote)
                 }

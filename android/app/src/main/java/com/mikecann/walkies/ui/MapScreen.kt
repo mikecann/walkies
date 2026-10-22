@@ -81,8 +81,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * The map with the clouds over it and the buttons on top: ContentView.swift, with
- * found secrets pinned on it. With no places yet the map's just the world, and the place chip
+ * The map with the clouds over it and the buttons on top: MapScreen in ContentView.swift,
+ * with found secrets pinned on it. The first tab, and it stays put under the others. With no places yet the map's just the world, and the place chip
  * leads to adding one, as on the iPhone.
  */
 @Composable
@@ -96,12 +96,14 @@ fun MapScreen(
     picture: String?,
     /** Where adding a neighbour runs, so it carries on if the screen goes. */
     scope: CoroutineScope,
+    /** The map's tab is showing. Under another tab the clouds stop drifting. */
+    active: Boolean,
     onOpenSettings: () -> Unit,
-    onShowSettings: () -> Unit,
     onShowPlaces: () -> Unit,
     onFixPermissions: () -> Unit,
+    /** The "new secrets in places you've walked" card: the secrets tab. */
     onShowSecrets: () -> Unit,
-    /** The shells chip: your progress, the shop and the wardrobe. */
+    /** The shells chip: the progress tab. */
     onShowProgress: () -> Unit,
     /** A found secret's pin on the map, tapped to read it again. */
     onOpenSecret: (LoreEntry) -> Unit,
@@ -253,11 +255,12 @@ fun MapScreen(
 
     Box(Modifier.fillMaxSize()) {
         if (hasToken) {
-            MapboxMap(state, onTap = {}, onReady = { mapReady = true }, modifier = Modifier.fillMaxSize())
+            // It ends at the tab bar, so its logo goes along the bottom with no room for the phone's bar.
+            MapboxMap(state, onTap = {}, onReady = { mapReady = true }, modifier = Modifier.fillMaxSize(), systemBarInset = false)
         } else {
             StandInMap(state, onTap = {}, onReady = { mapReady = true })
         }
-        CloudLayer(field, state, sprites, route, freshOutlines, you, cosmetics = cosmetics)
+        CloudLayer(field, state, sprites, route, freshOutlines, you, cosmetics = cosmetics, animate = active)
         StickerPinLayer(pins, state, onPick = onOpenSecret)
         NeighbourLayer(
             neighbours = if (addingStatus == null) model.neighbours else emptyList(),
@@ -274,26 +277,18 @@ fun MapScreen(
                 .background(Brush.verticalGradient(listOf(Walkies.cream.copy(alpha = 0.85f), Walkies.cream.copy(alpha = 0f)))),
         )
 
-        Row(
-            verticalAlignment = Alignment.Top,
-            modifier = Modifier
+        // Settings and the secrets book are tabs now, and Chef is iPhone-only, so it's just the chips up here.
+        Box(
+            Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(horizontal = 16.dp),
+                .padding(start = 16.dp, end = 28.dp),
         ) {
-            // The badges are measured first, so a long place name on a small phone
-            // shortens the chip rather than pushing them off the screen.
-            Box(Modifier.weight(1f).padding(end = 12.dp)) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.mapButton("top leading", buttonFrames)) {
-                    val hidden = model.stickersHere
-                    val secrets = if (hidden.isEmpty()) null else hidden.count { model.foundStickers[it.first.id] != null } to hidden.size
-                    PlaceChip(model.selectedCity, name, picture, secrets, onChangePlace = onShowPlaces)
-                    LiveShellsChip(model, onShowProgress)
-                }
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.mapButton("top trailing", buttonFrames)) {
-                HexBadge(BadgeIcon.Art("icon-gear"), "Settings", onClick = onShowSettings)
-                HexBadge(BadgeIcon.Art("icon-book"), "Secrets", onClick = onShowSecrets)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.mapButton("top leading", buttonFrames)) {
+                val hidden = model.stickersHere
+                val secrets = if (hidden.isEmpty()) null else hidden.count { model.foundStickers[it.first.id] != null } to hidden.size
+                PlaceChip(model.selectedCity, name, picture, secrets, onChangePlace = onShowPlaces)
+                LiveShellsChip(model, onShowProgress)
             }
         }
 
@@ -303,7 +298,8 @@ fun MapScreen(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+                // Clear of the Mapbox logo and attribution along the bottom of the map.
+                .padding(start = 16.dp, end = 16.dp, bottom = 32.dp)
                 .mapButton("bottom", buttonFrames),
         ) {
             if (!hasToken) MissingToken()

@@ -26,7 +26,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,12 +39,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,8 +62,6 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
@@ -78,7 +78,6 @@ import com.mikecann.walkies.model.Progression
 import com.mikecann.walkies.model.SwiftDate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
@@ -90,21 +89,16 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
-/** Where the progression sheet opens (ProgressionSheet.Section in ProgressView.swift). */
-enum class ProgressSection(val title: String) {
-    Level("Level"), Quests("Quests"), Shop("Shop"), Wardrobe("Wardrobe"), Spyglass("Spyglass"),
-}
-
 /**
- * Your progress (ProgressionSheet in ProgressView.swift): your level and what's
- * earned it, any level-up rewards to choose, this week's quests, the shell shop, the
- * wardrobe and the spyglass. A sheet over the map, or over the celebration's summary.
+ * Your progress, a tab of its own (ProgressPage in ProgressView.swift): your level and
+ * what's earned it, any level-up rewards to choose, this week's quests, the shell shop,
+ * the wardrobe and the spyglass. One part at a time, picked from the row along the top,
+ * and each keeps its own place as you scroll.
  */
 @Composable
-fun ProgressionSheet(model: AppModel, initialSection: ProgressSection = ProgressSection.Level, onClose: () -> Unit) {
+fun ProgressPage(model: AppModel, section: ProgressSection, onSection: (ProgressSection) -> Unit) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
-    val scope = rememberCoroutineScope()
     @Suppress("UNUSED_VARIABLE") val revision = rememberRevision(model::listen)
     val sounds = remember { SoundFX(context) }
     DisposableEffect(sounds) { onDispose { sounds.release() } }
@@ -137,57 +131,22 @@ fun ProgressionSheet(model: AppModel, initialSection: ProgressSection = Progress
         showNotice(text)
     }
 
-    val scroll = rememberScrollState()
-    val anchors = remember { mutableStateMapOf<ProgressSection, Int>() }
-    var scrolledToStart by remember { mutableStateOf(false) }
-    LaunchedEffect(anchors[initialSection]) {
-        val y = anchors[initialSection] ?: return@LaunchedEffect
-        if (!scrolledToStart) {
-            scrolledToStart = true
-            scroll.scrollTo(y)
-        }
-    }
-    fun Modifier.anchor(section: ProgressSection) = onGloballyPositioned { anchors[section] = it.positionInParent().y.toInt() }
+    // One for each part, so each stays scrolled where you left it.
+    val scrolls = ProgressSection.entries.map { rememberScrollState() }
 
-    Sheet(onDismiss = onClose, background = SHEET_BACKGROUND) { close ->
-        Box(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize()) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 10.dp, bottom = 4.dp)) {
-                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { ShellBalance(model.balance) }
-                    BasicText("Your progress", style = Type.headline)
-                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                        BasicText(
-                            "Done",
-                            style = Type.body.copy(color = Walkies.burnt, fontWeight = FontWeight.SemiBold),
-                            modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(role = Role.Button, onClick = close).padding(6.dp),
-                        )
-                    }
-                }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
-                ) {
-                    for (section in ProgressSection.entries) {
-                        BasicText(
-                            section.title,
-                            style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold, color = Walkies.burnt),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(Walkies.cream)
-                                .clickable(role = Role.Button) { scope.launch { scroll.animateScrollTo(anchors[section] ?: 0) } }
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                        )
-                    }
-                }
+    Box(Modifier.fillMaxSize().background(PAGE_BACKGROUND).statusBarsPadding()) {
+        Column(Modifier.fillMaxSize()) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 10.dp, top = 8.dp, bottom = 4.dp)) {
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { ShellBalance(model.balance) }
+                BasicText("Your progress", style = Type.headline)
+                Spacer(Modifier.weight(1f))
+            }
+            SectionPicker(section, onSection)
+            key(section) {
                 Column(
                     verticalArrangement = Arrangement.spacedBy(22.dp),
-                    modifier = Modifier.fillMaxSize().verticalScroll(scroll).padding(16.dp),
+                    modifier = Modifier.fillMaxSize().verticalScroll(scrolls[section.ordinal]).padding(16.dp),
                 ) {
-                    LevelSection(model, Modifier.anchor(ProgressSection.Level)) { level, choice, reward ->
-                        if (model.claim(level, choice)) celebrate("${rewardName(reward)} chosen")
-                        else showNotice("That reward has already been chosen.")
-                    }
-                    QuestsSection(model, now, Modifier.anchor(ProgressSection.Quests))
                     val wear = { item: Progression.Item ->
                         if (model.equip(item.id)) {
                             haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
@@ -196,30 +155,37 @@ fun ProgressionSheet(model: AppModel, initialSection: ProgressSection = Progress
                             showNotice("Couldn't equip that just now.")
                         }
                     }
-                    ShopSection(model, Modifier.anchor(ProgressSection.Shop), onBuy = { purchase = it }, onWear = wear)
-                    WardrobeSection(model, Modifier.anchor(ProgressSection.Wardrobe), wear)
-                    SpyglassSection(model, now, Modifier.anchor(ProgressSection.Spyglass)) {
-                        if (model.useSpyglass()) celebrate("Your hint is on the map")
-                        else showNotice("Couldn't use that just now. Check your selected place.")
+                    when (section) {
+                        ProgressSection.Level -> LevelSection(model) { level, choice, reward ->
+                            if (model.claim(level, choice)) celebrate("${rewardName(reward)} chosen")
+                            else showNotice("That reward has already been chosen.")
+                        }
+                        ProgressSection.Quests -> QuestsSection(model, now)
+                        ProgressSection.Shop -> ShopSection(model, onBuy = { purchase = it }, onWear = wear)
+                        ProgressSection.Wardrobe -> WardrobeSection(model, wear)
+                        ProgressSection.Spyglass -> SpyglassSection(model, now) {
+                            if (model.useSpyglass()) celebrate("Your hint is on the map")
+                            else showNotice("Couldn't use that just now. Check your selected place.")
+                        }
                     }
                 }
             }
+        }
 
-            // Keeps showing the last notice while it shrinks away.
-            var shown by remember { mutableStateOf("") }
-            notice?.let { shown = it }
-            androidx.compose.animation.AnimatedVisibility(
-                notice != null,
-                enter = scaleIn(spring(dampingRatio = 0.8f, stiffness = 500f)) + fadeIn(),
-                exit = scaleOut() + fadeOut(),
-                modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
-            ) {
-                BasicText(
-                    shown,
-                    style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center),
-                    modifier = Modifier.stickerCard(RoundedCornerShape(18.dp)).padding(16.dp),
-                )
-            }
+        // Keeps showing the last notice while it shrinks away.
+        var shown by remember { mutableStateOf("") }
+        notice?.let { shown = it }
+        androidx.compose.animation.AnimatedVisibility(
+            notice != null,
+            enter = scaleIn(spring(dampingRatio = 0.8f, stiffness = 500f)) + fadeIn(),
+            exit = scaleOut() + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+        ) {
+            BasicText(
+                shown,
+                style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center),
+                modifier = Modifier.stickerCard(RoundedCornerShape(18.dp)).padding(16.dp),
+            )
         }
     }
 
@@ -239,8 +205,34 @@ fun ProgressionSheet(model: AppModel, initialSection: ProgressSection = Progress
     }
 }
 
-/** White under 45% sand, like the iPhone's sheet over its system background. */
-private val SHEET_BACKGROUND = Color(0.963f, 0.937f, 0.889f)
+/** The row of pills along the top of the progress page. The one you're on is filled in. */
+@Composable
+private fun SectionPicker(selected: ProgressSection, onSelect: (ProgressSection) -> Unit) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .selectableGroup(),
+    ) {
+        for (section in ProgressSection.entries) {
+            val isSelected = section == selected
+            BasicText(
+                section.title,
+                style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold, color = if (isSelected) Walkies.cream else Walkies.burnt),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(if (isSelected) Walkies.burnt else Walkies.cream)
+                    .selectable(isSelected, role = Role.Tab) { onSelect(section) }
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+            )
+        }
+    }
+}
+
+/** White under 45% sand, like the iPhone's page over its system background. */
+private val PAGE_BACKGROUND = Color(0.963f, 0.937f, 0.889f)
 
 private val ink70 = Walkies.ink.copy(alpha = 0.7f)
 private val ink65 = Walkies.ink.copy(alpha = 0.65f)
@@ -268,8 +260,8 @@ private fun SectionTitle(text: String, art: String) {
 }
 
 @Composable
-private fun LevelSection(model: AppModel, modifier: Modifier, onClaim: (level: Int, choice: String, reward: String) -> Unit) {
-    ProgressCard(modifier) {
+private fun LevelSection(model: AppModel, onClaim: (level: Int, choice: String, reward: String) -> Unit) {
+    ProgressCard {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             ProgressArt("progress-level-star", 72.dp)
             Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -339,8 +331,8 @@ private fun RewardCard(model: AppModel, level: Int, onClaim: (level: Int, choice
 }
 
 @Composable
-private fun QuestsSection(model: AppModel, now: Long, modifier: Modifier) {
-    ProgressCard(modifier) {
+private fun QuestsSection(model: AppModel, now: Long) {
+    ProgressCard {
         SectionTitle("This week's quests", "progress-quest-scroll")
         for (quest in model.weeklyQuests) {
             Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -366,8 +358,8 @@ private fun resetText(now: Long): String {
 }
 
 @Composable
-private fun ShopSection(model: AppModel, modifier: Modifier, onBuy: (Progression.Item) -> Unit, onWear: (Progression.Item) -> Unit) {
-    ProgressCard(modifier) {
+private fun ShopSection(model: AppModel, onBuy: (Progression.Item) -> Unit, onWear: (Progression.Item) -> Unit) {
+    ProgressCard {
         SectionTitle("Shell shop", "progress-shop")
         BasicText(
             "A different look for your next walk. Shells buy looks and hints; walking uncovers the map. Tap Wear to switch to anything you own, free looks included.",
@@ -410,7 +402,7 @@ private fun ShopRow(model: AppModel, item: Progression.Item, onBuy: (Progression
                 Tick(Modifier.size(11.dp), Walkies.badgeTeal)
                 BasicText("Equipped", style = Type.caption.copy(fontWeight = FontWeight.SemiBold, color = Walkies.badgeTeal))
             }
-            // Owned looks are worn from here too, not only from the wardrobe below.
+            // Owned looks are worn from here too, not only from the Wardrobe.
             owned && group != null -> BasicText(
                 "Wear",
                 style = Type.subheadline.copy(fontWeight = FontWeight.Bold, color = Walkies.burnt),
@@ -439,8 +431,8 @@ private fun ShopRow(model: AppModel, item: Progression.Item, onBuy: (Progression
 }
 
 @Composable
-private fun WardrobeSection(model: AppModel, modifier: Modifier, onEquip: (Progression.Item) -> Unit) {
-    ProgressCard(modifier) {
+private fun WardrobeSection(model: AppModel, onEquip: (Progression.Item) -> Unit) {
+    ProgressCard {
         SheetTitle("Your wardrobe")
         BasicText("Tap something you own to wear it.", style = Type.footnote)
         for (group in Progression.Group.entries) {
@@ -475,11 +467,11 @@ private fun WardrobeSection(model: AppModel, modifier: Modifier, onEquip: (Progr
 }
 
 @Composable
-private fun SpyglassSection(model: AppModel, now: Long, modifier: Modifier, onUse: () -> Unit) {
+private fun SpyglassSection(model: AppModel, now: Long, onUse: () -> Unit) {
     val ring = model.activeSpyglassRing
     val city = model.selectedCity
     val hasSecret = city?.stickers?.keys?.any { model.foundStickers[it] == null } == true
-    ProgressCard(modifier, spacing = 12.dp) {
+    ProgressCard(spacing = 12.dp) {
         SectionTitle("Spyglass", "progress-spyglass")
         BasicText("${model.spyglasses} left", style = Type.headline)
         BasicText(
@@ -502,7 +494,7 @@ private fun SpyglassSection(model: AppModel, now: Long, modifier: Modifier, onUs
             val hint = when {
                 city == null -> "Add or select a place on the map first."
                 !hasSecret -> "No unfound secrets in ${city.name}."
-                model.spyglasses <= 0 -> "Pick one up in the shell shop above."
+                model.spyglasses <= 0 -> "Pick one up in the Shop."
                 else -> "Looking in ${city.name}"
             }
             BasicText(hint, style = Type.footnote)

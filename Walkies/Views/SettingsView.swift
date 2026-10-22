@@ -5,7 +5,6 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(Account.self) private var account
     @Environment(SyncEngine.self) private var sync
-    @Environment(\.dismiss) private var dismiss
     @State private var confirmingSignOut = false
     @State private var cantSignOut: String?
     @State private var notUploaded: Int?
@@ -59,14 +58,6 @@ struct SettingsView: View {
                     Text("Account")
                 }
 
-                Section("History") {
-                    NavigationLink {
-                        WalkHistoryView()
-                    } label: {
-                        LabeledContent("Past walks", value: "\(model.walks.count)")
-                    }
-                }
-
                 Section {
                     Toggle("Always on", isOn: $model.alwaysOn)
                 } footer: {
@@ -113,11 +104,6 @@ struct SettingsView: View {
             .background(Color.cream)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
         }
     }
 }

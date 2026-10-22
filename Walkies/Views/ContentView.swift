@@ -1,16 +1,192 @@
 import ChefKit
 import SwiftUI
 
+/// The app once you're in: a tab for each page along the bottom, with the map first.
+/// Sheets that can come up over any tab, and the end-of-walk celebration, present from here.
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @Environment(Account.self) private var account
     @Environment(SyncEngine.self) private var sync
     @Environment(\.scenePhase) private var scenePhase
-    @State private var showingCities = false
-    @State private var showingSettings = false
-    @State private var showingStickers = false
-    @State private var showingProgress = false
-    @State private var openSticker: LoreEntry?
+    @State private var navigation = AppNavigation()
+    /// The recap on screen. Every recap plays from here, once any sheet is out of the way.
+    @State private var shownRecap: WalkRecap?
+
+    var body: some View {
+        @Bindable var navigation = navigation
+
+        TabView(selection: $navigation.tab) {
+            Tab(value: AppNavigation.Tab.map) {
+                MapScreen()
+                    .tint(.burnt)
+            } label: {
+                tabLabel("Map", art: "icon-map", tab: .map)
+            }
+            Tab(value: AppNavigation.Tab.secrets) {
+                StickerBookView()
+                    .tint(.burnt)
+            } label: {
+                tabLabel("Secrets", art: "icon-book", tab: .secrets)
+            }
+            Tab(value: AppNavigation.Tab.progress) {
+                ProgressPage()
+                    .tint(.burnt)
+            } label: {
+                tabLabel("Progress", art: "progress-shell", tab: .progress)
+            }
+            // The orange badge, like the dot on the shells chip, while a level-up reward waits.
+            .badge(model.pendingPicks.count)
+            Tab(value: AppNavigation.Tab.walks) {
+                NavigationStack { WalkHistoryView() }
+                    .tint(.burnt)
+            } label: {
+                tabLabel("Walks", art: "icon-walk", tab: .walks)
+            }
+            Tab(value: AppNavigation.Tab.settings) {
+                SettingsView()
+                    .tint(.burnt)
+            } label: {
+                tabLabel("Settings", art: "icon-gear", tab: .settings)
+            }
+        }
+        .tint(.walkiesOrange)
+        .environment(navigation)
+        .alert("Team membership changed", isPresented: Binding(get: { model.teamNotice != nil }, set: { if !$0 { model.teamNotice = nil } })) {
+            Button("OK") { model.teamNotice = nil }
+        } message: { Text(model.teamNotice ?? "") }
+        .sheet(isPresented: $navigation.showingPlaces, onDismiss: showRecapIfReady) {
+            MapsAndPlacesView()
+        }
+        .sheet(item: $navigation.openSecret, onDismiss: showRecapIfReady) { entry in
+            LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id])
+        }
+        .overlay {
+            // A separate host for the new-sticker pop-up, so it doesn't fight the other sheets.
+            Color.clear
+                .allowsHitTesting(false)
+                .sheet(item: newSticker) { entry in
+                    LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id], isNew: true)
+                }
+        }
+        .sensoryFeedback(.success, trigger: model.stickerQueue.count) { old, new in new > old }
+        .fullScreenCover(item: Binding(get: { shownRecap }, set: { shownRecap = $0; if $0 == nil { model.recap = nil } })) { recap in
+            CelebrationView(
+                recap: recap,
+                others: model.cities.filter { city in !recap.after.contains { $0.id == city.id } },
+                tilted: model.tilted3D
+            )
+            .environment(navigation)
+        }
+        .onChange(of: model.recap?.id, initial: true) {
+            // A cover can't go over a sheet from here. A walk that's just ended waits for
+            // the sheet to close; rewatching one from Walks closes it and plays over the map.
+            if model.recap == nil {
+                shownRecap = nil
+            } else if !sheetOpen {
+                shownRecap = model.recap
+            } else if model.recap?.isRewatch == true {
+                navigation.showingPlaces = false
+                navigation.openSecret = nil
+            }
+        }
+        .sheet(isPresented: Binding(get: { model.pendingTeamInvite != nil }, set: { if !$0 { model.pendingTeamInvite = nil } }), onDismiss: showRecapIfReady) {
+            JoinTeamView(initialCode: model.pendingTeamInvite ?? "")
+        }
+        .task { await account.refreshProfile() }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(180)) } catch { return }
+                await sync.sync()
+            }
+        }
+        .sensoryFeedback(.success, trigger: model.revealCount)
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            if phase == .background { model.saveNow(waiting: true) }
+            if phase == .active {
+                model.placeYouOnNextFix = true
+                model.finishStaleAutoWalk()
+                model.refreshNeighbours()
+                sync.schedule()
+            }
+        }
+    }
+
+    private func tabLabel(_ title: String, art: String, tab: AppNavigation.Tab) -> some View {
+        Label {
+            Text(title)
+        } icon: {
+            Image(uiImage: TabArt.icon(art, selected: navigation.tab == tab))
+                .renderingMode(.original)
+        }
+    }
+
+    private var sheetOpen: Bool {
+        navigation.showingPlaces || navigation.openSecret != nil || model.pendingTeamInvite != nil
+    }
+
+    /// Plays a recap that arrived while a sheet was up, now it's gone.
+    private func showRecapIfReady() {
+        guard !sheetOpen, shownRecap == nil, let recap = model.recap else { return }
+        shownRecap = recap
+    }
+
+    /// The first sticker waiting to pop up. Closing it moves on to the next.
+    private var newSticker: Binding<LoreEntry?> {
+        Binding {
+            model.stickerQueue.first
+        } set: { value in
+            if value == nil, !model.stickerQueue.isEmpty {
+                model.stickerQueue.removeFirst()
+            }
+        }
+    }
+}
+
+/// The app's own art for the tab bar, in colour rather than as a silhouette, shrunk to
+/// tab size. The tabs you're not on are faded, and the selected one's title goes orange.
+enum TabArt {
+    private static var cache: [String: UIImage] = [:]
+
+    static func icon(_ name: String, selected: Bool) -> UIImage {
+        let key = "\(name)-\(selected)"
+        if let cached = cache[key] { return cached }
+        guard let art = UIImage(named: name) else { return UIImage() }
+        let size = CGSize(width: 28, height: 28)
+        let fit = min(size.width / art.size.width, size.height / art.size.height)
+        let drawn = CGSize(width: art.size.width * fit, height: art.size.height * fit)
+        let image = UIGraphicsImageRenderer(size: size).image { _ in
+            art.draw(
+                in: CGRect(x: (size.width - drawn.width) / 2, y: (size.height - drawn.height) / 2, width: drawn.width, height: drawn.height),
+                blendMode: .normal, alpha: selected ? 1 : 0.55
+            )
+        }.withRenderingMode(.alwaysOriginal)
+        cache[key] = image
+        return image
+    }
+
+    /// The tab bar in cream, with the reward badge in the app's orange.
+    static func styleTabBar() {
+        let appearance = UITabBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = UIColor(Color.cream)
+        for layout in [appearance.stackedLayoutAppearance, appearance.inlineLayoutAppearance, appearance.compactInlineLayoutAppearance] {
+            layout.normal.titleTextAttributes = [.foregroundColor: UIColor(Color.ink.opacity(0.6))]
+            layout.selected.titleTextAttributes = [.foregroundColor: UIColor.walkiesOrange]
+            layout.normal.badgeBackgroundColor = .walkiesOrange
+            layout.selected.badgeBackgroundColor = .walkiesOrange
+        }
+        UITabBar.appearance().standardAppearance = appearance
+        UITabBar.appearance().scrollEdgeAppearance = appearance
+    }
+}
+
+/// The map with the clouds over it, the chips top left, and the walk controls along
+/// the bottom, above the tab bar.
+struct MapScreen: View {
+    @Environment(AppModel.self) private var model
+    @Environment(AppNavigation.self) private var navigation
+    @Environment(\.scenePhase) private var scenePhase
     @State private var focus = MapFocusRequest()
     @State private var mapHandle = MapHandle()
     /// A suburb next door you've tapped, waiting for you to confirm adding it.
@@ -20,8 +196,6 @@ struct ContentView: View {
     @State private var addingError: String?
     /// Where the buttons over the map are, so the neighbour labels keep out from under them.
     @State private var buttonFrames: [String: CGRect] = [:]
-    /// The recap on screen. Every recap plays from here, once any sheet is out of the way.
-    @State private var shownRecap: WalkRecap?
 
     var body: some View {
         FogMapView(
@@ -35,7 +209,7 @@ struct ContentView: View {
             tilted: model.tilted3D,
             handle: mapHandle,
             stickers: stickerPins,
-            onSelectSticker: { openSticker = LoreLibrary.entry(id: $0) },
+            onSelectSticker: { navigation.openSecret = LoreLibrary.entry(id: $0) },
             neighbours: addingStatus == nil ? model.neighbours : [],
             onPickNeighbour: { pickedNeighbour = $0 },
             buttons: Array(buttonFrames.values)
@@ -49,22 +223,20 @@ struct ContentView: View {
                 .frame(height: 100)
                 .allowsHitTesting(false)
         }
+        // Edge to edge, under the status bar and the tab bar (which floats over it on
+        // newer iOS). MapKit keeps its legal link inside the safe area, above the tabs.
         .ignoresSafeArea()
         .safeAreaInset(edge: .top) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 8) {
-                    PlaceChip(city: model.selectedCity, secrets: secretsCount) { showingCities = true }
-                    ShellsChip { showingProgress = true }
+                    PlaceChip(city: model.selectedCity, secrets: secretsCount) { navigation.showingPlaces = true }
+                    ShellsChip { navigation.showProgress(.level) }
                 }
                 .mapButton("top leading", in: $buttonFrames)
                 Spacer(minLength: 12)
-                VStack(spacing: 10) {
-                    HexBadge(icon: .art("icon-gear"), label: "Settings") { showingSettings = true }
-                    HexBadge(icon: .art("icon-book"), label: "Secrets") { showingStickers = true }
-                    // Long-press: a screenshot of the map and a voice note, straight away.
-                    HexBadge(icon: .art("icon-idea"), label: "Suggest a feature", onLongPress: { ChefKit.report() }) {
-                        ChefKit.present()
-                    }
+                // Long-press: a screenshot of the map and a voice note, straight away.
+                HexBadge(icon: .art("icon-idea"), label: "Suggest a feature", onLongPress: { ChefKit.report() }) {
+                    ChefKit.present()
                 }
                 .mapButton("top trailing", in: $buttonFrames)
             }
@@ -75,7 +247,7 @@ struct ContentView: View {
                 if model.secretsAlreadyWalked > 0 {
                     NewSecretsBadge(count: model.secretsAlreadyWalked) {
                         model.secretsAlreadyWalked = 0
-                        showingStickers = true
+                        navigation.tab = .secrets
                     } onClose: {
                         model.secretsAlreadyWalked = 0
                     }
@@ -94,7 +266,8 @@ struct ContentView: View {
             }
             .animation(.snappy, value: model.secretsAlreadyWalked > 0)
             .padding(.horizontal)
-            .padding(.bottom, 8)
+            // Clear of MapKit's legal link along the bottom of the map.
+            .padding(.bottom, 26)
         }
         .overlay {
             if let addingStatus {
@@ -120,64 +293,11 @@ struct ContentView: View {
         } message: { place in
             Text("\(place.kind.capitalized) · \(Format.area(place.area)). It'll go under the clouds next to your other places, and any walks you've already done there count.")
         }
-        .alert("Team membership changed", isPresented: Binding(get: { model.teamNotice != nil }, set: { if !$0 { model.teamNotice = nil } })) {
-            Button("OK") { model.teamNotice = nil }
-        } message: { Text(model.teamNotice ?? "") }
         .alert("Couldn't add it", isPresented: Binding(get: { addingError != nil }, set: { if !$0 { addingError = nil } })) {
             Button("OK") {}
         } message: {
             Text(addingError ?? "")
         }
-        .sheet(isPresented: $showingCities, onDismiss: showRecapIfReady) {
-            MapsAndPlacesView()
-        }
-        .sheet(isPresented: $showingSettings, onDismiss: showRecapIfReady) {
-            SettingsView()
-        }
-        .sheet(isPresented: $showingProgress, onDismiss: showRecapIfReady) {
-            ProgressionSheet()
-        }
-        .sheet(isPresented: $showingStickers, onDismiss: showRecapIfReady) {
-            StickerBookView()
-        }
-        .sheet(item: $openSticker, onDismiss: showRecapIfReady) { entry in
-            LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id])
-        }
-        .overlay {
-            // A separate host for the new-sticker pop-up, so it doesn't fight the other sheets.
-            Color.clear
-                .allowsHitTesting(false)
-                .sheet(item: newSticker) { entry in
-                    LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id], isNew: true)
-                }
-        }
-        .sensoryFeedback(.success, trigger: model.stickerQueue.count) { old, new in new > old }
-        .fullScreenCover(item: Binding(get: { shownRecap }, set: { shownRecap = $0; if $0 == nil { model.recap = nil } })) { recap in
-            CelebrationView(
-                recap: recap,
-                others: model.cities.filter { city in !recap.after.contains { $0.id == city.id } },
-                tilted: model.tilted3D
-            )
-        }
-        .onChange(of: model.recap?.id, initial: true) {
-            // A cover can't go over a sheet from here. A walk that's just ended waits for
-            // the sheet to close; rewatching one from Settings closes it and plays over the map.
-            if model.recap == nil {
-                shownRecap = nil
-            } else if !sheetOpen {
-                shownRecap = model.recap
-            } else if model.recap?.isRewatch == true {
-                showingCities = false
-                showingSettings = false
-                showingProgress = false
-                showingStickers = false
-                openSticker = nil
-            }
-        }
-        .sheet(isPresented: Binding(get: { model.pendingTeamInvite != nil }, set: { if !$0 { model.pendingTeamInvite = nil } }), onDismiss: showRecapIfReady) {
-            JoinTeamView(initialCode: model.pendingTeamInvite ?? "")
-        }
-        .task { await account.refreshProfile() }
         .task {
             // `-perfRun`: fly the map about and print how smoothly it drew.
             if PerfRun.requested { await PerfRun(handle: mapHandle, model: model).run() }
@@ -186,29 +306,14 @@ struct ContentView: View {
             // Just above the Maps logo, clear of the chips and buttons.
             if PerfOverlay.requested { PerfOverlay().padding(.leading, 10).padding(.bottom, 32) }
         }
-        .task(id: scenePhase) {
-            guard scenePhase == .active else { return }
-            while !Task.isCancelled {
-                do { try await Task.sleep(for: .seconds(180)) } catch { return }
-                await sync.sync()
-            }
-        }
-        .sensoryFeedback(.success, trigger: model.revealCount)
         .onChange(of: scenePhase, initial: true) { _, phase in
-            if phase == .background { model.saveNow(waiting: true) }
-            if phase == .active {
-                // Open on where you are, in whichever of your places that is.
-                focus.send(.arrive)
-                model.placeYouOnNextFix = true
-                model.finishStaleAutoWalk()
-                model.refreshNeighbours()
-                sync.schedule()
-            }
+            // Open on where you are, in whichever of your places that is.
+            if phase == .active { focus.send(.arrive) }
         }
     }
 }
 
-extension ContentView {
+extension MapScreen {
     /// Fetches a neighbouring suburb's streets and adds it on the world grid.
     private func add(_ place: PlaceResult) {
         addingStatus = "Getting \(place.name) ready…"
@@ -220,16 +325,6 @@ extension ContentView {
             }
             addingStatus = nil
         }
-    }
-
-    private var sheetOpen: Bool {
-        showingCities || showingSettings || showingProgress || showingStickers || openSticker != nil || model.pendingTeamInvite != nil
-    }
-
-    /// Plays a recap that arrived while a sheet was up, now it's gone.
-    private func showRecapIfReady() {
-        guard !sheetOpen, shownRecap == nil, let recap = model.recap else { return }
-        shownRecap = recap
     }
 
     private var secretsCount: (found: Int, total: Int)? {
@@ -251,17 +346,6 @@ extension ContentView {
     /// Tiles uncovered on this walk, for the honeycomb that shows while you drag the map.
     private var walkTiles: Set<CloudField.Tile> {
         Set(model.cities.flatMap { city in (model.freshTiles[city.id] ?? []).map { CloudField.Tile(grid: city.grid, hex: $0) } })
-    }
-
-    /// The first sticker waiting to pop up. Closing it moves on to the next.
-    private var newSticker: Binding<LoreEntry?> {
-        Binding {
-            model.stickerQueue.first
-        } set: { value in
-            if value == nil, !model.stickerQueue.isEmpty {
-                model.stickerQueue.removeFirst()
-            }
-        }
     }
 }
 

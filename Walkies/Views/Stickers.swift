@@ -56,10 +56,9 @@ struct StickerArt: View {
 
 struct StickerBookView: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+    @Environment(AppNavigation.self) private var navigation
     @AppStorage("secretsBookSort") private var sort = SecretsBook.Sort.nearest
     @AppStorage("secretsBookFilter") private var filter = SecretsBook.Filter.all
-    @State private var open: LoreEntry?
     @State private var visibleCount = 6
     @State private var expandedAreas: Set<String> = []
 
@@ -139,17 +138,11 @@ struct StickerBookView: View {
                         Label("Sort and filter", systemImage: "line.3.horizontal.decrease")
                     }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
             }
             .onChange(of: sort) { visibleCount = 6 }
             .onChange(of: filter) { visibleCount = 6 }
             .onChange(of: currentAreaName, initial: true) {
                 if let currentAreaName { expandedAreas.insert(currentAreaName) }
-            }
-            .sheet(item: $open) { entry in
-                LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id])
             }
         }
     }
@@ -208,7 +201,7 @@ struct StickerBookView: View {
                     ForEach(area.entries) { entry in
                         let isFound = model.foundStickers[entry.id] != nil
                         Button {
-                            open = entry
+                            navigation.openSecret = entry
                         } label: {
                             StickerTile(entry: entry, found: isFound)
                         }

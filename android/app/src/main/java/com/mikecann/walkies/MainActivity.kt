@@ -14,7 +14,19 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -38,9 +50,13 @@ import com.mikecann.walkies.ui.WalkHistoryScreen
 import com.mikecann.walkies.ui.AddPlaceScreen
 import com.mikecann.walkies.ui.MapScreen
 import com.mikecann.walkies.ui.PlacesScreen
+import com.mikecann.walkies.ui.AppNavigation
+import com.mikecann.walkies.ui.AppTab
+import com.mikecann.walkies.ui.ProgressPage
 import com.mikecann.walkies.ui.ProgressSection
-import com.mikecann.walkies.ui.ProgressionSheet
-import com.mikecann.walkies.ui.SettingsSheet
+import com.mikecann.walkies.ui.SettingsPage
+import com.mikecann.walkies.ui.TabBar
+import com.mikecann.walkies.ui.Walkies
 import com.mikecann.walkies.ui.SetupScreen
 import com.mikecann.walkies.ui.SignInProvider
 import com.mikecann.walkies.ui.SignInScreen
@@ -56,15 +72,13 @@ import java.util.UUID
 class MainActivity : ComponentActivity() {
     private val app get() = application as WalkiesApplication
 
-    private enum class Screen { Map, FirstRun, FixPermissions, Settings, Places, AddPlace, Secrets, History, WalkDetail }
+    /** The tabs, or something full-screen over them: the setup, or your places. */
+    private enum class Screen { Tabs, FirstRun, FixPermissions, Places, AddPlace }
 
-    private var screen by mutableStateOf(Screen.Map)
-    /** The walk open in walk history. */
+    private var screen by mutableStateOf(Screen.Tabs)
+    private val navigation = AppNavigation()
+    /** The walk open in the Walks tab. */
     private var walkDetail by mutableStateOf<UUID?>(null)
-    /** The progression sheet, and where it opened, while it's up. */
-    private var progress by mutableStateOf<ProgressSection?>(null)
-    /** Opened from the celebration's "Level up", so it sits over the celebration. */
-    private var progressOverCelebration = false
     /** A secret being read again: from a pin, the book, a past walk or the celebration. */
     private var openSecret by mutableStateOf<LoreEntry?>(null)
     /** Bumps whenever permissions might have changed, so the warnings check again. */
@@ -100,7 +114,7 @@ class MainActivity : ComponentActivity() {
         stopListening = app.account.listen {
             // Signed in: the setup comes next if it hasn't been done (signing out undoes it).
             if (app.account.isSignedIn && !app.prefs.setupDone) screen = Screen.FirstRun
-            if (!app.account.isSignedIn) screen = Screen.Map
+            if (!app.account.isSignedIn) screen = Screen.Tabs
         }
         setContent {
             @Suppress("UNUSED_EXPRESSION") permissionsRevision
@@ -131,105 +145,21 @@ class MainActivity : ComponentActivity() {
                 onLocationAnswered = { app.tracker.permissionAnswered() },
                 onDone = ::finishSetup,
             )
-            Screen.Settings -> {
-                BackHandler { screen = Screen.Map }
-                @Suppress("UNUSED_VARIABLE") val syncRevision = rememberRevision(app.sync::listen)
-                @Suppress("UNUSED_VARIABLE") val modelRevision = rememberRevision(app.model::listen)
-                val sync = app.sync
-                SettingsSheet(
-                    account = AccountRows(
-                        signedInAs = app.account.displayName ?: "you",
-                        email = app.account.email,
-                        sync = syncText(sync.status, sync.waiting, sync.lastSynced),
-                        syncing = sync.status == com.mikecann.walkies.sync.SyncEngine.Status.Syncing,
-                        waiting = sync.waiting,
-                        walking = app.model.activeWalk != null,
-                    ),
-                    onSyncNow = { app.scope.launch { app.sync.sync() } },
-                    onSignOut = {
-                        screen = Screen.Map
-                        app.signOut()
-                    },
-                    alwaysOn = app.model.alwaysOn,
-                    onAlwaysOn = {
-                        app.model.alwaysOn = it
-                        permissionsRevision++
-                    },
-                    locationWarning = app.model.alwaysOn && !Permissions.backgroundLocation(this),
-                    onOpenSettings = ::openSettings,
-                    permissionsMissing = Permissions.anythingMissing(this),
-                    onFixPermissions = { screen = Screen.FixPermissions },
-                    walkCount = app.model.walks.size,
-                    onShowHistory = { screen = Screen.History },
-                    onClose = { screen = Screen.Map },
-                )
-            }
-            Screen.History -> {
-                BackHandler { screen = Screen.Settings }
-                WalkHistoryScreen(
-                    app.model,
-                    onOpen = {
-                        walkDetail = it.id
-                        screen = Screen.WalkDetail
-                    },
-                    onBack = { screen = Screen.Settings },
-                )
-            }
-            Screen.WalkDetail -> {
-                BackHandler { screen = Screen.History }
-                val id = walkDetail
-                if (id == null) {
-                    LaunchedEffect(Unit) { screen = Screen.History }
-                } else {
-                    WalkDetailScreen(
-                        app.model, id,
-                        // Rewatching closes Settings and plays over the map, as on the iPhone.
-                        onWatch = {
-                            app.model.replay(it)
-                            screen = Screen.Map
-                        },
-                        onOpenSecret = { openSecret = it },
-                        onBack = { screen = Screen.History },
-                    )
-                }
-            }
-            Screen.Secrets -> {
-                BackHandler { screen = Screen.Map }
-                SecretsBookScreen(app.model, onOpen = { openSecret = it }, onClose = { screen = Screen.Map })
-            }
             Screen.Places -> {
-                BackHandler { screen = Screen.Map }
-                PlacesScreen(app.model, onAddPlace = { screen = Screen.AddPlace }, onClose = { screen = Screen.Map })
+                BackHandler { screen = Screen.Tabs }
+                PlacesScreen(app.model, onAddPlace = { screen = Screen.AddPlace }, onClose = { screen = Screen.Tabs })
             }
             Screen.AddPlace -> {
                 BackHandler { screen = Screen.Places }
-                AddPlaceScreen(app.model, app.scope, onAdded = { screen = Screen.Map }, onBack = { screen = Screen.Places })
+                AddPlaceScreen(app.model, app.scope, onAdded = { screen = Screen.Tabs }, onBack = { screen = Screen.Places })
             }
-            Screen.Map -> MapScreen(
-                app.model,
-                app.tracker,
-                alwaysOnWarning = alwaysOnWarning(),
-                name = app.account.displayName,
-                picture = app.account.picture,
-                scope = app.scope,
-                onOpenSettings = ::openSettings,
-                onShowSettings = { screen = Screen.Settings },
-                onShowPlaces = { screen = Screen.Places },
-                onFixPermissions = { screen = Screen.FixPermissions },
-                onShowSecrets = { screen = Screen.Secrets },
-                onShowProgress = {
-                    progressOverCelebration = false
-                    progress = ProgressSection.Level
-                },
-                onOpenSecret = { openSecret = it },
-            )
+            Screen.Tabs -> Tabs()
         }
         if (screen == Screen.FixPermissions) BackHandler { finishSetup() }
 
-        // The celebration plays over the map. One that's ready while another screen's
-        // open, or the progression sheet, waits for you to come back to the map.
+        // The celebration plays over whichever tab's showing, as the iPhone's cover does.
         val recap = app.model.recap
-        val celebrating = recap != null && screen == Screen.Map && (progress == null || progressOverCelebration)
+        val celebrating = recap != null && screen == Screen.Tabs
         if (recap != null && celebrating) {
             key(recap.id, recap.isRewatch) {
                 val model = app.model
@@ -239,23 +169,14 @@ class MainActivity : ComponentActivity() {
                     recap, others,
                     style = equipped.celebration, clouds = equipped.clouds,
                     endingXP = model.xp, hasReward = model.pendingPicks.isNotEmpty(),
+                    // Over to the progress tab's rewards, with the map under it when you come back.
                     onReward = {
-                        progressOverCelebration = true
-                        progress = ProgressSection.Level
+                        navigation.showProgress(ProgressSection.Level)
+                        model.dismissRecap()
                     },
                     onSecret = { openSecret = it },
                     onDone = model::dismissRecap,
                 )
-            }
-        }
-        progress?.let { section ->
-            if (screen == Screen.Map) {
-                key(section) {
-                    ProgressionSheet(app.model, section, onClose = {
-                        progress = null
-                        progressOverCelebration = false
-                    })
-                }
             }
         }
 
@@ -279,6 +200,103 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * The pages, with the tab bar along the bottom. The map stays underneath the others,
+     * so it doesn't load again or lose its place; each page keeps its scroll position.
+     */
+    @androidx.compose.runtime.Composable
+    private fun Tabs() {
+        val tab = navigation.tab
+        val pages = rememberSaveableStateHolder()
+        // Back from another tab goes to the map; from a walk, back to the list.
+        if (tab == AppTab.Walks && walkDetail != null) BackHandler { walkDetail = null }
+        else if (tab != AppTab.Map) BackHandler { navigation.showMap() }
+
+        Column(Modifier.fillMaxSize().background(Walkies.cream)) {
+            // The tab bar looks after the phone's navigation bar, so the pages don't.
+            Box(Modifier.weight(1f).fillMaxWidth().consumeWindowInsets(WindowInsets.navigationBars)) {
+                MapScreen(
+                    app.model,
+                    app.tracker,
+                    alwaysOnWarning = alwaysOnWarning(),
+                    name = app.account.displayName,
+                    picture = app.account.picture,
+                    scope = app.scope,
+                    active = tab == AppTab.Map,
+                    onOpenSettings = ::openSettings,
+                    onShowPlaces = { screen = Screen.Places },
+                    onFixPermissions = { screen = Screen.FixPermissions },
+                    onShowSecrets = { navigation.tab = AppTab.Secrets },
+                    onShowProgress = { navigation.showProgress(ProgressSection.Level) },
+                    onOpenSecret = { openSecret = it },
+                )
+                if (tab != AppTab.Map) {
+                    // Taps on the page stop here rather than reaching the map underneath.
+                    Box(Modifier.fillMaxSize().clickable(remember { MutableInteractionSource() }, indication = null) {}) {
+                        val page = if (tab == AppTab.Walks && walkDetail != null) "walk" else tab.name
+                        pages.SaveableStateProvider(page) { Page(tab) }
+                    }
+                }
+            }
+            TabBar(tab, rewardWaiting = app.model.pendingPicks.isNotEmpty()) { navigation.tab = it }
+        }
+    }
+
+    @androidx.compose.runtime.Composable
+    private fun Page(tab: AppTab) {
+        when (tab) {
+            AppTab.Map -> {}
+            AppTab.Secrets -> SecretsBookScreen(app.model, onOpen = { openSecret = it })
+            AppTab.Progress -> ProgressPage(app.model, navigation.progressSection, onSection = { navigation.progressSection = it })
+            AppTab.Walks -> {
+                val id = walkDetail
+                if (id == null) {
+                    WalkHistoryScreen(app.model, onOpen = { walkDetail = it.id })
+                } else {
+                    WalkDetailScreen(
+                        app.model, id,
+                        // Plays over the map, so go there first, as on the iPhone.
+                        onWatch = {
+                            navigation.showMap()
+                            app.model.replay(it)
+                        },
+                        onOpenSecret = { openSecret = it },
+                        onBack = { walkDetail = null },
+                    )
+                }
+            }
+            AppTab.Settings -> {
+                @Suppress("UNUSED_VARIABLE") val syncRevision = rememberRevision(app.sync::listen)
+                val sync = app.sync
+                SettingsPage(
+                    account = AccountRows(
+                        signedInAs = app.account.displayName ?: "you",
+                        email = app.account.email,
+                        sync = syncText(sync.status, sync.waiting, sync.lastSynced),
+                        syncing = sync.status == com.mikecann.walkies.sync.SyncEngine.Status.Syncing,
+                        waiting = sync.waiting,
+                        walking = app.model.activeWalk != null,
+                    ),
+                    onSyncNow = { app.scope.launch { app.sync.sync() } },
+                    onSignOut = {
+                        screen = Screen.Tabs
+                        navigation.showMap()
+                        app.signOut()
+                    },
+                    alwaysOn = app.model.alwaysOn,
+                    onAlwaysOn = {
+                        app.model.alwaysOn = it
+                        permissionsRevision++
+                    },
+                    locationWarning = app.model.alwaysOn && !Permissions.backgroundLocation(this),
+                    onOpenSettings = ::openSettings,
+                    permissionsMissing = Permissions.anythingMissing(this),
+                    onFixPermissions = { screen = Screen.FixPermissions },
+                )
+            }
+        }
+    }
+
     /** Like the iPhone's, short: why walks won't be noticed with the app closed. */
     private fun alwaysOnWarning(): String? = when {
         !app.model.alwaysOn || !Permissions.location(this) -> null
@@ -292,7 +310,7 @@ class MainActivity : ComponentActivity() {
             app.prefs.setupDone = true
             app.model.alwaysOn = true
         }
-        screen = Screen.Map
+        screen = Screen.Tabs
         permissionsRevision++
         app.refreshTracking()
     }
@@ -458,7 +476,7 @@ class MainActivity : ComponentActivity() {
         }
         if (intent.hasExtra("setupDone")) {
             app.prefs.setupDone = intent.getBooleanExtra("setupDone", true)
-            if (app.prefs.setupDone && screen == Screen.FirstRun) screen = Screen.Map
+            if (app.prefs.setupDone && screen == Screen.FirstRun) screen = Screen.Tabs
         }
         if (intent.hasExtra("alwaysOn")) app.model.alwaysOn = intent.getBooleanExtra("alwaysOn", true)
         // A secret's notification: it pops up anyway if it's still waiting to, otherwise open it.
