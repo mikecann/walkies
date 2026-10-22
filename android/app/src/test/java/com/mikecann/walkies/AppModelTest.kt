@@ -137,6 +137,29 @@ class AppModelTest {
         assertTrue(next.points.first().coordinate.distance(coordinate(place, 2900.0)) < 1)
         assertEquals(SwiftDate.epoch(now + arrivalTime), next.startedAt)
         assertTrue(next.points.all { it.coordinate.distance(coordinate(place, 2900.0)) < 250 })
+        assertTrue(next.points.zipWithNext().all { (a, b) -> a.time < b.time })
+    }
+
+    @Test
+    fun whileTheStepCountComesInTheNextWalkStillStartsWhereYouArrived() {
+        val (store, _) = tempStore()
+        val place = city(origin = Coordinate(-33.65, 45.678))
+        store.save(listOf(place))
+        var reply: ((Int?) -> Unit)? = null
+        val model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = clock, stepQuery = { _, _, done -> reply = done })
+        for (i in 0..8) visit(model, place, i * 50.0, i * 40.0)
+        val old = model.activeWalk!!
+        val arrivalTime = old.points.last().time - now + 519
+        visit(model, place, 2900.0, arrivalTime, speed = 1.2)
+        visit(model, place, 2950.0, arrivalTime + 40)
+        assertTrue(model.walks.isEmpty())
+        reply!!(100)
+        assertEquals(old.id, model.walks.single().id)
+        assertEquals(100, model.walks.single().steps)
+        visit(model, place, 3000.0, arrivalTime + 80)
+        val next = model.activeWalk!!
+        assertTrue(next.points.first().coordinate.distance(coordinate(place, 2900.0)) < 1)
+        assertEquals(SwiftDate.epoch(now + arrivalTime), next.startedAt)
     }
 
     @Test

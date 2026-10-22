@@ -53,6 +53,27 @@ struct AlwaysOnRideTests {
         #expect(next.points.first == arrival)
         #expect(next.startedAt == Date(timeIntervalSince1970: arrival.time))
         #expect(next.points.allSatisfy { $0.coordinate.distance(to: arrival.coordinate) < 250 })
+        #expect(zip(next.points, next.points.dropFirst()).allSatisfy { $0.time < $1.time })
+    }
+
+    @Test func whileTheStepCountComesInTheNextWalkStillStartsWhereYouArrived() async throws {
+        let store = Store(root: URL.temporaryDirectory.appending(path: "WalkiesRide-\(UUID())"))
+        defer { store.wipe() }
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true, stepQuery: { _, _ in 100 })
+        await model.waitForHistory()
+        let old = try startWalk(model, at: Date.now.timeIntervalSince1970)
+        let last = try #require(old.points.last)
+        let arrival = fix(east: 2900, at: last.time + 519, speed: 1.2)
+        model.recordAlwaysOnForTesting(arrival)
+        model.recordAlwaysOnForTesting(fix(east: 2950, at: arrival.time + 40))
+        #expect(model.walks.isEmpty)
+        for _ in 0..<100 where model.activeWalk != nil { await Task.yield() }
+        #expect(model.walks.first?.id == old.id)
+        #expect(model.walks.first?.steps == 100)
+        model.recordAlwaysOnForTesting(fix(east: 3000, at: arrival.time + 80))
+        let next = try #require(model.activeWalk)
+        #expect(next.points.first == arrival)
+        #expect(next.startedAt == Date(timeIntervalSince1970: arrival.time))
     }
 
     @Test(arguments: [true, false])

@@ -134,6 +134,9 @@ final class AppModel {
     @ObservationIgnored private let servicesEnabled: Bool
     @ObservationIgnored private var tracer = CoverageTracer()
     @ObservationIgnored private var rodeSinceLastPoint = false
+    /// Where you got off the ride that's ending the current walk. The next walk picks
+    /// up from here.
+    @ObservationIgnored private var rideArrival: TrackPoint?
     @ObservationIgnored private var shapes: [UUID: BoundaryShape] = [:]
     @ObservationIgnored private var lastSave = Date.distantPast
     @ObservationIgnored private var startWhenAllowed = false
@@ -674,13 +677,18 @@ final class AppModel {
             rodeSinceLastPoint = true
         }
         let anchor = tracer.anchor
-        let step = tracer.add(point)
+        var step = tracer.add(point)
         guard !step.samples.isEmpty else { return }
         // Only decided once you're walking on from the new spot, so one bad fix can't
         // end a walk.
         if let last = activeWalk?.points.last, let anchor, rode(from: last, to: anchor) {
+            rideArrival = anchor
             finishAutoWalk()
+            // Still waiting on its step count. The next walk starts from the arrival
+            // once that's in.
             if activeWalk != nil { return }
+            // Finishing started the tracer again from the arrival, so this is the same step.
+            step = tracer.add(point)
         }
         if activeWalk == nil {
             activeWalk = Walk(startedAt: Date(timeIntervalSince1970: anchor?.time ?? point.time), newTilesByPlace: [:], newTileHexesByPlace: [:], addedTilesByPlace: [:], automatic: true)
@@ -796,6 +804,8 @@ final class AppModel {
         freshTiles = [:]
         addedTiles = [:]
         tracer = CoverageTracer()
+        if let rideArrival { tracer.restart(from: rideArrival) }
+        rideArrival = nil
         tilesRevision += 1
         // Measure again by today's rules, so walks logged by older versions (or GPS
         // wobble at home) don't get kept as real ones. Tiles already uncovered stay.
@@ -1436,6 +1446,7 @@ final class AppModel {
         tracker.stopAlwaysOn()
         activeWalk = nil
         rodeSinceLastPoint = false
+        rideArrival = nil
         activePath = []
         freshTiles = [:]
         recap = nil

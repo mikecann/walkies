@@ -220,6 +220,8 @@ class AppModel(
 
     private var tracer = CoverageTracer()
     private var rodeSinceLastPoint = false
+    /** Where you got off the ride that's ending the current walk. The next walk picks up from here. */
+    private var rideArrival: TrackPoint? = null
     private val shapes = HashMap<UUID, BoundaryShape>()
     private var lastSave = Double.NEGATIVE_INFINITY
     private var startWhenAllowed = false
@@ -598,14 +600,19 @@ class AppModel(
             rodeSinceLastPoint = true
         }
         val anchor = tracer.anchor
-        val step = tracer.add(point)
+        var step = tracer.add(point)
         if (step.samples.isEmpty()) return
         // Only decided once you're walking on from the new spot, so one bad fix can't
         // end a walk.
         val walkEnd = activeWalk?.points?.lastOrNull()
         if (walkEnd != null && anchor != null && rode(walkEnd, anchor)) {
+            rideArrival = anchor
             finishAutoWalk()
+            // Still waiting on its step count. The next walk starts from the arrival
+            // once that's in.
             if (activeWalk != null) return
+            // Finishing started the tracer again from the arrival, so this is the same step.
+            step = tracer.add(point)
         }
         if (activeWalk == null) {
             activeWalk = Walk(
@@ -713,6 +720,8 @@ class AppModel(
         freshTiles = emptyMap()
         addedTiles = emptyMap()
         tracer = CoverageTracer()
+        tracer.restart(from = rideArrival)
+        rideArrival = null
         tilesRevision++
         // Measure again by today's rules, so walks logged by older versions (or GPS
         // wobble at home) don't get kept as real ones. Tiles already uncovered stay.
@@ -1434,6 +1443,7 @@ class AppModel(
         // Dropped rather than finished, so turning always-on off below can't save it.
         activeWalk = null
         rodeSinceLastPoint = false
+        rideArrival = null
         alwaysOn = false
         settings.setupDone = false
         autoWalkPending = false
