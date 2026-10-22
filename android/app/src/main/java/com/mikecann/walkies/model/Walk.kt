@@ -90,6 +90,9 @@ class CoverageTracer {
     var anchor: TrackPoint? = null
         private set
 
+    /** Carries on from this spot, as if it was the last one that counted. */
+    fun restart(from: TrackPoint?) { anchor = from }
+
     fun add(point: TrackPoint): Step {
         if (point.accuracy < 0 || point.accuracy > MAX_ACCURACY) return Step.none
         // On a bike or in a car: start again from scratch once you're back on foot.

@@ -219,6 +219,9 @@ class AppModel(
     var secretsFound: ((List<LoreEntry>) -> Unit)? = null
 
     private var tracer = CoverageTracer()
+    private var rodeSinceLastPoint = false
+    /** Where you got off the ride that's ending the current walk. The next walk picks up from here. */
+    private var rideArrival: TrackPoint? = null
     private val shapes = HashMap<UUID, BoundaryShape>()
     private var lastSave = Double.NEGATIVE_INFINITY
     private var startWhenAllowed = false
@@ -447,6 +450,7 @@ class AppModel(
         questTileCounts = questTileCounts + (walk.id to fresh.mapValues { it.value.size })
         historyRevision++
         activeWalk = null
+        rodeSinceLastPoint = false
         activePath = emptyList()
         freshTiles = emptyMap()
         addedTiles = emptyMap()
@@ -579,7 +583,8 @@ class AppModel(
 
     /**
      * Always on: a walk starts the moment you're moving on foot and ends once you've
-     * stopped for a while. Only on-foot fixes are kept, so drives don't fill the phone.
+     * stopped for a while or ridden somewhere. Only on-foot fixes are kept, so drives
+     * don't fill the phone.
      */
     private fun recordAlwaysOn(point: TrackPoint) {
         val last = activeWalk?.points?.lastOrNull()
@@ -588,9 +593,27 @@ class AppModel(
             // Leave these fixes out rather than run the next outing onto the end of this one.
             if (activeWalk != null) return
         }
+        // In a car or on a bike, by the motion chip or a trustworthy GPS speed.
+        if (activeWalk != null && (point.wheels == true ||
+                (point.accuracy >= 0 && point.accuracy <= CoverageTracer.MAX_ACCURACY && (point.speed ?: 0.0) > CoverageTracer.MAX_SPEED))
+        ) {
+            rodeSinceLastPoint = true
+        }
         val anchor = tracer.anchor
-        val step = tracer.add(point)
+        var step = tracer.add(point)
         if (step.samples.isEmpty()) return
+        // Only decided once you're walking on from the new spot, so one bad fix can't
+        // end a walk.
+        val walkEnd = activeWalk?.points?.lastOrNull()
+        if (walkEnd != null && anchor != null && rode(walkEnd, anchor)) {
+            rideArrival = anchor
+            finishAutoWalk()
+            // Still waiting on its step count. The next walk starts from the arrival
+            // once that's in.
+            if (activeWalk != null) return
+            // Finishing started the tracer again from the arrival, so this is the same step.
+            step = tracer.add(point)
+        }
         if (activeWalk == null) {
             activeWalk = Walk(
                 startedAt = SwiftDate.epoch(anchor?.time ?: point.time),
@@ -608,6 +631,7 @@ class AppModel(
         var points = walk.points
         if (anchor != null && points.lastOrNull() != anchor) points = points + anchor
         walk = walk.copy(points = points + point)
+        rodeSinceLastPoint = false
         if (autoWalkPending) {
             walk = walk.copy(distance = walk.distance + step.distance)
             if (displacement(walk.points) >= AUTO_WALK_CONFIRM_DISTANCE) {
@@ -624,6 +648,17 @@ class AppModel(
         }
         activeWalk = walk
         saveIfDue()
+    }
+
+    /**
+     * You've turned up somewhere you can't have walked to from the walk's last spot:
+     * too far too fast, or the phone saw you riding in between.
+     */
+    private fun rode(last: TrackPoint, start: TrackPoint): Boolean {
+        val distance = last.coordinate.distance(start.coordinate)
+        if (distance <= CoverageTracer.MAX_GAP) return false
+        val elapsed = start.time - last.time
+        return rodeSinceLastPoint || elapsed <= 0 || distance / elapsed > CoverageTracer.MAX_SPEED
     }
 
     /** How far a pending walk has got from where it started, in metres. */
@@ -680,10 +715,13 @@ class AppModel(
         val fresh = freshTiles
         autoWalkPending = false
         activeWalk = null
+        rodeSinceLastPoint = false
         activePath = emptyList()
         freshTiles = emptyMap()
         addedTiles = emptyMap()
         tracer = CoverageTracer()
+        tracer.restart(from = rideArrival)
+        rideArrival = null
         tilesRevision++
         // Measure again by today's rules, so walks logged by older versions (or GPS
         // wobble at home) don't get kept as real ones. Tiles already uncovered stay.
@@ -1404,6 +1442,8 @@ class AppModel(
         dataGeneration++
         // Dropped rather than finished, so turning always-on off below can't save it.
         activeWalk = null
+        rodeSinceLastPoint = false
+        rideArrival = null
         alwaysOn = false
         settings.setupDone = false
         autoWalkPending = false

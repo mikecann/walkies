@@ -106,6 +106,9 @@ nonisolated struct CoverageTracer: Sendable {
     /// previous fix, so lots of tiny wobbles never add up.
     private(set) var anchor: TrackPoint?
 
+    /// Carries on from this spot, as if it was the last one that counted.
+    mutating func restart(from point: TrackPoint) { anchor = point }
+
     mutating func add(_ point: TrackPoint) -> Step {
         guard point.accuracy >= 0, point.accuracy <= Self.maxAccuracy else { return .none }
         // On a bike or in a car: start again from scratch once you're back on foot.
