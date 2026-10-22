@@ -138,6 +138,14 @@ final class CloudRenderStats {
     var overviewMilliseconds = 0.0
     /// Frames the clouds round tiles clearing were drawn.
     var revealFrames = 0
+    /// When the map was first laid out, and when the overview or a bake first showed on it.
+    var mapShownAt: Double?
+    var firstCloudsAt: Double?
+
+    var firstCloudsMilliseconds: Double? {
+        guard let mapShownAt, let firstCloudsAt else { return nil }
+        return (firstCloudsAt - mapShownAt) * 1000
+    }
 }
 
 /// Keeps the baked clouds on the map. Each frame (driven by the map telling the
@@ -160,11 +168,16 @@ final class CloudRenderStats {
 /// waited for once the camera's still again.
 ///
 /// Under the bake, wherever it doesn't reach (or there isn't one fit to show yet),
-/// the overview: every place's clouds from above, small, made once from the tiles.
-/// So the map's never bare, even zoomed right out where the live Canvas is slow.
-/// Zoomed right in, where the overview would look soft, the live Canvas stands in
-/// instead, as it's quick there. A bake that comes to cover the screen fades in over
-/// whichever it was, and the overview then fades out.
+/// the overview: every place's clouds from above, small, made once from the tiles
+/// (and before the first bake). So the map's never bare.
+///
+/// While the camera moves, that's all: the bake on screen, warped however far it's
+/// stretched (bar to a speck), over the overview however soft, as both cost nothing
+/// a frame and the live Canvas costs a lot. Only once it's still, zoomed in where the
+/// overview's too soft, and with no bake to show at all, does the live Canvas stand
+/// in, for the moment until the sharp bake's done; or before there's an overview. A
+/// bake that comes to cover the screen fades in over whichever it was, and the
+/// overview then fades out.
 final class BakedCloudEngine {
     struct Inputs {
         var field: CloudField
@@ -269,7 +282,7 @@ final class BakedCloudEngine {
 
     private(set) var overview: CloudOverview?
     private var overviewRequests = 0
-    private var overviewAsked: (key: String, theme: String)?
+    private var overviewAsked: (key: String, theme: String, at: Double)?
     /// The overview's pixel budget. Tests make it tiny, to have it too soft to show.
     var overviewPixels = CloudBakery.overviewPixels
 
@@ -357,6 +370,8 @@ final class BakedCloudEngine {
         }
         guard size.width > 0, size.height > 0 else { return }
         let now = CACurrentMediaTime()
+        let stats = CloudRenderStats.shared
+        if stats.mapShownAt == nil { stats.mapShownAt = now }
         let version = handle.cameraVersion
         var changed = version != seenVersion || size != seenSize
         // Measured afresh every tick (once a frame at most), not only when MapKit says
@@ -393,16 +408,20 @@ final class BakedCloudEngine {
                 log?("supersede #\(inFlight.request)")
             }
         }
-        if !baking { ask(projection: projection, size: size, moving: moving, clock: clock, displayScale: displayScale) }
+        // The overview first, as it's what shows until the bake's done, and they'd only
+        // slow each other down; but not for long, should it be slow.
+        let awaitingOverview = front == nil && overview == nil && overviewAsked.map { now - $0.at < BakePolicy.overviewWait } ?? false
+        if !baking, !awaitingOverview { ask(projection: projection, size: size, moving: moving, clock: clock, displayScale: displayScale) }
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let live = present(projection: projection, size: size, now: now)
+        let live = present(projection: projection, size: size, now: now, moving: moving)
         if let map { placeMarker(map: map, projection: projection, inputs: inputs) }
         CATransaction.commit()
         if status.needsLive != live { status.needsLive = live }
-        if live { CloudRenderStats.shared.liveTicks += 1 }
-        if showingOverview, overviewFadeEnds == nil { CloudRenderStats.shared.overviewTicks += 1 }
+        if live { stats.liveTicks += 1 }
+        if showingOverview, overviewFadeEnds == nil { stats.overviewTicks += 1 }
+        if stats.firstCloudsAt == nil, showingFront || (showingOverview && !overviewRoot.isHidden) { stats.firstCloudsAt = now }
 
         // Every frame while anything's moving or fading; otherwise just often enough to
         // notice the drift's due. The map changing wakes it straight away.
@@ -416,26 +435,28 @@ final class BakedCloudEngine {
 
     /// Puts the bake, the overview and the honeycomb on screen as they fit the camera
     /// now. True if the live Canvas has to stand in.
-    private func present(projection: Projection, size: CGSize, now: Double) -> Bool {
+    private func present(projection: Projection, size: CGSize, now: Double, moving: Bool) -> Bool {
         guard let inputs else { return true }
         // The bake on screen, if it's of these places in this look and still shows
         // something like what's on screen: never warped off it, or to a speck.
         let warp = front.flatMap { front -> BakeWarp? in
             guard front.field.places == inputs.field.places, front.theme == inputs.theme,
-                  let warp = BakeWarp(now: projection, frame: front.frame), warp.shows(size: size, now: projection)
+                  let warp = BakeWarp(now: projection, frame: front.frame), warp.shows(size: size, now: projection, moving: moving)
             else { return nil }
             return warp
         }
         let covers = warp?.covers(size: size, now: projection) ?? false
         frontCovers = covers
         // The overview, if it's of these places (a new look can make do with the old
-        // one for the moment it takes) and sharp enough here.
+        // one for the moment it takes): however soft while the camera moves, and once
+        // it's still, sharp enough here or under a bake that shows.
         let placement = overview.flatMap { overview -> OverviewPlacement? in
             guard overview.places == inputs.field.places, overview.image != nil else { return nil }
             return OverviewPlacement(overview: overview.projection, pixels: overview.pixels, now: projection, size: size)
         }
-        let overviewFits = placement.map { !$0.visible || $0.stretch <= BakePolicy.overviewStretch } ?? false
-        var live = !covers && !overviewFits
+        let overviewFits = placement.map { moving || warp != nil || !$0.visible || $0.stretch <= BakePolicy.overviewStretch } ?? false
+        // Never while moving, bar the moment before there's anything else at all.
+        var live = !covers && !overviewFits && (!moving || warp == nil)
 
         if let front, let warp, !live {
             cloudRoot.transform = warp.layerTransform
@@ -570,17 +591,18 @@ final class BakedCloudEngine {
     // MARK: Baking
 
     /// The overview, once for each set of tiles and look, on a thread of its own so it
-    /// never waits behind a bake.
+    /// never waits behind a bake, and behind the main thread and MapKit: it only takes
+    /// a moment, and the first bake waits for it (see `BakePolicy.overviewWait`).
     private func askOverview(_ inputs: Inputs) {
         if let overview, overview.fieldKey == inputs.key, overview.theme == inputs.theme { return }
         if let asked = overviewAsked, asked.key == inputs.key, asked.theme == inputs.theme { return }
-        overviewAsked = (inputs.key, inputs.theme)
+        overviewAsked = (inputs.key, inputs.theme, CACurrentMediaTime())
         overviewRequests += 1
         let id = overviewRequests
         let (field, key, theme, pixels) = (inputs.field, inputs.key, inputs.theme, overviewPixels)
         let clock = inputs.reduceMotion ? 0 : Date.timeIntervalSinceReferenceDate
         log?("ask overview #\(id)")
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             let overview = CloudBakery.overview(field: field, fieldKey: key, theme: theme, clock: clock, pixels: pixels)
             DispatchQueue.main.async { self?.accept(overview, request: id) }
         }

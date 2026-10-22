@@ -226,20 +226,25 @@ nonisolated struct BakeWarp {
         return (q + r, abs(q - r))
     }
 
-    /// Past this much bigger or smaller, a bake isn't shown at all: something else
+    /// Past this much bigger or smaller, a still bake isn't shown at all: the overview
     /// stands in until the next one's ready.
     static let showable = 3.0
+    /// While the map moves, much further: a bake blown up soft or shrunk small for the
+    /// moment the next one takes is hard to see mid-gesture, and far better than the
+    /// live Canvas making every frame late.
+    static let movingShowable = 6.0
 
     /// Whether the bake's worth showing on a screen of `size` now: the middle of the
     /// screen (or low down, if the middle's by the horizon) is on it, and not
-    /// stretched or squashed past `showable`. False for one from a camera that's since
-    /// flown far off, which would otherwise be warped off the screen or to a speck.
-    func shows(size: CGSize, now: Projection) -> Bool {
+    /// stretched or squashed past `showable` (or `movingShowable`). False for one from
+    /// a camera that's since flown far off, which would otherwise be warped off the
+    /// screen or to a speck.
+    func shows(size: CGSize, now: Projection, moving: Bool = false) -> Bool {
         let width = Double(size.width), height = Double(size.height)
         var screen = CGPoint(x: width / 2, y: height / 2)
         if now.isFar(screen, far: BakeFrame.far) { screen.y = height * 0.9 }
         guard let b = unmap(screen), frame.rect.contains(b) else { return false }
-        return looksRight(at: b, stretch: Self.showable)
+        return looksRight(at: b, stretch: moving ? Self.movingShowable : Self.showable)
     }
 
     /// Whether the bake reaches past every edge of a screen of `size` now (bar sky and
@@ -314,9 +319,13 @@ nonisolated enum BakePolicy {
 
     /// How long a bake fades in over whatever stood in for it, and that then fades out.
     static let fade = 0.3
-    /// The overview stands in up to this many screen points to its pixel. Any softer
-    /// and the live clouds do instead: that's zoomed in, where they're quick to draw.
-    static let overviewStretch = 2.0
+    /// Once the map's still, the overview stands in on its own up to this many screen
+    /// points to its pixel. Any softer (zoomed in, with no bake to show at all) and
+    /// the live clouds do, until the sharp bake's done. While the map moves, or under
+    /// a bake that shows, it's drawn however soft.
+    static let overviewStretch = 3.0
+    /// The first bake waits up to this long for the overview to be made, in seconds.
+    static let overviewWait = 1.0
 
     struct Shown: Sendable {
         var frame: BakeFrame

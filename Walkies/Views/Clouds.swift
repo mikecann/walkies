@@ -721,6 +721,29 @@ nonisolated final class CloudSprites: @unchecked Sendable {
         mist = Self.mist(size: 128)
     }
 
+    private init(bases: [CGImage], tops: [CGImage], shadows: [CGImage], eraser: CGImage, mist: CGImage) {
+        self.bases = bases
+        self.tops = tops
+        self.shadows = shadows
+        self.eraser = eraser
+        self.mist = mist
+    }
+
+    /// The tops, eraser and mist shrunk to `pixels` across, for stamping thousands of
+    /// tiny puffs (the overview): drawn from the full-size sprites, Core Graphics reads
+    /// every pixel of them for every puff, however small. The undersides and shadows,
+    /// which tiny puffs don't draw, are left as they are.
+    func shrunk(to pixels: Int) -> CloudSprites {
+        let size = max(2, min(pixels, 384))
+        func shrink(_ image: CGImage) -> CGImage {
+            let context = Self.bitmap(size)
+            context.interpolationQuality = .high
+            context.draw(image, in: CGRect(x: 0, y: 0, width: size, height: size))
+            return context.makeImage() ?? image
+        }
+        return CloudSprites(bases: bases, tops: tops.map(shrink), shadows: shadows, eraser: shrink(eraser), mist: shrink(mist))
+    }
+
     private static func palette(_ theme: String) -> (top: CGColor, alternate: CGColor, edge: CGColor, underside: CGColor) {
         func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> CGColor { CGColor(red: r, green: g, blue: b, alpha: 1) }
         switch theme {

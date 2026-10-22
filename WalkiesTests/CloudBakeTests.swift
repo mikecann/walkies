@@ -240,6 +240,17 @@ struct CloudBakeTests {
         #expect(check(base.zoomed(0.25)).shows == false)
         #expect(check(base.zoomed(4)).shows == false)
         #expect(check(base.zoomed(1 / 2000.0)).shows == false)
+        // While the map moves, stretched or shrunk a good way further, as that's better
+        // than drawing the clouds live; but still not flown off, or to a speck.
+        func moving(_ camera: TestCamera) -> Bool {
+            BakeWarp(now: camera.projection, frame: frame)?.shows(size: camera.size, now: camera.projection, moving: true) ?? false
+        }
+        #expect(moving(base.zoomed(0.25)))
+        #expect(moving(base.zoomed(4)))
+        #expect(moving(base.pan(80, 0)))
+        #expect(!moving(base.pan(3000, 0)))
+        #expect(!moving(base.zoomed(0.1)))
+        #expect(!moving(base.zoomed(1 / 2000.0)))
     }
 
     /// The overview, warped through its turned window, puts every bit of the ground
@@ -287,6 +298,44 @@ struct CloudBakeTests {
         // Looking somewhere else entirely, there's nothing of it to show.
         let away = try #require(OverviewPlacement(overview: overview.projection, pixels: overview.pixels, now: near.pan(50_000, 0).projection, size: near.size))
         #expect(!away.visible)
+    }
+
+    /// The overview of a whole suburb (some 8,000 puffs, as Mike's has) with the real
+    /// sprites is quick: it stamps each puff from a sprite shrunk to its few pixels.
+    /// Drawn from the full-size sprites it took over 2 s in a Debug build in the simulator.
+    @Test func theOverviewOfAWholeSuburbIsQuick() throws {
+        let test = CloudTests()
+        var tiles = Set<Hex>()
+        for q in -45...45 {
+            for r in -45...45 { tiles.insert(test.hex(q: Int32(q), r: Int32(r))) }
+        }
+        let field = CloudField(city: test.city(tiles: tiles, visited: [test.hex(q: 0, r: 0), test.hex(q: 3, r: 2)]))
+        #expect(field.puffs.count > 5000, "\(field.puffs.count) puffs")
+        // The sprites are made once at launch, for the bakes too.
+        _ = CloudSprites.sprites(for: "clouds.classic")
+        var best = Double.infinity
+        var overview: CloudOverview?
+        for _ in 0..<3 {
+            let made = CloudBakery.overview(field: field, fieldKey: "a", theme: "clouds.classic", clock: 0)
+            best = min(best, made.milliseconds)
+            overview = made
+        }
+        let made = try #require(overview)
+        print("Overview of \(field.puffs.count) puffs, \(Int(made.pixels.width)) x \(Int(made.pixels.height)) px: best of 3 \(String(format: "%.0f", best)) ms")
+        #expect(made.image != nil)
+        #expect(Double(made.pixels.width * made.pixels.height) <= CloudBakery.overviewPixels * 1.01)
+        // Well under a second even in a Debug build with the suite running in parallel;
+        // about 0.3 s on its own there, and a fraction of that on a phone in Release.
+        #expect(best < 1000, "took \(best) ms")
+
+        // And it's still the clouds: solid over the middle of the puffs, clear past them.
+        let image = try #require(made.image)
+        let alphas = Alphas(image)
+        let puff = try #require(field.puffs.first { $0.tile.hex == test.hex(q: -20, r: 10) })
+        let cloudy = made.projection.point(puff.centre)
+        #expect(alphas.at(cloudy.x / made.pixels.width, cloudy.y / made.pixels.height) > 200)
+        let clear = made.projection.point(try #require(field.clearings.first).centre)
+        #expect(alphas.at(clear.x / made.pixels.width, clear.y / made.pixels.height) < 100)
     }
 
     // MARK: When to bake
@@ -587,9 +636,11 @@ struct BakedLayerTests {
             camera.centre = MKMapPoint(x: start.centre.x + (target.centre.x - start.centre.x) * t, y: start.centre.y + (target.centre.y - start.centre.y) * t)
             screen.camera = camera
             engine.tick()
-            #expect(engine.status.needsLive || engine.showingOverview || engine.showingFront, "step \(step): bare map")
+            #expect(engine.showingOverview || engine.showingFront, "step \(step): bare map")
+            // Never the live Canvas while the camera moves, once there's an overview.
+            #expect(!engine.status.needsLive, "step \(step): drawn live mid-flight")
             if engine.showingFront, let front = engine.front {
-                #expect(BakeWarp(now: camera.projection, frame: front.frame)?.shows(size: camera.size, now: camera.projection) == true, "step \(step): a bake from far off drawn")
+                #expect(BakeWarp(now: camera.projection, frame: front.frame)?.shows(size: camera.size, now: camera.projection, moving: true) == true, "step \(step): a bake from far off drawn")
             }
             try await Task.sleep(for: .milliseconds(30))
         }
@@ -615,8 +666,10 @@ struct BakedLayerTests {
     }
 
     /// A bake that no longer looks like what's on screen (the camera zoomed well out,
-    /// or panned far off, with the next one not done) isn't drawn: the overview stands
-    /// in, or where that's too soft, the live Canvas.
+    /// or panned far off, with the next one not done): while the camera's moving, it's
+    /// drawn stretched as long as it's on screen at all, over the overview however
+    /// soft, and never the live Canvas. Once it's still, the old bake isn't drawn: the
+    /// overview stands in, or where that's too soft, the live Canvas.
     @Test func aBakeThatNoLongerFitsIsntDrawnOffTheScreen() async throws {
         let field = CloudTests().clearingField().after
         var camera = TestCamera().zoomed(0.1).tipped(40)
@@ -636,13 +689,24 @@ struct BakedLayerTests {
             try await run(engine, for: BakePolicy.fade * 2 + 0.1)
             #expect(engine.showingFront && !engine.showingOverview && !engine.status.needsLive)
 
-            gate.stickNext()
+            gate.stickAll()
             let away = coarse ? camera.pan(300, 0) : camera.zoomed(0.3)
             screen.camera = away
             // As the next frame would: the camera's measured at most once a few milliseconds.
             try await Task.sleep(for: .milliseconds(10))
             engine.tick()
-            #expect(!engine.showingFront, "coarse \(coarse): the old bake shouldn't be drawn")
+            // Just moved: never live.
+            #expect(!engine.status.needsLive, "coarse \(coarse): drawn live while moving")
+            #expect(engine.showingOverview, "coarse \(coarse): the overview under it while moving, however soft")
+            if coarse {
+                #expect(!engine.showingFront, "panned clean off it, the old bake shouldn't be drawn")
+            } else {
+                #expect(engine.showingFront, "zoomed out, the old bake should be drawn shrunk while moving")
+            }
+
+            // Still, with the next bake not done.
+            try await run(engine, for: BakePolicy.settle + 0.1)
+            #expect(!engine.showingFront, "coarse \(coarse): the old bake shouldn't be drawn once still")
             if coarse {
                 #expect(engine.status.needsLive && !engine.showingOverview, "zoomed in, the live clouds stand in")
             } else {
@@ -764,25 +828,40 @@ struct BakedLayerTests {
     }
 }
 
-/// Bakes as the app does, except the first one after `stickNext()`, which doesn't
-/// finish until `release()`.
+/// Bakes as the app does, except the first one after `stickNext()` (or every one
+/// after `stickAll()`), which doesn't finish until `release()`.
 nonisolated private final class StuckBakery: @unchecked Sendable {
     private let lock = NSLock()
     private let gate = DispatchSemaphore(value: 0)
     private var armed = false
+    private var always = false
     private var held = false
+    private var waiting = 0
+    private var released = false
 
     var stuck: Bool { lock.withLock { held } }
 
     func stickNext() { lock.withLock { armed = true } }
 
-    func release() { gate.signal() }
+    func stickAll() { lock.withLock { always = true } }
+
+    func release() {
+        let count = lock.withLock {
+            released = true
+            return max(1, waiting)
+        }
+        for _ in 0..<count { gate.signal() }
+    }
 
     func bake(_ job: BakeJob) -> CloudBake {
         let stick = lock.withLock {
             defer { armed = false }
-            if armed { held = true }
-            return armed
+            let stick = (armed || always) && !released
+            if stick {
+                held = true
+                waiting += 1
+            }
+            return stick
         }
         if stick { gate.wait() }
         return CloudBakery.bake(job)

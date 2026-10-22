@@ -117,11 +117,10 @@ nonisolated enum CloudBakery {
         return CloudBake(job: job, clouds: clouds, honeycomb: honeycomb, leaving: leaving, leavingMist: leavingMist, milliseconds: took)
     }
 
-    /// The overview's most pixels: 2 MB at 4 bytes each, which a phone draws in a
-    /// fraction of a second.
-    static let overviewPixels = 500_000.0
+    /// The overview's most pixels, 1.2 MB at 4 bytes each. It's only ever soft.
+    static let overviewPixels = 300_000.0
     /// And no wider or taller than this.
-    static let overviewSide = 2048.0
+    static let overviewSide = 1536.0
 
     static func overview(field: CloudField, fieldKey: String, theme: String, clock: Double, pixels budget: Double = overviewPixels) -> CloudOverview {
         let started = DispatchTime.now().uptimeNanoseconds
@@ -153,15 +152,19 @@ nonisolated enum CloudBakery {
         let bounds = CGRect(origin: .zero, size: pixels)
         var scene = CloudScene(field: simple, projection: CloudOverview.projection(area: area, pixels: pixels), bounds: bounds, clock: clock, puffMargin: 0.05)
         scene.detail = 0
-        let sprites = CloudSprites.sprites(for: theme)
-        let image = render(bounds, scale: 1) { scene.draw(in: $0, sprites: sprites) }
+        // Every puff's a few pixels across here, so each is stamped from a sprite about
+        // that size rather than drawn down from a big one: a few times quicker.
+        let biggest = [field.puffs.map(\.radius).max(), field.clearings.map(\.radius).max(), field.mist.map(\.radius).max()]
+            .compactMap { $0 }.max() ?? 0
+        let sprites = CloudSprites.sprites(for: theme).shrunk(to: Int((biggest * 2 * 1.1 * scale).rounded(.up)))
+        let image = render(bounds, scale: 1, quality: .low) { scene.draw(in: $0, sprites: sprites) }
         return done(image, area, pixels)
     }
 
     /// A bitmap of `rect` (in screen points) at `scale` pixels to the point, drawn in
     /// screen points with y running down. Laid out as the screen's own are (BGRA,
     /// premultiplied), so Core Animation can show it without converting it.
-    static func render(_ rect: CGRect, scale: Double, draw: (CGContext) -> Void) -> CGImage? {
+    static func render(_ rect: CGRect, scale: Double, quality: CGInterpolationQuality = .medium, draw: (CGContext) -> Void) -> CGImage? {
         let width = max(1, Int((Double(rect.width) * scale).rounded(.up)))
         let height = max(1, Int((Double(rect.height) * scale).rounded(.up)))
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
@@ -170,7 +173,7 @@ nonisolated enum CloudBakery {
                   bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
               )
         else { return nil }
-        context.interpolationQuality = .medium
+        context.interpolationQuality = quality
         context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: 1, y: -1)
         context.scaleBy(x: CGFloat(width) / rect.width, y: CGFloat(height) / rect.height)

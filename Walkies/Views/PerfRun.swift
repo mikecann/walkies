@@ -49,7 +49,8 @@ nonisolated struct FrameStats: Codable, Equatable, Sendable {
 /// for about 20 seconds (panning slowly and fast, pinching, tilting and turning, at
 /// street level and over the whole suburb), times every frame with a display link,
 /// and prints one line of JSON to stdout starting `WALKIES_PERF `. Then quits, unless
-/// `-perfStay` is also given. Does nothing without `-perfRun`.
+/// `-perfStay` is also given. Does nothing without `-perfRun`. Always reports, with an
+/// `error` field if it couldn't finish: see `PerfWatchdog`.
 final class PerfRun {
     static let requested = LaunchArguments.has("-perfRun")
 
@@ -100,7 +101,8 @@ final class PerfRun {
         self.model = model
     }
 
-    private func report(_ fields: [String: Any]) {
+    /// Prints one line of JSON and saves it, from any thread.
+    nonisolated static func write(_ fields: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]),
               let line = String(data: data, encoding: .utf8)
         else { return }
@@ -113,8 +115,33 @@ final class PerfRun {
         try? data.write(to: URL.cachesDirectory.appending(path: name))
     }
 
+    nonisolated static var device: String {
+        var machine = utsname()
+        uname(&machine)
+        return withUnsafeBytes(of: machine.machine) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+    }
+
+    private func report(_ fields: [String: Any]) {
+        var fields = fields
+        fields["mainStallMaxMs"] = (watchdog.longestStall * 1000).rounded()
+        if watchdog.fired { fields["watchdogFired"] = true }
+        watchdog.stop()
+        Self.write(fields)
+    }
+
+    /// Only one run, should the map's task start again.
+    private static var running = false
+    /// Gives up and reports anyway after this long, in seconds: the wait for the map
+    /// (up to 60), the pauses (9) and the flight (24), with room to spare.
+    static let limit = 120.0
+    private lazy var watchdog = PerfWatchdog(limit: Self.limit)
+
     func run() async {
+        guard !Self.running else { return }
+        Self.running = true
+        watchdog.start()
         // Wait for the map, a place and its clouds.
+        watchdog.stage = "waiting for the map and clouds"
         var ready: (MKMapView, City)?
         for _ in 0..<240 {
             if let map = handle.map, map.window != nil, map.bounds.width > 0,
@@ -129,6 +156,7 @@ final class PerfRun {
             return
         }
         // Let opening the app's own flight to where you are finish first.
+        watchdog.stage = "waiting for the opening flight"
         try? await Task.sleep(for: .seconds(5))
 
         let points = city.boundary.polygons.flatMap(\.outer).map { MKMapPoint($0.cl) }
@@ -148,10 +176,14 @@ final class PerfRun {
         }
         apply(segments[0].camera(0))
         // Map tiles and the first clouds in.
+        watchdog.stage = "waiting for the first clouds at street level"
         try? await Task.sleep(for: .seconds(4))
 
         let flight = Flight(segments: segments, handle: handle, apply: apply)
+        let watchdog = watchdog
+        flight.entered = { watchdog.stage = "flying \($0)" }
         let results = await flight.fly()
+        watchdog.stage = "reporting"
 
         var segmentJSON: [[String: Any]] = []
         for result in results {
@@ -163,12 +195,9 @@ final class PerfRun {
             segmentJSON.append(fields)
         }
         let stats = CloudRenderStats.shared
-        var machine = utsname()
-        uname(&machine)
-        let device = withUnsafeBytes(of: machine.machine) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
-        report([
+        var fields: [String: Any] = [
             "renderer": CloudRenderer.current.rawValue,
-            "device": device,
+            "device": Self.device,
             "os": UIDevice.current.systemVersion,
             "refreshHz": (1 / flight.refresh).rounded(),
             "screen": [Double(map.bounds.width), Double(map.bounds.height)],
@@ -184,7 +213,12 @@ final class PerfRun {
             "bakeMsMax": (stats.longestBake * 10).rounded() / 10,
             "abandonedBakes": stats.abandoned,
             "overviewMsAvg": stats.overviews > 0 ? (stats.overviewMilliseconds / Double(stats.overviews) * 10).rounded() / 10 : 0,
-        ])
+            "liveTicks": stats.liveTicks,
+        ]
+        // From the map first laid out to the overview or a bake first on it.
+        fields["firstCloudsMs"] = stats.firstCloudsMilliseconds.map { $0.rounded() } ?? NSNull()
+        if let stopped = flight.timedOut { fields["error"] = "the flight didn't finish: no frames from \(stopped) on (display link stopped?)" }
+        report(fields)
         guard !LaunchArguments.has("-perfStay") else { return }
         try? await Task.sleep(for: .milliseconds(500))
         exit(0)
@@ -214,6 +248,11 @@ private final class Flight {
     private var results: [Result] = []
     private var counters = (bakes: 0, milliseconds: 0.0, live: 0)
     private var done: CheckedContinuation<[Result], Never>?
+    /// Told each segment's name as it starts.
+    var entered: (String) -> Void = { _ in }
+    /// The segment it was in, if the display link stopped calling (the app sent to
+    /// the background, say) and it gave up waiting.
+    private(set) var timedOut: String?
 
     init(segments: [PerfRun.Segment], handle: MapHandle, apply: @escaping (PerfRun.Camera) -> Void) {
         self.segments = segments
@@ -223,11 +262,19 @@ private final class Flight {
     }
 
     func fly() async -> [Result] {
-        await withCheckedContinuation { continuation in
+        let total = segments.reduce(0) { $0 + $1.duration }
+        return await withCheckedContinuation { continuation in
             done = continuation
             let link = CADisplayLink(target: Target(self), selector: #selector(Target.step(_:)))
             link.add(to: .main, forMode: .common)
             self.link = link
+            // However slow the frames, it's done by then, unless they've stopped coming.
+            DispatchQueue.main.asyncAfter(deadline: .now() + total + 20) { [weak self] in
+                guard let self, self.done != nil else { return }
+                self.timedOut = self.current >= 0 && self.current < self.segments.count ? self.segments[self.current].name : "the start"
+                if self.current >= 0, self.current < self.segments.count { self.closeCounters(self.current) }
+                self.finish()
+            }
         }
     }
 
@@ -260,6 +307,7 @@ private final class Flight {
                 finish()
                 return
             }
+            entered(segments[index].name)
             handle.simulatedGesture = segments[index].gesture
         }
         let segment = segments[index]
@@ -284,6 +332,85 @@ private final class Flight {
         handle.simulatedGesture = false
         done?.resume(returning: results)
         done = nil
+    }
+}
+
+/// Keeps an eye on a `-perfRun` from a thread of its own, so there's always a report:
+/// if the run hasn't reported after `limit` seconds (the main thread stuck, or the
+/// frames stopped), it reports an error with the stage it got to. Also times how long
+/// the main thread goes without answering, for the report.
+nonisolated final class PerfWatchdog: @unchecked Sendable {
+    private let lock = NSLock()
+    private let limit: Double
+    private let queue = DispatchQueue(label: "perf-watchdog", qos: .userInitiated)
+    private var timer: DispatchSourceTimer?
+    private var started = 0.0
+    private var _stage = "starting"
+    private var _fired = false
+    private var stopped = false
+    /// When the main thread was last asked to answer, if it hasn't yet.
+    private var asked: Double?
+    private var _longestStall = 0.0
+
+    init(limit: Double) { self.limit = limit }
+
+    var stage: String {
+        get { lock.withLock { _stage } }
+        set { lock.withLock { _stage = newValue } }
+    }
+
+    var fired: Bool { lock.withLock { _fired } }
+
+    /// The longest the main thread's gone without answering, in seconds.
+    var longestStall: Double {
+        lock.withLock { max(_longestStall, asked.map { CACurrentMediaTime() - $0 } ?? 0) }
+    }
+
+    func start() {
+        started = CACurrentMediaTime()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 0.1, repeating: 0.1)
+        timer.setEventHandler { [weak self] in self?.check() }
+        self.timer = timer
+        timer.resume()
+    }
+
+    func stop() {
+        lock.withLock { stopped = true }
+        timer?.cancel()
+    }
+
+    private func check() {
+        let now = CACurrentMediaTime()
+        let (ping, report) = lock.withLock { () -> (Bool, [String: Any]?) in
+            guard !stopped else { return (false, nil) }
+            let ping = asked == nil
+            if ping { asked = now }
+            guard !_fired, now - started > limit else { return (ping, nil) }
+            _fired = true
+            let unanswered = asked.map { now - $0 } ?? 0
+            return (ping, [
+                "error": "gave up after \(Int(limit)) s, \(_stage)",
+                "stage": _stage,
+                "renderer": CloudRenderer.current.rawValue,
+                "device": PerfRun.device,
+                "mainStallMaxMs": (max(_longestStall, unanswered) * 1000).rounded(),
+                "mainUnansweredMs": (unanswered * 1000).rounded(),
+            ])
+        }
+        if ping {
+            DispatchQueue.main.async { [weak self] in self?.answered() }
+        }
+        // Not stopped: the full report, if it comes, writes over this.
+        if let report { PerfRun.write(report) }
+    }
+
+    private func answered() {
+        let now = CACurrentMediaTime()
+        lock.withLock {
+            if let asked { _longestStall = max(_longestStall, now - asked) }
+            asked = nil
+        }
     }
 }
 
