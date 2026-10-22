@@ -32,6 +32,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,6 +71,7 @@ import com.mikecann.walkies.map.StickerPinLayer
 import com.mikecann.walkies.lore.LoreEntry
 import com.mikecann.walkies.lore.LoreLibrary
 import com.mikecann.walkies.map.YouAreHere
+import com.mikecann.walkies.place.Mist
 import com.mikecann.walkies.place.PlaceResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -167,9 +169,19 @@ fun MapScreen(
 
     val cities = model.cities
     val fresh = model.freshTiles
-    LaunchedEffect(model.tilesRevision, cities.size) {
+    // Ticks over as often as walked tiles could newly mist over while the map's open.
+    val mistDays = model.mistDays
+    var mistEpoch by remember { mutableLongStateOf(Mist.epoch(System.currentTimeMillis() / 1000.0, mistDays)) }
+    LaunchedEffect(mistDays) {
+        while (true) {
+            mistEpoch = Mist.epoch(System.currentTimeMillis() / 1000.0, mistDays)
+            delay(15_000)
+        }
+    }
+    LaunchedEffect(model.tilesRevision, cities.size, mistEpoch) {
         val walkTiles = fresh.values.flatten().toSet()
-        field = withContext(Dispatchers.Default) { CloudField(cities, walkTiles) }
+        val now = System.currentTimeMillis() / 1000.0
+        field = withContext(Dispatchers.Default) { CloudField(cities, walkTiles, mistAt = now, mistDays = mistDays) }
     }
     LaunchedEffect(model.revealCount) {
         if (model.revealCount > 0) haptics.performHapticFeedback(HapticFeedbackType.Confirm)

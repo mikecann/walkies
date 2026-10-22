@@ -521,10 +521,9 @@ struct FogMapView: UIViewRepresentable {
                 return r
             }
             if let polyline = overlay as? MKPolyline {
-                let r = MKPolylineRenderer(polyline: polyline)
-                // Teal, so the route stands apart from this walk's orange tiles.
-                r.strokeColor = UIColor(red: 0.16, green: 0.72, blue: 0.78, alpha: 1)
-                r.lineWidth = 4
+                // Teal, so the route stands apart from this walk's orange tiles, edged
+                // so it shows over grass and water too.
+                let r = OutlinedRouteRenderer(overlay: polyline)
                 r.lineCap = .round
                 r.lineJoin = .round
                 return r

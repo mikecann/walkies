@@ -31,6 +31,18 @@ nonisolated struct CloudScene {
         var kind: RoadLine.Kind
     }
 
+    struct PlacedMist {
+        var rect: CGRect
+        var fade: Double
+    }
+
+    /// A four-pointed star over mist that's just cleared, in screen points.
+    struct Sparkle {
+        var centre: CGPoint
+        var radius: Double
+        var alpha: Double
+    }
+
     /// What the zoom-dependent choices are made from, normally the whole field. A
     /// patch of it drawn on its own (tiles clearing over a bake) passes the whole
     /// field's, so it makes the same choices as the bake round it.
@@ -49,6 +61,13 @@ nonisolated struct CloudScene {
     static let simplePuff = 8.0
     static let gridColour = SceneColour(red: 0.42, green: 0.5, blue: 0.62)
     static let roadColour = SceneColour(red: 0.36, green: 0.45, blue: 0.6)
+    /// Morning haze: paler and far more see-through than the clouds, so a misty tile
+    /// still reads as cleared.
+    static let mistColour = SceneColour(red: 0.93, green: 0.95, blue: 0.99)
+    static let mistOpacity = 0.42
+    static let sparkleColour = SceneColour(red: 1, green: 0.97, blue: 0.82)
+    /// Sparkles only once a tile's at least this many points across.
+    static let sparkleTile = 10.0
 
     var placed: [Placed] = []
     /// How much of the shadows and undersides show, 0 zoomed right out.
@@ -59,14 +78,17 @@ nonisolated struct CloudScene {
     var roadClip: Path?
     var roads: [Road] = []
     var erasers: [CGRect] = []
+    var mist: [PlacedMist] = []
+    var sparkles: [Sparkle] = []
 
-    var isEmpty: Bool { placed.isEmpty }
+    var isEmpty: Bool { placed.isEmpty && mist.isEmpty && sparkles.isEmpty }
 
     /// `bounds` is what's being drawn, in screen points; puffs are kept if they reach
     /// within `puffMargin` of its size of it.
     init(
-        field: CloudField, leaving: [CloudField.Puff] = [], reveal: Double = 1, fresh: Set<CloudField.Tile> = [],
-        projection: Projection, bounds: CGRect, clock: Double, puffMargin: Double = 0.2, reference: Reference? = nil
+        field: CloudField, leaving: [CloudField.Puff] = [], leavingMist: [CloudField.MistPatch] = [], reveal: Double = 1,
+        fresh: Set<CloudField.Tile> = [], projection: Projection, bounds: CGRect, clock: Double, puffMargin: Double = 0.2,
+        reference: Reference? = nil
     ) {
         let reference = reference ?? Reference(field, leaving: leaving)
         let visible = bounds.insetBy(dx: -bounds.width * puffMargin, dy: -bounds.height * puffMargin)
@@ -91,6 +113,22 @@ nonisolated struct CloudScene {
             let base = Self.capped(projection.ellipse(centre: puff.centre, radius: radius), radius: radius, centreScale: centreScale)
             guard base.intersects(visible) else { continue }
             placed.append(Placed(variant: puff.variant, rect: drift(base, puff.phase), top: drift(base, puff.phase + 0.7), fade: 1 - ease))
+        }
+
+        // Haze over misty tiles, and over ones just walked again fading away under a
+        // few sparkles: a lighter touch than clouds parting.
+        for patch in field.mist {
+            let rect = Self.capped(projection.ellipse(centre: patch.centre, radius: patch.radius), radius: patch.radius, centreScale: centreScale)
+            guard rect.intersects(visible) else { continue }
+            mist.append(PlacedMist(rect: rect, fade: 1))
+        }
+        if reveal < 1 {
+            for patch in leavingMist {
+                let rect = Self.capped(projection.ellipse(centre: patch.centre, radius: patch.radius), radius: patch.radius, centreScale: centreScale)
+                guard rect.intersects(visible) else { continue }
+                mist.append(PlacedMist(rect: rect, fade: 1 - ease))
+                sparkles += Self.sparkles(over: rect, tile: patch.tile.hex, reveal: reveal)
+            }
         }
         guard !placed.isEmpty else { return }
 
@@ -208,6 +246,42 @@ nonisolated struct CloudScene {
         return CGRect(x: rect.midX - rect.width * f / 2, y: rect.midY - rect.height * f / 2, width: rect.width * f, height: rect.height * f)
     }
 
+    /// A handful of stars over a tile whose mist is clearing, each twinkling in and out
+    /// at its own moment as it drifts up, always the same way for the same tile.
+    /// None when the tile's too small on screen to see them.
+    static func sparkles(over rect: CGRect, tile: Hex, reveal: Double) -> [Sparkle] {
+        // The patch is bigger than the tile; the tile's about three quarters of it.
+        let size = min(rect.width, rect.height) / CloudField.mistSpread
+        guard size >= sparkleTile else { return [] }
+        var rng = SplitMix64(seed: UInt64(bitPattern: Int64(CloudField.hash(tile))))
+        var out: [Sparkle] = []
+        for _ in 0..<5 {
+            let start = rng.unit() * 0.45
+            let t = (reveal - start) / 0.5
+            let x = rect.midX + (rng.unit() - 0.5) * size * 0.8
+            let y = rect.midY + (rng.unit() - 0.5) * size * 0.6
+            let scale = 0.8 + rng.unit() * 0.5
+            guard t > 0, t < 1 else { continue }
+            let pulse = sin(t * .pi)
+            out.append(Sparkle(centre: CGPoint(x: x, y: y - t * size * 0.15), radius: (2.5 + 3.5 * pulse) * scale, alpha: pulse))
+        }
+        return out
+    }
+
+    static func star(_ sparkle: Sparkle) -> CGPath {
+        let r = sparkle.radius, inner = r * 0.3
+        let c = sparkle.centre
+        let path = CGMutablePath()
+        path.addLines(between: [
+            CGPoint(x: c.x, y: c.y - r), CGPoint(x: c.x + inner, y: c.y - inner),
+            CGPoint(x: c.x + r, y: c.y), CGPoint(x: c.x + inner, y: c.y + inner),
+            CGPoint(x: c.x, y: c.y + r), CGPoint(x: c.x - inner, y: c.y + inner),
+            CGPoint(x: c.x - r, y: c.y), CGPoint(x: c.x - inner, y: c.y - inner),
+        ])
+        path.closeSubpath()
+        return path
+    }
+
     static func roadStyle(_ kind: RoadLine.Kind) -> (alpha: Double, width: Double, dash: [CGFloat]) {
         kind == .road ? (0.6, 1.8, [6, 5]) : (0.45, 1.4, [3, 4])
     }
@@ -215,6 +289,12 @@ nonisolated struct CloudScene {
     /// Into a bitmap, in the same order and with the same blending as the Canvas.
     func draw(in context: CGContext, sprites: CloudSprites) {
         guard !isEmpty else { return }
+        drawClouds(in: context, sprites: sprites)
+        drawMist(in: context, sprites: sprites)
+    }
+
+    private func drawClouds(in context: CGContext, sprites: CloudSprites) {
+        guard !placed.isEmpty else { return }
         // Shadows on the ground, with the sun to the north-west.
         if detail > 0 {
             for p in placed {
@@ -267,6 +347,37 @@ nonisolated struct CloudScene {
         }
         context.restoreGState()
         context.endTransparencyLayer()
+    }
+
+    /// The haze on a layer of its own, so overlapping patches make one even wash,
+    /// then the sparkles. As `drawMist` in Clouds.swift's CloudPainter.
+    private func drawMist(in context: CGContext, sprites: CloudSprites) {
+        if !mist.isEmpty {
+            context.saveGState()
+            context.setAlpha(Self.mistOpacity)
+            context.beginTransparencyLayer(auxiliaryInfo: nil)
+            for patch in mist {
+                context.setAlpha(patch.fade)
+                Self.draw(sprites.mist, in: patch.rect, on: context)
+            }
+            context.endTransparencyLayer()
+            context.restoreGState()
+        }
+        guard !sparkles.isEmpty else { return }
+        context.saveGState()
+        context.setLineDash(phase: 0, lengths: [])
+        context.setLineWidth(1)
+        context.setLineJoin(.round)
+        for sparkle in sparkles {
+            let star = Self.star(sparkle)
+            context.addPath(star)
+            context.setStrokeColor(CGColor(gray: 0, alpha: 0.35 * sparkle.alpha))
+            context.strokePath()
+            context.addPath(star)
+            context.setFillColor(Self.sparkleColour.cg(sparkle.alpha))
+            context.fillPath()
+        }
+        context.restoreGState()
     }
 
     /// An image the right way up in a context whose y runs down the screen.

@@ -65,7 +65,10 @@ struct ProgressionIntegrationTests {
         defer { CoverageTracer.replayObserver.set(nil) }
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
-        #expect(log.count == 200)
+        await model.waitForLastWalked()
+        // Once each for the tile counts, and once more for when each tile was last
+        // walked (the mist), both off the main thread.
+        #expect(log.count == 400)
         #expect(log.mainCount == 0)
         #expect(store.loadWalks().allSatisfy { $0.newTilesByPlace != nil })
         model.startWalk()
@@ -75,12 +78,13 @@ struct ProgressionIntegrationTests {
         model.endWalk()
         #expect(model.recap != nil)
         #expect(model.recap?.isRewatch == false)
-        #expect(log.count == 200)
+        #expect(log.count == 400)
         #expect(log.mainCount == 0)
         let reopened = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await reopened.waitForHistory()
+        await reopened.waitForLastWalked()
         _ = reopened.balance
-        #expect(log.count == 200)
+        #expect(log.count == 400)
     }
 
     @Test func rewatchingAWalkFromHistoryAwardsAndChangesNothing() async throws {

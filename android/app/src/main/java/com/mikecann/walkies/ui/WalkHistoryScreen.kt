@@ -54,6 +54,7 @@ import com.mikecann.walkies.BuildConfig
 import com.mikecann.walkies.grid.LocalProjection
 import com.mikecann.walkies.lore.LoreEntry
 import com.mikecann.walkies.lore.LoreLibrary
+import com.mikecann.walkies.map.CloudPainter
 import com.mikecann.walkies.map.MapPoints
 import com.mikecann.walkies.map.MapState
 import com.mikecann.walkies.map.MapboxMap
@@ -341,7 +342,9 @@ fun WalkDetailScreen(model: AppModel, walkId: UUID, onWatch: (Walk) -> Unit, onO
     }
 }
 
-private val ROUTE_TEAL = Color(0.16f, 0.72f, 0.78f)
+private val ROUTE_TEAL = Color(CloudPainter.TEAL)
+private val ROUTE_HALO = Color(1f, 1f, 1f, CloudPainter.HALO_ALPHA.toFloat())
+private val ROUTE_EDGE = Color(0.05f, 0.12f, 0.16f, CloudPainter.EDGE_ALPHA.toFloat())
 
 /** The route on a small flat map, start in green and finish in orange. */
 @Composable
@@ -401,6 +404,9 @@ private fun RouteMap(walk: Walk) {
                     projection.point(route[i * 2], route[i * 2 + 1])
                     if (i == 0) path.moveTo(projection.x, projection.y) else path.lineTo(projection.x, projection.y)
                 }
+                // A light halo and a dark edge under the teal, so it shows over grass and water.
+                drawPath(path, ROUTE_HALO, style = Stroke((5 + CloudPainter.HALO_EXTRA).dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+                drawPath(path, ROUTE_EDGE, style = Stroke((5 + CloudPainter.EDGE_EXTRA).dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
                 drawPath(path, ROUTE_TEAL, style = Stroke(5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
                 fun dot(i: Int, colour: Color) {
                     projection.point(route[i * 2], route[i * 2 + 1])

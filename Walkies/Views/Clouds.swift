@@ -32,6 +32,13 @@ nonisolated struct CloudField: Sendable {
         var kind: RoadLine.Kind
     }
 
+    /// A pale haze over a tile you've walked but not for a while (Mist.swift).
+    struct MistPatch: Sendable {
+        var tile: Tile
+        var centre: MKMapPoint
+        var radius: Double
+    }
+
     /// A tile for the colour-coded honeycomb that shows while you drag the map.
     struct Outline: Sendable {
         enum Kind: Sendable {
@@ -56,6 +63,9 @@ nonisolated struct CloudField: Sendable {
     /// Clouds spill well past their own hex, so without this a walk down a single
     /// street gets swallowed by the clouds either side of it.
     static let clearing = 1.25
+    /// Radius of the haze over each misty tile, as a multiple of the hex size: enough
+    /// for neighbours to run together into one wash.
+    static let mistSpread = 1.3
 
     /// Which places this covers, so the layer can tell tiles clearing from a place
     /// being added or removed.
@@ -64,6 +74,8 @@ nonisolated struct CloudField: Sendable {
     var puffs: [Puff] = []
     /// Where to cut the clouds away over walked hexes.
     var clearings: [Clearing] = []
+    /// Haze over walked tiles that haven't been walked again for a while.
+    var mist: [MistPatch] = []
     var lines: [Line] = []
     /// The places' outlines, so the dotted roads stop at their edges.
     var outline: [[MKMapPoint]] = []
@@ -78,7 +90,9 @@ nonisolated struct CloudField: Sendable {
         self.init(cities: [city])
     }
 
-    init(cities: [City]) {
+    /// With `mistAt`, tiles walked but not walked again for `mistDays` before then get
+    /// mist. Without, there's none (the celebration's replays).
+    init(cities: [City], mistAt now: Date? = nil, mistDays: Double = Mist.days) {
         places = cities.map(\.id)
         var clouded = Set<Tile>()
         var clear = Set<Tile>()
@@ -103,6 +117,12 @@ nonisolated struct CloudField: Sendable {
         }
 
         clearings = clear.map { Clearing(tile: $0, centre: centre(of: $0), radius: hexSize($0.grid) * Self.clearing) }
+        if let now {
+            mist = Mist.tiles(in: cities, now: now, days: mistDays)
+                .map { Tile(grid: .world, hex: $0) }
+                .filter { clear.contains($0) }
+                .map { MistPatch(tile: $0, centre: centre(of: $0), radius: hexSize($0.grid) * Self.mistSpread) }
+        }
         puffs = clouded
             .map { tile in
                 // Nudge and resize each cloud a little, always the same way for the same
@@ -145,7 +165,14 @@ nonisolated struct CloudField: Sendable {
         }
     }
 
-    private static func hash(_ hex: Hex) -> Int {
+    /// Mist in `old` that's gone from `new`: tiles just walked again, to sparkle.
+    static func clearedMist(from old: CloudField, to new: CloudField) -> [MistPatch] {
+        guard !old.mist.isEmpty else { return [] }
+        let still = Set(new.mist.map(\.tile))
+        return old.mist.filter { !still.contains($0.tile) }
+    }
+
+    static func hash(_ hex: Hex) -> Int {
         (Int(hex.q) &* 73_856_093) ^ (Int(hex.r) &* 19_349_663)
     }
 }
@@ -237,6 +264,8 @@ struct LiveCloudLayer: View {
     @State private var shown: (key: String, field: CloudField)?
     /// Clouds over tiles that have just cleared, fading out as they drift apart.
     @State private var leaving: [CloudField.Puff] = []
+    /// Mist over tiles just walked again, fading out with a sparkle.
+    @State private var leavingMist: [CloudField.MistPatch] = []
     @State private var changedAt = Date.distantPast
 
     var body: some View {
@@ -252,7 +281,7 @@ struct LiveCloudLayer: View {
                     CosmeticTrail(points: handle.route, style: model.equipped[.trail], projection: projection, bounds: bounds, clock: clock)
                         .draw(in: &context)
                     CloudPainter(
-                        field: field, leaving: reveal < 1 ? leaving : [], reveal: reveal,
+                        field: field, leaving: reveal < 1 ? leaving : [], leavingMist: reveal < 1 ? leavingMist : [], reveal: reveal,
                         fresh: Set(leaving.map(\.tile)), projection: projection,
                         bounds: bounds, clock: clock, theme: model.equipped[.clouds]
                     )
@@ -289,9 +318,11 @@ struct LiveCloudLayer: View {
             if let old = shown, old.field.places == field.places {
                 let still = Set(field.puffs.map(\.tile))
                 leaving = old.field.puffs.filter { !still.contains($0.tile) }
+                leavingMist = CloudField.clearedMist(from: old.field, to: field)
                 changedAt = .now
             } else {
                 leaving = []
+                leavingMist = []
             }
             shown = (key, field)
         }
@@ -343,6 +374,70 @@ private struct YouAreHere {
     }
 }
 
+/// Keeps every trail readable over satellite pictures (grass, trees, water, roads):
+/// a soft light halo, then a thin dark edge, under each look's own colours, like the
+/// route lines in map apps. CloudPainter.kt has the same.
+nonisolated enum TrailContrast {
+    /// The plain line, brighter and bluer than it was so it doesn't sink into grass and water.
+    static let teal = SceneColour(red: 0.1, green: 0.85, blue: 0.95)
+    /// This walk's line, in points.
+    static let width = 5.5
+    static let halo = SceneColour.white
+    static let haloAlpha = 0.45
+    /// How much wider than the line the halo is, in all.
+    static let haloExtra = 6.0
+    static let edge = SceneColour(red: 0.05, green: 0.12, blue: 0.16)
+    static let edgeAlpha = 0.6
+    static let edgeExtra = 2.5
+    /// The rainbow's colours: SwiftUI's, but a brighter, yellower green that grass can't swallow.
+    static let rainbow: [SceneColour] = [
+        SceneColour(red: 1, green: 0.23, blue: 0.19), SceneColour(red: 1, green: 0.58, blue: 0),
+        SceneColour(red: 1, green: 0.8, blue: 0), SceneColour(red: 0.45, green: 0.93, blue: 0.3),
+        SceneColour(red: 0.2, green: 0.78, blue: 1), SceneColour(red: 0, green: 0.48, blue: 1),
+        SceneColour(red: 0.69, green: 0.32, blue: 0.87),
+    ]
+    /// The footprints' green, lighter and stronger than the shop's picture of them.
+    static let footprint = SceneColour(red: 0.56, green: 0.93, blue: 0.42)
+    static let sparkle = SceneColour(red: 1, green: 0.81, blue: 0.25)
+
+    /// The halo and edge under a line `width` points wide.
+    static func underlay(_ path: Path, width: Double, in context: inout GraphicsContext) {
+        context.stroke(path, with: .color(halo.color(haloAlpha)), style: StrokeStyle(lineWidth: width + haloExtra, lineCap: .round, lineJoin: .round))
+        context.stroke(path, with: .color(edge.color(edgeAlpha)), style: StrokeStyle(lineWidth: width + edgeExtra, lineCap: .round, lineJoin: .round))
+    }
+
+    static func underlay(_ path: CGPath, width: Double, in context: CGContext) {
+        context.saveGState()
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        for (colour, extra) in [(halo.cg(haloAlpha), haloExtra), (edge.cg(edgeAlpha), edgeExtra)] {
+            context.addPath(path)
+            context.setStrokeColor(colour)
+            context.setLineWidth(width + extra)
+            context.strokePath()
+        }
+        context.restoreGState()
+    }
+}
+
+/// The plain teal line on the map itself, with the halo and edge under it.
+nonisolated final class OutlinedRouteRenderer: MKPolylineRenderer {
+    override init(overlay: any MKOverlay) {
+        super.init(overlay: overlay)
+        strokeColor = UIColor(cgColor: TrailContrast.teal.cg(1))
+        lineWidth = TrailContrast.width
+        lineCap = .round
+        lineJoin = .round
+    }
+
+    override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
+        if path == nil { createPath() }
+        // Line widths here are in points, so they're scaled like MapKit scales its own.
+        if let path { TrailContrast.underlay(path, width: lineWidth / zoomScale, in: context) }
+        super.draw(mapRect, zoomScale: zoomScale, in: context)
+    }
+}
+
 /// Decorative routes share the cloud projection, keeping stamps a fixed size on
 /// screen and allowing the existing 30 Hz timeline to twinkle the sparkles.
 struct CosmeticTrail {
@@ -387,15 +482,25 @@ struct CosmeticTrail {
             let extent = path.boundingRect
             guard !extent.isNull, max(extent.width, extent.height) > 0 else { return }
             let horizontal = extent.width >= extent.height
+            TrailContrast.underlay(path, width: TrailContrast.width, in: &context)
             context.stroke(path, with: .linearGradient(
-                Gradient(colors: [.red, .orange, .yellow, .green, .cyan, .blue, .purple]),
+                Gradient(colors: TrailContrast.rainbow.map { $0.color(1) }),
                 startPoint: CGPoint(x: extent.minX, y: extent.minY),
                 endPoint: horizontal ? CGPoint(x: extent.maxX, y: extent.minY) : CGPoint(x: extent.minX, y: extent.maxY)
-            ), style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+            ), style: StrokeStyle(lineWidth: TrailContrast.width, lineCap: .round, lineJoin: .round))
             return
         }
 
-        let footprint = context.resolve(Image("progress-footprint"))
+        // Each print as a silhouette: a light halo, a dark edge, then the print itself
+        // in a stronger green than the picture's.
+        let template = Image("progress-footprint").renderingMode(.template)
+        var footprint = context.resolve(template)
+        footprint.shading = .color(TrailContrast.footprint.color(1))
+        var edge = context.resolve(template)
+        edge.shading = .color(TrailContrast.edge.color(TrailContrast.edgeAlpha))
+        var halo = context.resolve(template)
+        halo.shading = .color(TrailContrast.halo.color(TrailContrast.haloAlpha + 0.15))
+        let print = CGRect(x: -4, y: -5.75, width: 8, height: 11.5)
         for run in runs {
             let stamps = TrailLayout.stamps(along: run, spacing: style == "trail.footprints" ? 12 : 26, in: visible)
             for stamp in stamps {
@@ -408,7 +513,9 @@ struct CosmeticTrail {
                     // alternate prints to make a left and right foot.
                     mark.rotate(by: .degrees(90))
                     if !stamp.isLeft { mark.scaleBy(x: -1, y: 1) }
-                    mark.draw(footprint, in: CGRect(x: -3.5, y: -5, width: 7, height: 10))
+                    mark.draw(halo, in: print.insetBy(dx: -2.2, dy: -2.2))
+                    mark.draw(edge, in: print.insetBy(dx: -1, dy: -1))
+                    mark.draw(footprint, in: print)
                 } else {
                     let twinkle = 0.5 + 0.5 * sin(clock * 2.4 + Double(stamp.index) * 2.399)
                     let radius = 2 + twinkle * 1.8
@@ -420,7 +527,10 @@ struct CosmeticTrail {
                         CGPoint(x: -radius, y: 0), CGPoint(x: -radius * 0.3, y: -radius * 0.3)
                     ])
                     star.closeSubpath()
-                    mark.fill(star, with: .color(Color(red: 1, green: 0.81, blue: 0.25).opacity(0.5 + twinkle * 0.5)))
+                    let alpha = 0.5 + twinkle * 0.5
+                    mark.stroke(star, with: .color(TrailContrast.halo.color(TrailContrast.haloAlpha * alpha)), style: StrokeStyle(lineWidth: 3.5, lineJoin: .round))
+                    mark.stroke(star, with: .color(TrailContrast.edge.color(TrailContrast.edgeAlpha * alpha)), style: StrokeStyle(lineWidth: 1.4, lineJoin: .round))
+                    mark.fill(star, with: .color(TrailContrast.sparkle.color(alpha)))
                 }
             }
         }
@@ -468,14 +578,22 @@ private struct CloudPainter {
     let scene: CloudScene
     let theme: String
 
-    init(field: CloudField, leaving: [CloudField.Puff], reveal: Double, fresh: Set<CloudField.Tile>, projection: Projection, bounds: CGRect, clock: Double, theme: String) {
-        scene = CloudScene(field: field, leaving: leaving, reveal: reveal, fresh: fresh, projection: projection, bounds: bounds, clock: clock)
+    init(
+        field: CloudField, leaving: [CloudField.Puff], leavingMist: [CloudField.MistPatch], reveal: Double, fresh: Set<CloudField.Tile>,
+        projection: Projection, bounds: CGRect, clock: Double, theme: String
+    ) {
+        scene = CloudScene(
+            field: field, leaving: leaving, leavingMist: leavingMist, reveal: reveal, fresh: fresh,
+            projection: projection, bounds: bounds, clock: clock
+        )
         self.theme = theme
     }
 
     func draw(in context: inout GraphicsContext) {
         guard !scene.isEmpty else { return }
         let sprites = CloudSprites.sprites(for: theme)
+        defer { drawMist(in: &context, sprites: sprites) }
+        guard !scene.placed.isEmpty else { return }
         let tops = sprites.tops.map { context.resolve(Image(decorative: $0, scale: 1)) }
         let eraser = context.resolve(Image(decorative: sprites.eraser, scale: 1))
         let detail = scene.detail
@@ -534,6 +652,27 @@ private struct CloudPainter {
             }
         }
     }
+
+    /// The haze over misty tiles, on its own layer so where patches overlap it stays
+    /// one even wash, then the sparkles over mist just cleared.
+    private func drawMist(in context: inout GraphicsContext, sprites: CloudSprites) {
+        if !scene.mist.isEmpty {
+            let mist = context.resolve(Image(decorative: sprites.mist, scale: 1))
+            var wash = context
+            wash.opacity = CloudScene.mistOpacity
+            wash.drawLayer { layer in
+                for patch in scene.mist {
+                    layer.opacity = patch.fade
+                    layer.draw(mist, in: patch.rect)
+                }
+            }
+        }
+        for sparkle in scene.sparkles {
+            let path = Path(CloudScene.star(sparkle))
+            context.stroke(path, with: .color(.black.opacity(0.35 * sparkle.alpha)), lineWidth: 1)
+            context.fill(path, with: .color(CloudScene.sparkleColour.color(sparkle.alpha)))
+        }
+    }
 }
 
 /// A handful of cumulus puffs drawn once at launch. Each is a few big soft circles,
@@ -561,6 +700,8 @@ nonisolated final class CloudSprites: @unchecked Sendable {
     let tops: [CGImage]
     let shadows: [CGImage]
     let eraser: CGImage
+    /// A soft pale disc for the mist, the same for every look.
+    let mist: CGImage
 
     private init(theme: String) {
         let palette = Self.palette(theme)
@@ -577,6 +718,7 @@ nonisolated final class CloudSprites: @unchecked Sendable {
         self.tops = tops
         self.shadows = shadows
         eraser = Self.eraser(size: 128)
+        mist = Self.mist(size: 128)
     }
 
     private static func palette(_ theme: String) -> (top: CGColor, alternate: CGColor, edge: CGColor, underside: CGColor) {
@@ -661,6 +803,22 @@ nonisolated final class CloudSprites: @unchecked Sendable {
             colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
             colors: [CGColor(gray: 0, alpha: 1), CGColor(gray: 0, alpha: 1), CGColor(gray: 0, alpha: 0)] as CFArray,
             locations: [0, 0.68, 1]
+        )!
+        context.drawRadialGradient(gradient, startCenter: centre, startRadius: 0, endCenter: centre, endRadius: s / 2, options: [])
+        return context.makeImage()!
+    }
+
+    /// Morning haze: a pale blue-white, even across the middle and fading out over the
+    /// outer half.
+    private static func mist(size: Int) -> CGImage {
+        let context = bitmap(size)
+        let s = Double(size)
+        let centre = CGPoint(x: s / 2, y: s / 2)
+        let haze = CloudScene.mistColour
+        let gradient = CGGradient(
+            colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+            colors: [haze.cg(1), haze.cg(1), haze.cg(0)] as CFArray,
+            locations: [0, 0.5, 1]
         )!
         context.drawRadialGradient(gradient, startCenter: centre, startRadius: 0, endCenter: centre, endRadius: s / 2, options: [])
         return context.makeImage()!

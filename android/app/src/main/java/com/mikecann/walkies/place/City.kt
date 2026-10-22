@@ -43,6 +43,12 @@ data class City(
      * built before busy roads were left out; the app redoes their tiles once.
      */
     val streetsVersion: Int? = null,
+    /**
+     * When each walked tile was last walked, in whole minutes since 1970, for the mist
+     * (Mist.kt). Null for places saved before it was kept; the app works it out once
+     * from the saved walks.
+     */
+    val lastWalked: Map<Hex, Int>? = null,
 ) {
     data class TileCredit(val id: UUID, val at: SwiftDate, val hexes: Set<Hex>)
 

@@ -435,6 +435,7 @@ class MainActivity : ComponentActivity() {
     /**
      * Testing switches, like the iPhone's launch arguments:
      * `adb shell am start -n com.mikecann.walkies/.MainActivity --ez setupDone true --ez alwaysOn false --es autoWalkGap 60`
+     * `--es mistDays 0.001` mists walked tiles after a minute and a half rather than 60 days (`--es mistDays 0` puts it back).
      * Debug builds also take `--ez testSignIn true --es testUserName "Emu"`, a fresh
      * test account on the dev deployment.
      */
@@ -449,6 +450,11 @@ class MainActivity : ComponentActivity() {
             val seconds = intent.getStringExtra("autoWalkGap")?.toDoubleOrNull()
                 ?: intent.getIntExtra("autoWalkGap", 0).toDouble()
             app.prefs.autoWalkGap = seconds
+        }
+        if (intent.hasExtra("mistDays")) {
+            val days = intent.getStringExtra("mistDays")?.toDoubleOrNull()
+                ?: intent.getIntExtra("mistDays", 0).toDouble()
+            app.prefs.mistDays = days
         }
         if (intent.hasExtra("setupDone")) {
             app.prefs.setupDone = intent.getBooleanExtra("setupDone", true)

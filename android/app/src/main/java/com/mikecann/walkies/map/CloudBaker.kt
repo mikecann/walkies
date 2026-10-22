@@ -34,6 +34,8 @@ class CloudBake(
     /** The clouds in [previous] that aren't in [field], and which clearings are new, if it's tiles clearing. */
     val leaving: List<CloudField.Puff>,
     val freshClearings: BooleanArray?,
+    /** Mist in [previous] that's gone from [field]: tiles walked again, to sparkle. */
+    val leavingMist: List<CloudField.MistPatch> = emptyList(),
 ) {
     /** The frame's box, for drawing the pictures into. */
     val rect = RectF(frame.left, frame.top, frame.right, frame.bottom)
@@ -140,12 +142,14 @@ class CloudBaker(density: Float) {
 
         var leaving = emptyList<CloudField.Puff>()
         var freshClearings: BooleanArray? = null
+        var leavingMist = emptyList<CloudField.MistPatch>()
         val old = job.previous
         if (old != null && old !== job.field && old.places == job.field.places) {
             val still = job.field.puffs.mapTo(HashSet()) { it.tile }
             leaving = old.puffs.filter { it.tile !in still }
             val gone = leaving.mapTo(HashSet()) { it.tile }
             freshClearings = BooleanArray(job.field.clearings.size) { job.field.clearings[it].tile in gone }
+            leavingMist = CloudField.clearedMist(old, job.field)
         }
 
         val clouds = render(frame.pixelWidth, frame.pixelHeight, frame, scratch = 0) { c ->
@@ -166,7 +170,7 @@ class CloudBaker(density: Float) {
                 "${(drewClouds - started) / 1_000_000} ms" +
                 (if (honeycomb != null) ", honeycomb ${(finished - drewClouds) / 1_000_000} ms" else ""),
         )
-        return CloudBake(frame, job.field, job.sprites, job.clock, clouds, honeycomb, old, leaving, freshClearings)
+        return CloudBake(frame, job.field, job.sprites, job.clock, clouds, honeycomb, old, leaving, freshClearings, leavingMist)
     }
 
     /**

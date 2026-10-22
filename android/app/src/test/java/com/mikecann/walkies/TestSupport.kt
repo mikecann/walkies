@@ -9,6 +9,7 @@ class FakeSettings(
     override var autoWalkGap: Double = 0.0,
     override var selectedCity: String? = null,
     override var setupDone: Boolean = true,
+    override var mistDays: Double = 0.0,
 ) : Settings
 
 class FakeLocation(override var authorization: LocationAccess.Authorization = LocationAccess.Authorization.Allowed) : LocationAccess {

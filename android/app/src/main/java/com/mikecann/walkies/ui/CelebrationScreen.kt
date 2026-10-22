@@ -80,6 +80,7 @@ import com.mikecann.walkies.lore.LoreEntry
 import com.mikecann.walkies.map.CloudField
 import com.mikecann.walkies.map.CloudLayer
 import com.mikecann.walkies.map.CloudSprites
+import com.mikecann.walkies.map.CloudPainter
 import com.mikecann.walkies.map.MapPoints
 import com.mikecann.walkies.map.MapState
 import com.mikecann.walkies.map.MapboxMap
@@ -481,7 +482,7 @@ private fun ReplayEffects(recap: WalkRecap, player: ReplayPlayer, state: MapStat
     }
 }
 
-private val TEAL = Color(0.16f, 0.72f, 0.78f)
+private val TEAL = Color(CloudPainter.TEAL)
 private val GOLD = Color(1f, 0.82f, 0.3f)
 
 private fun DrawScope.drawRoute(route: DoubleArray, player: ReplayPlayer, projection: Projection, path: Path) {
@@ -506,6 +507,7 @@ private fun DrawScope.drawRoute(route: DoubleArray, player: ReplayPlayer, projec
         path.lineTo(head.x, head.y)
     }
     drawPath(path, Color.White.copy(alpha = 0.9f), style = Stroke(8.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+    drawPath(path, Color(0.05f, 0.12f, 0.16f, CloudPainter.EDGE_ALPHA.toFloat()), style = Stroke((4.5f + CloudPainter.EDGE_EXTRA).dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
     drawPath(path, TEAL, style = Stroke(4.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
     if (player.phase == ReplayPlayer.Phase.Replay) {
         drawCircle(Color.White, 10.dp.toPx(), head)

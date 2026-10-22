@@ -57,6 +57,7 @@ object Fixtures {
             stickers = mapOf("geographe-jetty" to Hex(-3, -7), "old-mill" to Hex(145554, -44178)),
             createdAt = date(800_000_000.5), updatedAt = date(812_345_678.25),
             tileCredits = listOf(City.TileCredit(credit, date(-31_535_999.875), setOf(Hex(-3, -7)))),
+            lastWalked = linkedMapOf(Hex(-3, -7) to 29_833_340, Hex(145554, -44178) to -1),
         ),
         City(
             id = placeB, name = "Bare place", detail = "", osmId = null, gridVersion = null,

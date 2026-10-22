@@ -19,12 +19,15 @@ import com.mikecann.walkies.place.Boundary
 import com.mikecann.walkies.place.BoundaryShape
 import com.mikecann.walkies.place.City
 import com.mikecann.walkies.place.CityBuilder
+import com.mikecann.walkies.place.Mist
 import com.mikecann.walkies.place.NearbyPlaces
 import com.mikecann.walkies.place.OSMClient
 import com.mikecann.walkies.place.OSMWay
 import com.mikecann.walkies.place.PlaceData
 import com.mikecann.walkies.place.PlaceResult
 import com.mikecann.walkies.place.WalkableRule
+import com.mikecann.walkies.place.mergingLastWalked
+import com.mikecann.walkies.place.noteWalked
 import com.mikecann.walkies.store.Store
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -72,6 +75,8 @@ interface Settings {
     var selectedCity: String?
     /** Whether the first-run setup (location, activity, notifications, battery, always on) is done. */
     var setupDone: Boolean
+    /** Days until a walked tile mists over; zero means the usual 60. Overridable for testing on the emulator. */
+    var mistDays: Double
 }
 
 /**
@@ -191,6 +196,9 @@ class AppModel(
     private var loading = false
     /** Bumps when the phone's data is wiped, so work that started before can't put anything back. */
     private var dataGeneration = 0
+    /** Places whose last-walked dates (for the mist) haven't been worked out from the saved walks yet. */
+    private val lastWalkedPending = HashSet<UUID>()
+    private var fillingLastWalked = false
 
     /** The shop and level-reward ledger: what's been bought, claimed and equipped. */
     var ledger = Ledger()
@@ -236,6 +244,9 @@ class AppModel(
 
     /** In always-on mode, a walk ends after this long (seconds) without moving on foot. */
     val autoWalkGap: Double get() = settings.autoWalkGap.takeIf { it > 0 } ?: (10 * 60.0)
+
+    /** How long until a walked tile mists over, in days (`--es mistDays 0.001` to see it today). */
+    val mistDays: Double get() = settings.mistDays.takeIf { it > 0 } ?: Mist.DEFAULT_DAYS
 
     init {
         load()
@@ -283,6 +294,7 @@ class AppModel(
         rebuildCountingTiles()
         // Never trace saved routes while opening the app or handling a location fix.
         prepareHistory()
+        fillInLastWalked()
     }
 
     private fun rebuildCountingTiles() {
@@ -548,7 +560,7 @@ class AppModel(
                 autoWalkPending = false
                 val samples = CoverageTracer.samples(walk.points)
                 activePath = samples
-                val uncovered = visit(samples)
+                val uncovered = visit(samples, point.time)
                 walk = walk.copy(newTiles = walk.newTiles + uncovered)
                 revealCount += uncovered
             }
@@ -568,7 +580,7 @@ class AppModel(
         val origin = step.origin
         if (origin != null && activePath.lastOrNull() != origin) activePath = activePath + origin
         activePath = activePath + point.coordinate
-        val uncovered = visit(step.samples)
+        val uncovered = visit(step.samples, point.time)
         if (uncovered > 0) {
             result = result.copy(newTiles = result.newTiles + uncovered)
             revealCount += uncovered
@@ -672,13 +684,25 @@ class AppModel(
         onChange()
     }
 
-    /** Marks these points as visited in every city. Returns how many tiles were new. */
-    private fun visit(points: List<Coordinate>): Int {
+    /**
+     * Marks these points as visited in every city, walked at [time] (seconds since
+     * 1970). Returns how many tiles were new.
+     */
+    private fun visit(points: List<Coordinate>, time: Double): Int {
         var uncovered = 0
         val updated = cities.toMutableList()
+        val mistDays = mistDays
         for (i in updated.indices) {
             val original = updated[i]
-            val (visited, fresh) = original.visit(points, shape(original))
+            val (visitedCity, fresh) = original.visit(points, shape(original))
+            // Every tile walked gets today's date, clearing any mist over it. That
+            // changes nothing else: no tiles, %, shells or quests.
+            val walked = visitedCity.noteWalked(points, time, mistDays)
+            val visited = walked.city
+            if (walked.changed && fresh.isEmpty()) {
+                updated[i] = visited.copy(updatedAt = now())
+                if (walked.cleared.isNotEmpty()) tilesRevision++
+            }
             if (fresh.isEmpty()) continue
             val city = visited.copy(updatedAt = now())
             updated[i] = city
@@ -791,6 +815,7 @@ class AppModel(
         refreshProgressPicks()
         requestSync?.invoke()
         refreshNeighbours()
+        fillInLastWalked()
         onChange()
     }
 
@@ -1196,8 +1221,8 @@ class AppModel(
                 val localStreets = city.streetsVersion ?: 0
                 val remoteStreets = remote.streetsVersion ?: 0
                 val hadMore = !remote.visited.containsAll(city.visited) || !remoteCredits.containsAll(localCredits) ||
-                    localStreets > remoteStreets
-                val credited = city.mergeTileCredits(remote).copy(
+                    localStreets > remoteStreets || Mist.hasLater(city.lastWalked, remote.lastWalked)
+                val credited = city.mergeTileCredits(remote).mergingLastWalked(remote.lastWalked).copy(
                     visited = city.visited + remote.visited,
                     // Theirs win, as in Swift's merging(_:uniquingKeysWith:).
                     stickers = city.stickers.orEmpty() + remote.stickers.orEmpty(),
@@ -1215,6 +1240,7 @@ class AppModel(
                 )
             } else {
                 merged.add(remote)
+                if (remote.lastWalked == null) lastWalkedPending.add(remote.id)
             }
             shapes.remove(remote.id)
         }
@@ -1237,13 +1263,24 @@ class AppModel(
         val restored = withContext(Dispatchers.Default) {
             val out = snapshotCities.toMutableList()
             val shapes = out.map { it.shape() }
+            val walkedBy = HashMap<UUID, MutableList<Walk>>()
             for (walk in snapshotWalks) {
                 val targets = out.indices.filter { out[it].id in changedCities || walk.id in newIds }
                 if (targets.isEmpty()) continue
                 val samples = CoverageTracer.samples(walk.points)
-                for (i in targets) out[i] = out[i].visit(samples, shapes[i]).first
+                for (i in targets) {
+                    out[i] = out[i].visit(samples, shapes[i]).first
+                    walkedBy.getOrPut(out[i].id) { ArrayList() }.add(walk)
+                }
             }
-            out to Progression.backfill(snapshotWalks, out)
+            // When the walks just pulled (from a phone that doesn't keep dates yet, say)
+            // last crossed each tile, for the mist.
+            val lastWalked = HashMap<UUID, Map<Hex, Int>>()
+            for (city in out) {
+                val walks = walkedBy[city.id] ?: continue
+                Mist.lastWalked(listOf(city), walks)[city.id]?.let { lastWalked[city.id] = it }
+            }
+            Triple(out, Progression.backfill(snapshotWalks, out), lastWalked)
         }
         if (generation != dataGeneration) return
         // Location fixes can arrive while the worker runs. Union its result so no
@@ -1252,7 +1289,8 @@ class AppModel(
             val again = restored.first.firstOrNull { it.id == city.id } ?: return@map city
             // Only the visited ones: the rest of its tiles are the snapshot's, which a
             // street update since then may have changed.
-            city.copy(visited = city.visited + again.visited, tiles = city.tiles + again.visited)
+            val walked = restored.third[city.id]?.takeIf { it.isNotEmpty() }
+            city.copy(visited = city.visited + again.visited, tiles = city.tiles + again.visited).mergingLastWalked(walked)
         }
         installBackfill(restored.second)
         historyRevision++
@@ -1263,6 +1301,7 @@ class AppModel(
         for (city in cities) unlockStickers(city, city.visited, notify = false, popUp = false)
         store.save(cities)
         refreshNeighbours()
+        fillInLastWalked()
     }
 
     /**
@@ -1324,6 +1363,7 @@ class AppModel(
         cachedHistoricalRewards = null
         questTileCounts = emptyMap()
         countingTilesByPlace = emptyMap()
+        lastWalkedPending.clear()
         afterHistory.clear()
         historyRevision++
         nearby = emptyList()
@@ -1335,6 +1375,43 @@ class AppModel(
         tilesRevision++
         store.wipe()
         onChange()
+    }
+
+    // Mist
+
+    /**
+     * Works out when each tile was last walked from the saved walks, once for each
+     * place saved before that was kept (or added since), in the background
+     * ([historyScope]; straight away in tests). Walks carry on recording meanwhile:
+     * the dates are merged in, the later one winning.
+     */
+    private fun fillInLastWalked() {
+        for (city in cities) if (city.lastWalked == null) lastWalkedPending.add(city.id)
+        lastWalkedPending.retainAll(cities.mapTo(HashSet()) { it.id })
+        if (fillingLastWalked || lastWalkedPending.isEmpty()) return
+        fillingLastWalked = true
+        val ids = HashSet(lastWalkedPending)
+        val generation = dataGeneration
+        val places = cities.filter { it.id in ids }
+        val routes = walks
+        fun install(found: Map<UUID, Map<Hex, Int>>) {
+            fillingLastWalked = false
+            if (generation != dataGeneration) return
+            cities = cities.map { city -> found[city.id]?.let { city.mergingLastWalked(it) } ?: city }
+            lastWalkedPending.removeAll(ids)
+            if (found.values.any { it.isNotEmpty() }) tilesRevision++
+            // Not marked as changed: the other phone works out the same from the same
+            // walks, and it goes up with the place's next change.
+            store.save(cities)
+            fillInLastWalked()
+            onChange()
+        }
+        val scope = historyScope
+        if (scope == null) {
+            install(Mist.lastWalked(places, routes))
+        } else {
+            scope.launch { install(withContext(Dispatchers.Default) { Mist.lastWalked(places, routes) }) }
+        }
     }
 
     private fun shape(city: City): BoundaryShape = shapes.getOrPut(city.id) { city.shape() }

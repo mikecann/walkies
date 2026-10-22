@@ -185,8 +185,13 @@ struct WalkDetailView: View {
                     .stickerCard(in: RoundedRectangle(cornerRadius: 24))
                 } else {
                     Map(initialPosition: .region(region(for: coordinates))) {
+                        // A light halo and a dark edge under the teal, so it shows over grass and water.
                         MapPolyline(coordinates: coordinates)
-                            .stroke(Color(red: 0.16, green: 0.72, blue: 0.78), style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+                            .stroke(TrailContrast.halo.color(TrailContrast.haloAlpha), style: StrokeStyle(lineWidth: 5 + TrailContrast.haloExtra, lineCap: .round, lineJoin: .round))
+                        MapPolyline(coordinates: coordinates)
+                            .stroke(TrailContrast.edge.color(TrailContrast.edgeAlpha), style: StrokeStyle(lineWidth: 5 + TrailContrast.edgeExtra, lineCap: .round, lineJoin: .round))
+                        MapPolyline(coordinates: coordinates)
+                            .stroke(TrailContrast.teal.color(1), style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
                         if let first = coordinates.first {
                             Annotation("Start", coordinate: first) {
                                 Circle().fill(Color.badgeGreen)

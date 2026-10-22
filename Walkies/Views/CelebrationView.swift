@@ -385,7 +385,7 @@ private struct ReplayEffects: View {
     let style: String
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    static let teal = Color(red: 0.16, green: 0.72, blue: 0.78)
+    static let teal = TrailContrast.teal.color(1)
 
     var body: some View {
         TimelineView(.animation) { timeline in
@@ -431,6 +431,7 @@ private struct ReplayEffects: View {
             path.addLine(to: head)
         }
         context.stroke(path, with: .color(.white.opacity(0.9)), style: StrokeStyle(lineWidth: 8, lineCap: .round, lineJoin: .round))
+        context.stroke(path, with: .color(TrailContrast.edge.color(TrailContrast.edgeAlpha)), style: StrokeStyle(lineWidth: 4.5 + TrailContrast.edgeExtra, lineCap: .round, lineJoin: .round))
         context.stroke(path, with: .color(Self.teal), style: StrokeStyle(lineWidth: 4.5, lineCap: .round, lineJoin: .round))
         if player.phase == .replay {
             context.fill(Path(ellipseIn: CGRect(x: head.x - 10, y: head.y - 10, width: 20, height: 20)), with: .color(.white))

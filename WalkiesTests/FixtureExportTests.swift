@@ -32,7 +32,8 @@ enum FixtureValues {
             ],
             stickers: ["geographe-jetty": Hex(q: -3, r: -7), "old-mill": Hex(q: 145554, r: -44178)],
             createdAt: date(800_000_000.5), updatedAt: date(812_345_678.25),
-            tileCredits: [City.TileCredit(id: credit, at: date(-31_535_999.875), hexes: [Hex(q: -3, r: -7)])]
+            tileCredits: [City.TileCredit(id: credit, at: date(-31_535_999.875), hexes: [Hex(q: -3, r: -7)])],
+            lastWalked: LastWalked([Hex(q: -3, r: -7): 29_833_340, Hex(q: 145554, r: -44178): -1])
         ),
         City(
             id: placeB, name: "Bare place", detail: "", osmId: nil, gridVersion: nil,

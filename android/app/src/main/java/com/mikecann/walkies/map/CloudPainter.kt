@@ -7,10 +7,12 @@ import android.graphics.DashPathEffect
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuffColorFilter
 import android.graphics.Shader
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
+import com.mikecann.walkies.grid.Hex
 import com.mikecann.walkies.place.RoadLine
 import kotlin.math.abs
 import kotlin.math.cos
@@ -94,7 +96,27 @@ class CloudPainter(private val density: Float) {
     /** The place's outline on the map: MapKit's white dashed polygon. */
     private val boundaryPaint = stroke(2f, rgb(1.0, 1.0, 1.0, 0.85), floatArrayOf(6f, 5f), round = false)
     /** Teal, so the route stands apart from this walk's orange tiles. */
-    private val routePaint = stroke(4f, rgb(0.16, 0.72, 0.78))
+    private val routePaint = stroke(TRAIL_WIDTH, TEAL)
+    // Under every trail, so it reads over grass, trees, water and roads alike: a soft
+    // light halo, then a thin dark edge, like the route lines in map apps (TrailContrast
+    // in Clouds.swift).
+    private val haloPaint = stroke(TRAIL_WIDTH + HALO_EXTRA, HALO)
+    private val edgePaint = stroke(TRAIL_WIDTH + EDGE_EXTRA, EDGE)
+    private val markHalo = stroke(3.5f, HALO).apply { strokeCap = Paint.Cap.BUTT }
+    private val markEdge = stroke(1.4f, EDGE).apply { strokeCap = Paint.Cap.BUTT }
+    private val footprintPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG).apply {
+        colorFilter = PorterDuffColorFilter(FOOTPRINT, PorterDuff.Mode.SRC_IN)
+    }
+    private val footprintEdge = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG).apply {
+        colorFilter = PorterDuffColorFilter(EDGE, PorterDuff.Mode.SRC_IN)
+    }
+    private val footprintHalo = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG).apply {
+        colorFilter = PorterDuffColorFilter(rgb(1.0, 1.0, 1.0, HALO_ALPHA + 0.15), PorterDuff.Mode.SRC_IN)
+    }
+    // Mist (Mist.kt): the haze on a layer of its own, and the sparkles as it clears.
+    private val mistPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+    private val sparkleFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val sparkleEdge = stroke(1f, Color.BLACK).apply { strokeCap = Paint.Cap.BUTT }
     /** Tiles uncovered this walk: MapKit's orange polygons under the clouds. */
     private val freshFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = rgb(1.0, 0.47, 0.18, 0.18) }
     private val freshStroke = stroke(2f, rgb(1.0, 0.47, 0.18), round = false)
@@ -110,7 +132,7 @@ class CloudPainter(private val density: Float) {
     private val honeycombFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val honeycombStroke = stroke(1.2f, Color.WHITE)
     // The shop's trails, marker and spyglass ring (CosmeticTrail, YouAreHere and SpyglassRing in Clouds.swift).
-    private val rainbowPaint = stroke(4f, Color.WHITE)
+    private val rainbowPaint = stroke(TRAIL_WIDTH, Color.WHITE)
     private val sparklePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val markerPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG).apply {
         setShadowLayer(3 * density, 0f, 2 * density, rgb(0.0, 0.0, 0.0, 0.25))
@@ -211,6 +233,8 @@ class CloudPainter(private val density: Float) {
         clock: Double,
         layer: RectF = bounds,
         near: DoubleArray? = null,
+        /** Mist over tiles just walked again, fading under a few sparkles. */
+        leavingMist: List<CloudField.MistPatch> = emptyList(),
     ) {
         val scale = projection.centreScale / density
         drawBoundary(canvas, field, projection, near)
@@ -302,6 +326,87 @@ class CloudPainter(private val density: Float) {
             }
             canvas.restoreToCount(saved)
         }
+        drawMist(canvas, field, leavingMist, reveal, ease, projection, sprites, bounds, layer, near)
+    }
+
+    /**
+     * The haze over misty tiles, on a layer of its own so where patches overlap it stays
+     * one even wash, then the sparkles over mist just cleared: a lighter touch than
+     * clouds parting. As drawMist in CloudScene.swift.
+     */
+    private fun drawMist(
+        canvas: Canvas, field: CloudField, leavingMist: List<CloudField.MistPatch>, reveal: Double, ease: Double,
+        projection: Projection, sprites: CloudSprites, bounds: RectF, layer: RectF, near: DoubleArray?,
+    ) {
+        val fading = reveal < 1 && leavingMist.isNotEmpty()
+        if (field.mist.isEmpty() && !fading) return
+        var saved = -1
+        fun patch(p: CloudField.MistPatch, fade: Float) {
+            if (away(near, p.x, p.y, p.radius * 1.5)) return
+            if (!capped(projection, p.x, p.y, p.radius)) return
+            if (cr < bounds.left || cl > bounds.right || cb < bounds.top || ct > bounds.bottom) return
+            // Only once there's something to show: a layer costs a whole screen of drawing.
+            if (saved < 0) saved = canvas.saveLayerAlpha(layer, alpha(MIST_OPACITY))
+            mistPaint.alpha = alpha(fade)
+            rect.set(cl, ct, cr, cb)
+            canvas.drawBitmap(sprites.mist, null, rect, mistPaint)
+        }
+        for (p in field.mist) patch(p, 1f)
+        if (fading) for (p in leavingMist) patch(p, (1 - ease).toFloat())
+        if (saved >= 0) canvas.restoreToCount(saved)
+        if (!fading) return
+        for (p in leavingMist) {
+            if (away(near, p.x, p.y, p.radius * 1.5)) continue
+            if (!capped(projection, p.x, p.y, p.radius)) continue
+            if (cr < bounds.left || cl > bounds.right || cb < bounds.top || ct > bounds.bottom) continue
+            drawSparkles(canvas, p.tile, cl, ct, cr, cb, reveal)
+        }
+    }
+
+    /**
+     * A handful of stars over a tile whose mist is clearing, each twinkling in and out
+     * at its own moment as it drifts up, always the same way for the same tile (and the
+     * same as the iPhone's). None when the tile's too small on screen to see them.
+     */
+    private fun drawSparkles(canvas: Canvas, tile: Hex, l: Float, t: Float, r: Float, b: Float, reveal: Double) {
+        // The patch is bigger than the tile; the tile's about three quarters of it.
+        val size = min(r - l, b - t) / CloudField.MIST_SPREAD
+        if (size < SPARKLE_TILE * density) return
+        val rng = SplitMix64(CloudField.hash(tile))
+        val cx = (l + r) / 2.0
+        val cy = (t + b) / 2.0
+        repeat(5) {
+            val start = rng.unit() * 0.45
+            val f = (reveal - start) / 0.5
+            val x = cx + (rng.unit() - 0.5) * size * 0.8
+            val y = cy + (rng.unit() - 0.5) * size * 0.6
+            val scale = 0.8 + rng.unit() * 0.5
+            if (f <= 0 || f >= 1) return@repeat
+            val pulse = sin(f * Math.PI)
+            starPath(x, y - f * size * 0.15, (2.5 + 3.5 * pulse) * scale * density)
+            sparkleEdge.color = rgb(0.0, 0.0, 0.0, 0.35 * pulse)
+            canvas.drawPath(star, sparkleEdge)
+            sparkleFill.color = rgb(1.0, 0.97, 0.82, pulse)
+            canvas.drawPath(star, sparkleFill)
+        }
+    }
+
+    /** A four-pointed star round [x], [y], into [star]. */
+    private fun starPath(x: Double, y: Double, radius: Double) {
+        val r = radius.toFloat()
+        val inner = r * 0.3f
+        val cx = x.toFloat()
+        val cy = y.toFloat()
+        star.rewind()
+        star.moveTo(cx, cy - r)
+        star.lineTo(cx + inner, cy - inner)
+        star.lineTo(cx + r, cy)
+        star.lineTo(cx + inner, cy + inner)
+        star.lineTo(cx, cy + r)
+        star.lineTo(cx - inner, cy + inner)
+        star.lineTo(cx - r, cy)
+        star.lineTo(cx - inner, cy - inner)
+        star.close()
     }
 
     /**
@@ -309,7 +414,10 @@ class CloudPainter(private val density: Float) {
      * open: the clearings growing and the clouds drifting off them, with room for
      * their shadows. Into [out]; false if there's nothing.
      */
-    fun revealBounds(field: CloudField, leaving: List<CloudField.Puff>, freshClearings: BooleanArray?, projection: Projection, out: RectF): Boolean {
+    fun revealBounds(
+        field: CloudField, leaving: List<CloudField.Puff>, freshClearings: BooleanArray?, projection: Projection, out: RectF,
+        leavingMist: List<CloudField.MistPatch> = emptyList(),
+    ): Boolean {
         out.setEmpty()
         var any = false
         fun add(x: Double, y: Double, radius: Double) {
@@ -321,6 +429,8 @@ class CloudPainter(private val density: Float) {
             any = true
         }
         for (puff in leaving) add(puff.x, puff.y, puff.radius * 1.5)
+        // Room for the sparkles drifting up off it.
+        for (patch in leavingMist) add(patch.x, patch.y, patch.radius)
         if (freshClearings != null) {
             for (i in field.clearings.indices) {
                 if (i < freshClearings.size && freshClearings[i]) add(field.clearings[i].x, field.clearings[i].y, field.clearings[i].radius)
@@ -411,6 +521,8 @@ class CloudPainter(private val density: Float) {
                 minX, minY, if (horizontal) maxX else minX, if (horizontal) minY else maxY,
                 RAINBOW, null, Shader.TileMode.CLAMP,
             )
+            canvas.drawPath(path, haloPaint)
+            canvas.drawPath(path, edgePaint)
             canvas.drawPath(path, rainbowPaint)
         }
     }
@@ -431,28 +543,25 @@ class CloudPainter(private val density: Float) {
         // print for a left and a right foot.
         canvas.rotate(90f)
         if (!isLeft) canvas.scale(-1f, 1f)
-        rect.set(-3.5f * density, -5f * density, 3.5f * density, 5f * density)
-        canvas.drawBitmap(footprint, null, rect, bitmapPaint)
+        // A light halo, a dark edge, then the print itself in a stronger green than the picture's.
+        rect.set(-6.2f * density, -7.95f * density, 6.2f * density, 7.95f * density)
+        canvas.drawBitmap(footprint, null, rect, footprintHalo)
+        rect.set(-5f * density, -6.75f * density, 5f * density, 6.75f * density)
+        canvas.drawBitmap(footprint, null, rect, footprintEdge)
+        rect.set(-4f * density, -5.75f * density, 4f * density, 5.75f * density)
+        canvas.drawBitmap(footprint, null, rect, footprintPaint)
         canvas.restore()
     }
 
     private fun drawSparkle(canvas: Canvas, x: Double, y: Double, clock: Double, index: Int) {
         val twinkle = 0.5 + 0.5 * sin(clock * 2.4 + index * 2.399)
-        val r = ((2 + twinkle * 1.8) * density).toFloat()
-        val inner = r * 0.3f
-        val cx = x.toFloat()
-        val cy = y.toFloat()
-        star.rewind()
-        star.moveTo(cx, cy - r)
-        star.lineTo(cx + inner, cy - inner)
-        star.lineTo(cx + r, cy)
-        star.lineTo(cx + inner, cy + inner)
-        star.lineTo(cx, cy + r)
-        star.lineTo(cx - inner, cy + inner)
-        star.lineTo(cx - r, cy)
-        star.lineTo(cx - inner, cy - inner)
-        star.close()
-        sparklePaint.color = rgb(1.0, 0.81, 0.25, 0.5 + twinkle * 0.5)
+        starPath(x, y, (2 + twinkle * 1.8) * density)
+        val a = 0.5 + twinkle * 0.5
+        markHalo.alpha = alpha((HALO_ALPHA * a).toFloat())
+        canvas.drawPath(star, markHalo)
+        markEdge.alpha = alpha((EDGE_ALPHA * a).toFloat())
+        canvas.drawPath(star, markEdge)
+        sparklePaint.color = rgb(1.0, 0.81, 0.25, a)
         canvas.drawPath(star, sparklePaint)
     }
 
@@ -685,6 +794,8 @@ class CloudPainter(private val density: Float) {
             }
             j += 2
         }
+        canvas.drawPath(path, haloPaint)
+        canvas.drawPath(path, edgePaint)
         canvas.drawPath(path, routePaint)
     }
 
@@ -745,11 +856,31 @@ class CloudPainter(private val density: Float) {
         fun rgb(r: Double, g: Double, b: Double, a: Double = 1.0) =
             Color.argb((a * 255).roundToInt(), (r * 255).roundToInt(), (g * 255).roundToInt(), (b * 255).roundToInt())
 
-        /** SwiftUI's red, orange, yellow, green, cyan, blue and purple. */
+        /** The rainbow's colours: SwiftUI's, but a brighter, yellower green that grass can't swallow. */
         private val RAINBOW = intArrayOf(
-            rgb(1.0, 0.231, 0.188), rgb(1.0, 0.584, 0.0), rgb(1.0, 0.8, 0.0), rgb(0.204, 0.78, 0.349),
-            rgb(0.196, 0.678, 0.902), rgb(0.0, 0.478, 1.0), rgb(0.686, 0.322, 0.871),
+            rgb(1.0, 0.23, 0.19), rgb(1.0, 0.58, 0.0), rgb(1.0, 0.8, 0.0), rgb(0.45, 0.93, 0.3),
+            rgb(0.2, 0.78, 1.0), rgb(0.0, 0.48, 1.0), rgb(0.69, 0.32, 0.87),
         )
+
+        // TrailContrast in Clouds.swift.
+        /** The plain line, brighter and bluer than it was so it doesn't sink into grass and water. */
+        val TEAL = rgb(0.1, 0.85, 0.95)
+        /** This walk's line, in points. */
+        const val TRAIL_WIDTH = 5.5f
+        const val HALO_ALPHA = 0.45
+        /** How much wider than the line the halo is, in all. */
+        const val HALO_EXTRA = 6f
+        const val EDGE_ALPHA = 0.6
+        const val EDGE_EXTRA = 2.5f
+        private val HALO = rgb(1.0, 1.0, 1.0, HALO_ALPHA)
+        private val EDGE = rgb(0.05, 0.12, 0.16, EDGE_ALPHA)
+        /** The footprints' green, lighter and stronger than the shop's picture of them. */
+        private val FOOTPRINT = rgb(0.56, 0.93, 0.42)
+
+        /** Morning haze: paler and far more see-through than the clouds, so a misty tile still reads as cleared. */
+        const val MIST_OPACITY = 0.42f
+        /** Sparkles only once a tile's at least this many points across. */
+        const val SPARKLE_TILE = 10f
 
         private val green = rgb(0.36, 0.72, 0.4)
         private val grey = rgb(0.35, 0.37, 0.42)

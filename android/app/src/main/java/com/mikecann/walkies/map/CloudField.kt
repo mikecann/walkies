@@ -3,6 +3,7 @@ package com.mikecann.walkies.map
 import com.mikecann.walkies.grid.Hex
 import com.mikecann.walkies.grid.HexGrid
 import com.mikecann.walkies.place.City
+import com.mikecann.walkies.place.Mist
 import com.mikecann.walkies.place.RoadLine
 import java.util.UUID
 
@@ -11,7 +12,16 @@ import java.util.UUID
  * It covers every place you've added at once, on the same world grid. A port of
  * CloudField in Clouds.swift; tiles are plain hexes since there's only the world grid.
  */
-class CloudField(cities: List<City>, walkTiles: Set<Hex> = emptySet()) {
+class CloudField(
+    cities: List<City>,
+    walkTiles: Set<Hex> = emptySet(),
+    /**
+     * Seconds since 1970. Tiles walked but not walked again for [mistDays] before then
+     * get mist. Null for none (the celebration's replays).
+     */
+    mistAt: Double? = null,
+    mistDays: Double = Mist.DEFAULT_DAYS,
+) {
     class Puff(
         val tile: Hex,
         val x: Double,
@@ -25,6 +35,9 @@ class CloudField(cities: List<City>, walkTiles: Set<Hex> = emptySet()) {
 
     class Clearing(val tile: Hex, val x: Double, val y: Double, val radius: Double)
 
+    /** A pale haze over a tile you've walked but not for a while (Mist.kt). */
+    class MistPatch(val tile: Hex, val x: Double, val y: Double, val radius: Double)
+
     /** Interleaved x, y map points. */
     class Line(val points: DoubleArray, val kind: RoadLine.Kind)
 
@@ -37,6 +50,8 @@ class CloudField(cities: List<City>, walkTiles: Set<Hex> = emptySet()) {
     val puffs: List<Puff>
     /** Where to cut the clouds away over walked hexes. */
     val clearings: List<Clearing>
+    /** Haze over walked tiles that haven't been walked again for a while. */
+    val mist: List<MistPatch>
     val lines: List<Line>
     /** The places' outlines, so the dotted roads stop at their edges. Interleaved x, y. */
     val outline: List<DoubleArray>
@@ -66,6 +81,9 @@ class CloudField(cities: List<City>, walkTiles: Set<Hex> = emptySet()) {
 
         val size = HexGrid.SIZE * MapPoints.perGridUnit
         clearings = clear.map { val c = centre(it); Clearing(it, c[0], c[1], size * CLEARING) }
+        mist = if (mistAt == null) emptyList() else {
+            Mist.tiles(cities, mistAt, mistDays).filter { it in clear }.map { val c = centre(it); MistPatch(it, c[0], c[1], size * MIST_SPREAD) }
+        }
         puffs = clouded
             .map { tile ->
                 // Nudge and resize each cloud a little, always the same way for the same
@@ -132,6 +150,11 @@ class CloudField(cities: List<City>, walkTiles: Set<Hex> = emptySet()) {
          * street gets swallowed by the clouds either side of it.
          */
         const val CLEARING = 1.25
+        /**
+         * Radius of the haze over each misty tile, as a multiple of the hex size: enough
+         * for neighbours to run together into one wash.
+         */
+        const val MIST_SPREAD = 1.3
         const val SPRITE_COUNT = 8
 
         // Honeycomb kinds, in drawing order.
@@ -147,6 +170,13 @@ class CloudField(cities: List<City>, walkTiles: Set<Hex> = emptySet()) {
         const val THIS_WALK = 4
 
         val empty = CloudField(emptyList())
+
+        /** Mist in [old] that's gone from [new]: tiles just walked again, to sparkle. */
+        fun clearedMist(old: CloudField, new: CloudField): List<MistPatch> {
+            if (old.mist.isEmpty()) return emptyList()
+            val still = new.mist.mapTo(HashSet()) { it.tile }
+            return old.mist.filter { it.tile !in still }
+        }
 
         private fun centre(tile: Hex): DoubleArray {
             val c = HexGrid.projection.unproject(HexGrid.centre(tile))
@@ -181,7 +211,7 @@ class CloudField(cities: List<City>, walkTiles: Set<Hex> = emptySet()) {
             return out
         }
 
-        private fun hash(hex: Hex): Long = (hex.q.toLong() * 73_856_093L) xor (hex.r.toLong() * 19_349_663L)
+        fun hash(hex: Hex): Long = (hex.q.toLong() * 73_856_093L) xor (hex.r.toLong() * 19_349_663L)
     }
 }
 

@@ -38,6 +38,8 @@ private class Reveal(
     val leaving: List<CloudField.Puff>,
     val freshClearings: BooleanArray?,
     val startedAt: Long,
+    /** Mist over tiles just walked again, fading under a few sparkles. */
+    val leavingMist: List<CloudField.MistPatch> = emptyList(),
 )
 
 /**
@@ -190,7 +192,7 @@ private class CloudScene(private val density: Float) {
         canvas.clipRect(bake.patch)
         painter.drawClouds(
             canvas, bake.field, reveal.leaving, reveal.freshClearings, progress, bake.frame.projection, bake.sprites,
-            bake.rect, bake.clock, bake.patch, bake.patchNear,
+            bake.rect, bake.clock, bake.patch, bake.patchNear, reveal.leavingMist,
         )
         canvas.restore()
         if (layer >= 0) canvas.restoreToCount(layer)
@@ -201,7 +203,7 @@ private class CloudScene(private val density: Float) {
     private fun patch(bake: CloudBake, reveal: Reveal): Boolean {
         if (bake.patchFor !== reveal) {
             bake.patchFor = reveal
-            val any = painter.revealBounds(bake.field, reveal.leaving, reveal.freshClearings, bake.frame.projection, bake.patch) &&
+            val any = painter.revealBounds(bake.field, reveal.leaving, reveal.freshClearings, bake.frame.projection, bake.patch, reveal.leavingMist) &&
                 bake.patch.intersect(bake.rect)
             if (!any) bake.patch.setEmpty()
             // The ground under the patch, to skip everything nowhere near it.
@@ -233,7 +235,7 @@ private class CloudScene(private val density: Float) {
         val shown = front
         // Tiles clearing since what's on screen: open them up.
         if (shown != null && bake.previous === shown.field && bake.field !== shown.field && bake.freshClearings != null) {
-            reveal = Reveal(bake.field, bake.leaving, bake.freshClearings, now)
+            reveal = Reveal(bake.field, bake.leaving, bake.freshClearings, now, bake.leavingMist)
         } else if (shown == null || shown.field.places != bake.field.places) {
             reveal = null
         }

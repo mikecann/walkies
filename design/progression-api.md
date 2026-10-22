@@ -143,6 +143,13 @@ have no recoverable timestamps, so this cannot retroactively date their coverage
 As with the design's other derived earnings, deleting a place or changing its
 counting tiles can change historical totals.
 
+Mist (`Mist.swift`, `Mist.kt`) keeps an optional `City.lastWalked` in the same
+place JSON: `[[q, r, minute], ...]`, the minute in whole minutes since 1970 (UTC),
+for walked tiles only. Merging keeps the later minute per tile. Places saved before
+it have none; each phone works it out once from its saved walks' timed route samples
+and the tile credits' dates, on a worker, without marking the place changed. It is
+only a look: tiles, %, shells, XP, levels, quests and secrets never read it.
+
 ## Persistence and sync
 
 `Store.loadProgress()` and `save(progress:)` read/write `progress.json`. The

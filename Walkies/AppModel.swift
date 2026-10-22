@@ -160,6 +160,7 @@ final class AppModel {
         // Migration can be sizeable on an older phone. Never trace saved routes
         // while opening the app, reading balance or processing a location fix.
         historyTask = Task { await prepareHistory() }
+        fillInLastWalked()
     }
 
     /// Sync calls this before uploading anything. If the cache/network is unavailable,
@@ -233,6 +234,7 @@ final class AppModel {
         tilesRevision += 1
         rebuildCountingTiles()
         await prepareHistory()
+        fillInLastWalked()
         if servicesEnabled { resumeAlwaysOn(); refreshNeighbours() }
     }
 
@@ -376,13 +378,14 @@ final class AppModel {
     var cloudKey: String { currentClouds.key }
     var cloudField: CloudField { currentClouds.field }
 
-    private var wantedCloudKey: String { "\(tilesRevision)-\(cities.count)" }
+    /// Also changes as time passes, for tiles misting over while the app's open.
+    private var wantedCloudKey: String { "\(tilesRevision)-\(cities.count)-\(Mist.epoch(.now, days: Mist.days))" }
 
     private var currentClouds: (key: String, field: CloudField) {
         _ = cloudsBuilt
         let key = wantedCloudKey
         guard let clouds else {
-            let first = (key, CloudField(cities: cities))
+            let first = (key, CloudField(cities: cities, mistAt: .now))
             clouds = first
             return first
         }
@@ -398,7 +401,7 @@ final class AppModel {
         let cities = cities
         let generation = dataGeneration
         Task {
-            let field = await Task.detached(priority: .userInitiated) { CloudField(cities: cities) }.value
+            let field = await Task.detached(priority: .userInitiated) { CloudField(cities: cities, mistAt: .now) }.value
             buildingClouds = false
             if generation == dataGeneration { clouds = (key, field) }
             cloudsBuilt += 1
@@ -594,7 +597,7 @@ final class AppModel {
                 autoWalkPending = false
                 let samples = CoverageTracer.samples(for: walk.points)
                 activePath = samples
-                let uncovered = visit(samples)
+                let uncovered = visit(samples, at: point.time)
                 walk.newTiles += uncovered
                 revealCount += uncovered
             }
@@ -621,7 +624,7 @@ final class AppModel {
         guard !step.samples.isEmpty else { return }
         if let origin = step.origin, activePath.last != origin { activePath.append(origin) }
         activePath.append(point.coordinate)
-        let uncovered = visit(step.samples)
+        let uncovered = visit(step.samples, at: point.time)
         if uncovered > 0 {
             walk.newTiles += uncovered
             revealCount += uncovered
@@ -733,13 +736,23 @@ final class AppModel {
         finishAutoWalk()
     }
 
-    /// Marks these points as visited in every city. Returns how many tiles were new.
-    private func visit(_ points: [Coordinate]) -> Int {
+    /// Marks these points as visited in every city, walked at `time` (seconds since
+    /// 1970). Returns how many tiles were new.
+    private func visit(_ points: [Coordinate], at time: Double) -> Int {
         var uncovered = 0
+        let mistDays = Mist.days
         for i in cities.indices {
             var city = cities[i]
             let originalTiles = city.tiles
             let fresh = city.visit(points, within: shape(for: city))
+            // Every tile walked gets today's date, clearing any mist over it. That
+            // changes nothing else: no tiles, %, shells or quests.
+            let walked = city.noteWalked(points, at: time, mistDays: mistDays)
+            if walked.changed, fresh.isEmpty {
+                city.updatedAt = .now
+                cities[i] = city
+                if !walked.cleared.isEmpty { tilesRevision += 1 }
+            }
             guard !fresh.isEmpty else { continue }
             city.updatedAt = .now
             cities[i] = city
@@ -752,6 +765,46 @@ final class AppModel {
         }
         if uncovered > 0 { refreshProgressPicks() }
         return uncovered
+    }
+
+    // MARK: Mist
+
+    /// Places whose last-walked dates haven't been worked out from the saved walks yet.
+    @ObservationIgnored private var lastWalkedPending: Set<UUID> = []
+    @ObservationIgnored private var fillingLastWalked = false
+
+    /// Works out when each tile was last walked from the saved walks, once for each
+    /// place saved before that was kept (or added since), in the background. Walks carry
+    /// on recording meanwhile: the dates are merged in, the later one winning.
+    private func fillInLastWalked() {
+        lastWalkedPending.formUnion(cities.filter { $0.lastWalked == nil }.map(\.id))
+        lastWalkedPending.formIntersection(cities.map(\.id))
+        guard !fillingLastWalked, !worldGridResetPending, !lastWalkedPending.isEmpty else { return }
+        fillingLastWalked = true
+        let ids = lastWalkedPending
+        let generation = dataGeneration
+        let places = cities.filter { ids.contains($0.id) }
+        let routes = walks
+        Task {
+            let found = await Task.detached(priority: .utility) { City.lastWalked(for: places, from: routes) }.value
+            fillingLastWalked = false
+            guard generation == dataGeneration else { return }
+            for i in cities.indices {
+                guard let walked = found[cities[i].id] else { continue }
+                cities[i].mergeLastWalked(walked)
+            }
+            lastWalkedPending.subtract(ids)
+            if found.values.contains(where: { !$0.isEmpty }) { tilesRevision += 1 }
+            // Not marked as changed: the other phone works out the same from the same
+            // walks, and it goes up with the place's next change.
+            store.save(cities)
+            fillInLastWalked()
+        }
+    }
+
+    /// Waits for `fillInLastWalked`, for tests.
+    func waitForLastWalked() async {
+        while fillingLastWalked { try? await Task.sleep(for: .milliseconds(5)) }
     }
 
     // MARK: Stickers
@@ -848,6 +901,7 @@ final class AppModel {
         refreshProgressPicks()
         requestSync?()
         refreshNeighbours()
+        fillInLastWalked()
     }
 
     func deleteCity(_ id: UUID) {
@@ -1141,8 +1195,9 @@ final class AppModel {
                 let remoteCredits = Set((remote.tileCredits ?? []).map(\.id))
                 let localStreets = city.streetsVersion ?? 0, remoteStreets = remote.streetsVersion ?? 0
                 let hadMore = !city.visited.isSubset(of: remote.visited) || !localCredits.isSubset(of: remoteCredits)
-                    || localStreets > remoteStreets
+                    || localStreets > remoteStreets || city.lastWalked?.hasLater(than: remote.lastWalked) == true
                 city.mergeTileCredits(from: remote)
+                city.mergeLastWalked(remote.lastWalked)
                 city.visited.formUnion(remote.visited)
                 city.stickers = (city.stickers ?? [:]).merging(remote.stickers ?? [:]) { _, theirs in theirs }
                 // Street tiles come from the copy with the newer WalkableRule, so a phone
@@ -1159,6 +1214,7 @@ final class AppModel {
                 cities[i] = city
             } else {
                 cities.append(remote)
+                if remote.lastWalked == nil { lastWalkedPending.insert(remote.id) }
                 if selectedCityID == nil { select(remote.id) }
             }
             shapes[remote.id] = nil
@@ -1178,13 +1234,24 @@ final class AppModel {
         let restored = await Task.detached(priority: .utility) {
             var restoredCities = snapshotCities
             let shapes = restoredCities.map { $0.shape() }
+            var walkedBy: [UUID: [Walk]] = [:]
             for walk in snapshotWalks {
                 let targets = restoredCities.indices.filter { changedCities.contains(restoredCities[$0].id) || newIDs.contains(walk.id) }
                 guard !targets.isEmpty else { continue }
                 let samples = CoverageTracer.samples(for: walk.points)
-                for i in targets { _ = restoredCities[i].visit(samples, within: shapes[i]) }
+                for i in targets {
+                    _ = restoredCities[i].visit(samples, within: shapes[i])
+                    walkedBy[restoredCities[i].id, default: []].append(walk)
+                }
             }
-            return (restoredCities, Progression.backfill(walks: snapshotWalks, cities: restoredCities))
+            // When the walks just pulled (from a phone that doesn't keep dates yet, say)
+            // last crossed each tile, for the mist.
+            var lastWalked: [UUID: LastWalked] = [:]
+            for city in restoredCities {
+                guard let walks = walkedBy[city.id] else { continue }
+                lastWalked[city.id] = City.lastWalked(for: [city], from: walks)[city.id]
+            }
+            return (restoredCities, Progression.backfill(walks: snapshotWalks, cities: restoredCities), lastWalked)
         }.value
         guard generation == dataGeneration else { return }
         // Location fixes can arrive while the worker runs. Union its result so no
@@ -1195,6 +1262,7 @@ final class AppModel {
             // street update since then may have changed.
             cities[i].visited.formUnion(restoredCity.visited)
             cities[i].tiles.formUnion(restoredCity.visited)
+            if let walked = restored.2[restoredCity.id], !walked.isEmpty { cities[i].mergeLastWalked(walked) }
         }
         installBackfill(restored.1)
         historyRevision += 1
@@ -1205,6 +1273,7 @@ final class AppModel {
         for city in cities { unlockStickers(in: city, on: city.visited, notify: false, popUp: false) }
         store.save(cities)
         refreshNeighbours()
+        fillInLastWalked()
     }
 
     /// A genuine discovery beats the explored-coverage sentinel; otherwise the
@@ -1249,6 +1318,7 @@ final class AppModel {
         questTileCounts = [:]
         countingTilesByPlace = [:]
         addedTiles = [:]
+        lastWalkedPending = []
         historyRevision += 1
         placesRevision += 1
         stickerQueue = []

@@ -26,6 +26,8 @@ class CloudSprites private constructor(
     val tops: List<Bitmap>,
     val shadows: List<Bitmap>,
     val eraser: Bitmap,
+    /** A soft pale disc for the mist, the same for every look. */
+    val mist: Bitmap,
 ) {
     companion object {
         const val COUNT = CloudField.SPRITE_COUNT
@@ -65,7 +67,7 @@ class CloudSprites private constructor(
                 tops.add(top(circles, 384, if (i % 2 == 0) palette.top else palette.alternate, palette.edge))
                 shadows.add(shadow(circles, 160))
             }
-            return CloudSprites(bases, tops, shadows, eraser(128))
+            return CloudSprites(bases, tops, shadows, eraser(128), mist(128))
         }
 
         /** Circles as x, y, radius in a -1...1 square with y up. */
@@ -132,6 +134,18 @@ class CloudSprites private constructor(
             val s = size / 2f
             val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 shader = RadialGradient(s, s, s, intArrayOf(Color.BLACK, Color.BLACK, Color.TRANSPARENT), floatArrayOf(0f, 0.68f, 1f), Shader.TileMode.CLAMP)
+            }
+            Canvas(bitmap).drawCircle(s, s, s, paint)
+            return bitmap
+        }
+
+        /** Morning haze: a pale blue-white, even across the middle and fading out over the outer half. */
+        private fun mist(size: Int): Bitmap {
+            val bitmap = bitmap(size)
+            val s = size / 2f
+            val haze = rgb(0.93, 0.95, 0.99)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = RadialGradient(s, s, s, intArrayOf(haze, haze, transparent(haze)), floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP)
             }
             Canvas(bitmap).drawCircle(s, s, s, paint)
             return bitmap

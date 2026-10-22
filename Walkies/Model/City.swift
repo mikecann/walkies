@@ -28,6 +28,9 @@ nonisolated struct City: Codable, Equatable, Identifiable, Sendable {
     /// The WalkableRule.version its street tiles were worked out with. Nil for places
     /// built before busy roads were left out; the app redoes their tiles once.
     var streetsVersion: Int?
+    /// When each walked tile was last walked, for the mist (Mist.swift). Nil for places
+    /// saved before it was kept; the app works it out once from the saved walks.
+    var lastWalked: LastWalked?
 
     struct TileCredit: Codable, Equatable, Sendable {
         var id: UUID

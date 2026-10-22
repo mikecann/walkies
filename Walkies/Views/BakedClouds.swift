@@ -234,6 +234,7 @@ final class BakedCloudEngine {
     private struct Reveal {
         var started: Double
         var leaving: [CloudField.Puff]
+        var leavingMist: [CloudField.MistPatch] = []
         var fresh: Set<CloudField.Tile>
         /// Worked out for the bake on screen: the box drawn live, and what's near it.
         var frameID: Int?
@@ -385,7 +386,7 @@ final class BakedCloudEngine {
         let frame = front.frame
         if reveal.frameID != frame.id {
             reveal.frameID = frame.id
-            reveal.patch = CloudBakery.revealPatch(field: front.field, leaving: reveal.leaving, frame: frame)
+            reveal.patch = CloudBakery.revealPatch(field: front.field, leaving: reveal.leaving, leavingMist: reveal.leavingMist, frame: frame)
             if let patch = reveal.patch {
                 // Big enough round the patch to take in every puff, street and grid
                 // line that reaches into it.
@@ -411,7 +412,7 @@ final class BakedCloudEngine {
         }
         guard let patch = reveal.patch else { return }
         let scene = CloudScene(
-            field: reveal.field, leaving: reveal.leaving, reveal: progress, fresh: reveal.fresh,
+            field: reveal.field, leaving: reveal.leaving, leavingMist: reveal.leavingMist, reveal: progress, fresh: reveal.fresh,
             projection: frame.projection, bounds: reveal.area, clock: front.clock, puffMargin: 0, reference: reveal.reference
         )
         let sprites = CloudSprites.sprites(for: front.theme)
@@ -499,10 +500,13 @@ final class BakedCloudEngine {
             honeycombRoot.bounds = CGRect(origin: .zero, size: bake.frame.rect.size)
         }
         let old = front
-        if let old, bake.job.previousKey == old.fieldKey, bake.fieldKey != old.fieldKey, !bake.leaving.isEmpty,
-           old.field.places == bake.field.places {
-            // Tiles clearing since what's on screen: open them up.
-            reveal = Reveal(started: CACurrentMediaTime(), leaving: bake.leaving, fresh: Set(bake.leaving.map(\.tile)))
+        if let old, bake.job.previousKey == old.fieldKey, bake.fieldKey != old.fieldKey,
+           !bake.leaving.isEmpty || !bake.leavingMist.isEmpty, old.field.places == bake.field.places {
+            // Tiles clearing since what's on screen: open them up, or sparkle the mist off them.
+            reveal = Reveal(
+                started: CACurrentMediaTime(), leaving: bake.leaving, leavingMist: bake.leavingMist,
+                fresh: Set(bake.leaving.map(\.tile))
+            )
         } else if old == nil || old?.field.places != bake.field.places {
             reveal = nil
             cloudImage.mask = nil

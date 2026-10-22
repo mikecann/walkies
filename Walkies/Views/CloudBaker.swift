@@ -27,6 +27,8 @@ nonisolated final class CloudBake: @unchecked Sendable {
     let honeycomb: CGImage?
     /// The clouds in the previous field that aren't in this one, if it's tiles clearing.
     let leaving: [CloudField.Puff]
+    /// Mist in the previous field that's gone from this one: tiles walked again.
+    let leavingMist: [CloudField.MistPatch]
     let milliseconds: Double
 
     var frame: BakeFrame { job.frame }
@@ -35,11 +37,15 @@ nonisolated final class CloudBake: @unchecked Sendable {
     var theme: String { job.theme }
     var clock: Double { job.clock }
 
-    init(job: BakeJob, clouds: CGImage?, honeycomb: CGImage?, leaving: [CloudField.Puff], milliseconds: Double) {
+    init(
+        job: BakeJob, clouds: CGImage?, honeycomb: CGImage?, leaving: [CloudField.Puff],
+        leavingMist: [CloudField.MistPatch] = [], milliseconds: Double
+    ) {
         self.job = job
         self.clouds = clouds
         self.honeycomb = honeycomb
         self.leaving = leaving
+        self.leavingMist = leavingMist
         self.milliseconds = milliseconds
     }
 }
@@ -53,9 +59,11 @@ nonisolated enum CloudBakery {
         let started = DispatchTime.now().uptimeNanoseconds
         let sprites = CloudSprites.sprites(for: job.theme)
         var leaving: [CloudField.Puff] = []
+        var leavingMist: [CloudField.MistPatch] = []
         if let old = job.previous, job.previousKey != job.fieldKey, old.places == job.field.places {
             let still = Set(job.field.puffs.map(\.tile))
             leaving = old.puffs.filter { !still.contains($0.tile) }
+            leavingMist = CloudField.clearedMist(from: old, to: job.field)
         }
         let frame = job.frame
         let scene = CloudScene(field: job.field, projection: frame.projection, bounds: frame.rect, clock: job.clock, puffMargin: 0.05)
@@ -66,7 +74,7 @@ nonisolated enum CloudBakery {
             honeycomb = render(frame.rect, scale: frame.scale * honeycombScale) { tiles.draw(in: $0) }
         }
         let took = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6
-        return CloudBake(job: job, clouds: clouds, honeycomb: honeycomb, leaving: leaving, milliseconds: took)
+        return CloudBake(job: job, clouds: clouds, honeycomb: honeycomb, leaving: leaving, leavingMist: leavingMist, milliseconds: took)
     }
 
     /// A bitmap of `rect` (in screen points) at `scale` pixels to the point, drawn in
@@ -100,7 +108,7 @@ nonisolated enum CloudBakery {
 
     /// The box round tiles clearing, in the bake's screen points and on its pixel grid,
     /// that's drawn live over the bake while they open. Nil if they're nowhere on it.
-    static func revealPatch(field: CloudField, leaving: [CloudField.Puff], frame: BakeFrame) -> CGRect? {
+    static func revealPatch(field: CloudField, leaving: [CloudField.Puff], leavingMist: [CloudField.MistPatch] = [], frame: BakeFrame) -> CGRect? {
         let p = frame.projection
         let scale = p.centreScale
         var box = CGRect.null
@@ -109,6 +117,11 @@ nonisolated enum CloudBakery {
             let radius = puff.radius * 1.5
             let r = CloudScene.capped(p.ellipse(centre: puff.centre, radius: radius), radius: radius, centreScale: scale)
             if !r.isNull { box = box.union(grown(r)) }
+        }
+        for patch in leavingMist {
+            // Room for the sparkles drifting up off it.
+            let r = CloudScene.capped(p.ellipse(centre: patch.centre, radius: patch.radius), radius: patch.radius, centreScale: scale)
+            if !r.isNull { box = box.union(r.insetBy(dx: -8, dy: -8 - r.height * 0.15)) }
         }
         let fresh = Set(leaving.map(\.tile))
         for clearing in field.clearings where fresh.contains(clearing.tile) {
@@ -137,6 +150,10 @@ nonisolated enum CloudBakery {
         }
         out.clearings = field.clearings.filter { clearing in
             let r = CloudScene.capped(p.ellipse(centre: clearing.centre, radius: clearing.radius), radius: clearing.radius, centreScale: scale)
+            return !r.isNull && r.intersects(area)
+        }
+        out.mist = field.mist.filter { patch in
+            let r = CloudScene.capped(p.ellipse(centre: patch.centre, radius: patch.radius), radius: patch.radius, centreScale: scale)
             return !r.isNull && r.intersects(area)
         }
         let gridArea = area.insetBy(dx: -40, dy: -40)

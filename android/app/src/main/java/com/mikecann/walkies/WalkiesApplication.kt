@@ -193,6 +193,10 @@ class Prefs(context: Context) : Settings, SyncPrefs {
         get() = prefs.getFloat("autoWalkGap", 0f).toDouble()
         set(value) = prefs.edit().putFloat("autoWalkGap", value.toFloat()).apply()
 
+    override var mistDays: Double
+        get() = prefs.getFloat("mistDays", 0f).toDouble()
+        set(value) = prefs.edit().putFloat("mistDays", value.toFloat()).apply()
+
     override var selectedCity: String?
         get() = prefs.getString("selectedCity", null)
         set(value) = prefs.edit().putString("selectedCity", value).apply()

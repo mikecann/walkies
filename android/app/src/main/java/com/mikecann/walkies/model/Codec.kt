@@ -75,6 +75,15 @@ object Codec {
             }))
         }
         c.streetsVersion?.let { put("streetsVersion", it) }
+        c.lastWalked?.let { walked ->
+            put("lastWalked", JsonArray(walked.map { (hex, minute) ->
+                buildJsonArray {
+                    add(JsonPrimitive(hex.q))
+                    add(JsonPrimitive(hex.r))
+                    add(JsonPrimitive(minute))
+                }
+            }))
+        }
     }
 
     fun city(e: JsonElement): City {
@@ -97,7 +106,21 @@ object Codec {
                 City.TileCredit(credit.uuid("id"), credit.date("at"), hexes(credit.req("hexes")))
             },
             streetsVersion = o.opt("streetsVersion")?.int(),
+            lastWalked = o.opt("lastWalked")?.let(::lastWalked),
         )
+    }
+
+    /** `[[q, r, minute], ...]`, the later minute if a tile's there twice. */
+    private fun lastWalked(e: JsonElement): Map<Hex, Int> {
+        val out = LinkedHashMap<Hex, Int>()
+        for (entry in e.arr()) {
+            val a = entry.arr()
+            if (a.size != 3) throw Invalid("A last-walked tile is [q, r, minute]")
+            val hex = Hex(a[0].int32(), a[1].int32())
+            val minute = a[2].int()
+            out[hex] = maxOf(out[hex] ?: minute, minute)
+        }
+        return out
     }
 
     fun cities(list: List<City>) = JsonArray(list.map(::city))
