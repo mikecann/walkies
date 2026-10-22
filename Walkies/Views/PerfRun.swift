@@ -107,6 +107,10 @@ final class PerfRun {
         // Straight out, as stdout's buffered when it isn't a terminal.
         print("WALKIES_PERF " + line)
         fflush(stdout)
+        // Also saved, for a phone where devicectl's console doesn't pass stdout back:
+        // `devicectl device copy from --domain-type appDataContainer --source Library/Caches/perf-<renderer>.json`.
+        let name = "perf-\(CloudRenderer.current.rawValue).json"
+        try? data.write(to: URL.cachesDirectory.appending(path: name))
     }
 
     func run() async {
