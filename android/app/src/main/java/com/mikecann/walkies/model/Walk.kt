@@ -36,6 +36,8 @@ data class Walk(
      * so changing the filters or adding a city later uses the full history.
      */
     val points: List<TrackPoint> = emptyList(),
+    /** Null when counting was off or the phone had no count. */
+    val steps: Int? = null,
     val distance: Double = 0.0,
     val gridVersion: Int? = HexGrid.VERSION,
     val newTiles: Int = 0,

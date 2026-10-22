@@ -217,6 +217,7 @@ object Codec {
         w.endedAt?.let { put("endedAt", it.sinceReference) }
         put("points", JsonArray(w.points.map(::trackPoint)))
         put("distance", w.distance)
+        w.steps?.let { put("steps", it) }
         w.gridVersion?.let { put("gridVersion", it) }
         put("newTiles", w.newTiles)
         w.newTilesByPlace?.let { counts -> put("newTilesByPlace", JsonObject(counts.mapValues { JsonPrimitive(it.value) })) }
@@ -233,6 +234,7 @@ object Codec {
             endedAt = o.opt("endedAt")?.let { SwiftDate(it.double()) },
             points = o.req("points").arr().map(::trackPoint),
             distance = o.double("distance"),
+            steps = o.opt("steps")?.int(),
             gridVersion = o.opt("gridVersion")?.int(),
             newTiles = o.req("newTiles").int(),
             newTilesByPlace = o.opt("newTilesByPlace")?.obj()?.mapValuesTo(LinkedHashMap()) { it.value.int() },

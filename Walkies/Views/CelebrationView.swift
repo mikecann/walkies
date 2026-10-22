@@ -623,6 +623,10 @@ private struct SummaryCard: View {
                     stat("\(recap.secrets.count)", recap.secrets.count == 1 ? "Secret" : "Secrets")
                 }
 
+                if let steps = recap.walk.steps {
+                    Text("\(steps.formatted()) steps").font(.headline)
+                }
+
                 if !recap.isRewatch {
                     progressionSummary
                 }

@@ -116,6 +116,7 @@ dependencies {
     implementation(libs.mapbox.maps)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.play.services.location)
+    implementation(libs.play.services.fitness)
     implementation(libs.kotlinx.coroutines.android)
     // Google sign-in runs in a Custom Tab.
     implementation(libs.androidx.browser)

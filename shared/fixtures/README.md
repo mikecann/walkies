@@ -7,3 +7,5 @@ Test data used by both the iPhone and Android apps.
   - Write `ios/` with `TEST_RUNNER_WALKIES_FIXTURES_OUT=$PWD/shared/fixtures/ios xcodebuild test -only-testing:WalkiesTests/FixtureExportTests ...`. The Android tests read every file in it, write it back and check the JSON means the same.
   - Write `android/` with `cd android && ./gradlew testDebugUnitTest -PwriteFixtures`. `FixtureExportTests` reads every file in it with the iPhone's decoders and `Store`.
   - Sets (tiles, hexes) come out in any order on the iPhone, so regenerating `ios/` shuffles them. That's fine: the tests compare meaning, not bytes.
+
+The fixture tests also round-trip the saved walks with optional `steps` added. The golden files without steps stay valid for older app versions.

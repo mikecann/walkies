@@ -167,6 +167,16 @@ class FixtureTest {
         assumeTrue("No iPhone fixtures in shared/fixtures/ios yet: see shared/fixtures/README.md", files(ios).isNotEmpty())
 
     @Test
+    fun sharedWalksRoundTripWithStepsToo() {
+        skipIfNoIosFixtures()
+        for (name in files(ios).filter { it.startsWith("walks/") }) {
+            val original = Codec.walk(Codec.parse(File(ios, name).readText()))
+            val withSteps = original.copy(steps = 1234)
+            assertEquals(withSteps, Codec.walk(Codec.parse(Codec.walk(withSteps).toString())))
+        }
+    }
+
+    @Test
     fun iPhoneFilesReadAndWriteBackTheSame() {
         skipIfNoIosFixtures()
         for (name in files(ios)) {

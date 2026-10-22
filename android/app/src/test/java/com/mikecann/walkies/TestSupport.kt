@@ -6,6 +6,7 @@ import java.nio.file.Files
 
 class FakeSettings(
     override var alwaysOn: Boolean = false,
+    override var countSteps: Boolean = true,
     override var autoWalkGap: Double = 0.0,
     override var selectedCity: String? = null,
     override var setupDone: Boolean = true,

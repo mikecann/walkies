@@ -212,7 +212,7 @@ private fun Words(step: SetupStep) {
         SetupStep.AllTheTime -> "Even when it's closed" to
             "For walks to count with Walkies closed and your phone in your pocket, it needs your location all the time."
         SetupStep.Activity -> "Walking, not driving" to
-            "Physical activity lets Walkies tell walking from cycling or driving, and rest the GPS while you're sitting still."
+            "Physical activity lets Walkies tell walking from cycling or driving, count your steps, and rest the GPS while you're sitting still."
         SetupStep.Secrets -> "Secrets hide under the clouds" to
             "Local history and odd little stories are tucked under some of the tiles. Walkies can give you a ping when you walk over one."
         SetupStep.Battery -> "Keep Walkies awake" to

@@ -90,6 +90,7 @@ import kotlinx.coroutines.withContext
 fun MapScreen(
     model: AppModel,
     tracker: LocationTracker,
+    liveSteps: Int?,
     /** Why always-on can't notice walks with the app closed, if it can't. */
     alwaysOnWarning: String?,
     /** Whoever's signed in, for your head on the place chip. */
@@ -338,6 +339,7 @@ fun MapScreen(
             }
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 WalkControls(
+                    liveSteps = liveSteps,
                     walk = model.activeWalk,
                     pendingDistance = if (model.autoWalkPending) model.pendingWalkDistance else null,
                     alwaysOn = model.alwaysOn,

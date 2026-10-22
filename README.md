@@ -10,6 +10,7 @@ Based on an idea from James.
 - **Tiles** use one world grid for every place and user. They are 50 m from centre to corner around Busselton (about 87 m across), with ground size varying by latitude. [Grid formulas and reset/deployment notes](design/grid.md). Only tiles with a street or path through them count towards the total, so canals, the estuary and the middle of the bay don't stop you finishing. If you walk through a tile that wasn't counted (a beach, or a park with no mapped paths) it gets added and counts.
 - **The map** is Apple's satellite view with labels. The whole suburb starts under cloud, and the streets underneath are drawn across the clouds as dotted lines so you can plan where to go. Bits with no street or path (bush, wetland, canals) don't count towards 100%, so each one clears when you walk the street nearest to it. The look came from a round of concept art in `design/concepts/`, and `design/compare/` shows why the no-path bits are clouded too.
 - **Walks** keep tracking with the phone locked in your pocket, using "While Using the App" location permission plus the background location mode. Tiles turn orange as you uncover them, and the phone buzzes if the app's open.
+- **Steps** are counted by the phone's motion chip, with no extra battery use. Each walk keeps its steps, and Walks shows your steps today. Count steps in Settings turns it off.
 - **Always on** is switched on by the first-run setup (`SetupView`), which asks for location, motion and notifications one at a time. With "Always" location permission, walks start by themselves when you're moving on foot and end after 10 minutes without moving. GPS pauses while you're still, and iOS relaunches the app after a few hundred metres if it was closed. Only on-foot points are saved. It can be turned off in Settings, and then you press Start walk.
 - **Neighbours**: zoomed out, the suburbs within about 5 km of your places are outlined with a "+ name" button to add them. Overpass finds the localities (admin_level 9 in WA, 10 elsewhere in Australia) and one Nominatim lookup fetches their outlines. Overpass is often slow or down, so if it fails the app asks Nominatim which suburb each point on a 2.5 km grid is in instead, and retries a few times if that fails too. The list is kept in `nearby.json` for a month. Every place uses the world hex grid, so tiles line up along the borders, and the map draws every place's clouds at once.
 - **The map** starts tilted at an isometric angle with Apple's 3D buildings (Settings > 3D view to flatten it). Your position is drawn on top of the clouds, since MapKit's own dot would be under them.
@@ -36,6 +37,8 @@ To fake a walk in the simulator, start a walk in the app and then:
 ```bash
 scripts/sim-walk.sh scripts/routes/navigation-way.txt
 ```
+
+Debug builds can show a sample step count in the simulator with `-fakeSteps YES`. The argument and sample counts are compiled out of Release.
 
 To test always-on without waiting 10 minutes for a walk to end, launch with a shorter gap: `xcrun simctl launch booted com.mikecann.walkies -autoWalkGap 20`.
 

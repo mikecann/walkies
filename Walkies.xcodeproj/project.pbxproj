@@ -298,7 +298,7 @@
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "With Always on, Walkies records your walks in the background, so you never have to press Start walk.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Walkies uses your location to uncover the tiles you walk through.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Walkies records a voice note when you suggest a feature, so you can say it rather than type it.";
-				INFOPLIST_KEY_NSMotionUsageDescription = "Walkies uses motion to tell walking from cycling or driving, so only walks uncover tiles.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "Walkies uses motion to tell walking from cycling or driving, and to count your steps.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Walkies writes out your voice note as you speak when you suggest a feature.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -336,7 +336,7 @@
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "With Always on, Walkies records your walks in the background, so you never have to press Start walk.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Walkies uses your location to uncover the tiles you walk through.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Walkies records a voice note when you suggest a feature, so you can say it rather than type it.";
-				INFOPLIST_KEY_NSMotionUsageDescription = "Walkies uses motion to tell walking from cycling or driving, so only walks uncover tiles.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "Walkies uses motion to tell walking from cycling or driving, and to count your steps.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Walkies writes out your voice note as you speak when you suggest a feature.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

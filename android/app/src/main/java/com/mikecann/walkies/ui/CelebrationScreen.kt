@@ -732,6 +732,8 @@ private fun SummaryCard(
             SummaryStat("${recap.secrets.size}", if (recap.secrets.size == 1) "Secret" else "Secrets")
         }
 
+        recap.walk.steps?.let { BasicText(Format.steps(it), style = Type.headline) }
+
         if (!recap.isRewatch) {
             ProgressionSummary(recap, countedShells, xpLevel, xpFill.value.toDouble(), endingXP, filled, hasReward, onReward)
         }
