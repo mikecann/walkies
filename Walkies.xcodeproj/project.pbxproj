@@ -165,7 +165,7 @@
 			mainGroup = A1B2C3D40000000000000050;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				A1B2C3D40000000000000300 /* XCRemoteSwiftPackageReference "feedback-chef" */,
+				A1B2C3D40000000000000300 /* XCRemoteSwiftPackageReference "chef-cloud" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A1B2C3D40000000000000051 /* Products */;
@@ -401,12 +401,12 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		A1B2C3D40000000000000300 /* XCRemoteSwiftPackageReference "feedback-chef" */ = {
+		A1B2C3D40000000000000300 /* XCRemoteSwiftPackageReference "chef-cloud" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/sethconvex/feedback-chef";
+			repositoryURL = "https://github.com/convex/chef-cloud";
 			requirement = {
 				kind = revision;
-				revision = dc9056d4bfb52cac5719d29f39d5bf61c211ac21;
+				revision = dacd0428b138796f66373fedc756dddadc8e913a;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -414,7 +414,7 @@
 /* Begin XCSwiftPackageProductDependency section */
 		A1B2C3D40000000000000301 /* ChefKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = A1B2C3D40000000000000300 /* XCRemoteSwiftPackageReference "feedback-chef" */;
+			package = A1B2C3D40000000000000300 /* XCRemoteSwiftPackageReference "chef-cloud" */;
 			productName = ChefKit;
 		};
 /* End XCSwiftPackageProductDependency section */
