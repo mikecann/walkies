@@ -42,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -254,20 +255,35 @@ fun MapScreen(
     }
 
     Box(Modifier.fillMaxSize()) {
-        if (hasToken) {
-            // It ends at the tab bar, so its logo goes along the bottom with no room for the phone's bar.
-            MapboxMap(state, onTap = {}, onReady = { mapReady = true }, modifier = Modifier.fillMaxSize(), systemBarInset = false)
-        } else {
-            StandInMap(state, onTap = {}, onReady = { mapReady = true })
+        // Only the map layers extend under the sheet's corners. The controls keep
+        // their old bounds, and the logo stays above the sheet too.
+        Box(
+            Modifier.fillMaxSize().layout { measurable, constraints ->
+                val overlap = TabBarCornerRadius.roundToPx()
+                val map = measurable.measure(constraints.copy(
+                    minHeight = constraints.minHeight + overlap,
+                    maxHeight = constraints.maxHeight + overlap,
+                ))
+                layout(map.width, map.height - overlap) { map.placeRelative(0, 0) }
+            },
+        ) {
+            if (hasToken) {
+                MapboxMap(
+                    state, onTap = {}, onReady = { mapReady = true }, modifier = Modifier.fillMaxSize(),
+                    systemBarInset = false, bottomOverlay = TabBarCornerRadius,
+                )
+            } else {
+                StandInMap(state, onTap = {}, onReady = { mapReady = true })
+            }
+            CloudLayer(field, state, sprites, route, freshOutlines, you, cosmetics = cosmetics, animate = active)
+            StickerPinLayer(pins, state, onPick = onOpenSecret)
+            NeighbourLayer(
+                neighbours = if (addingStatus == null) model.neighbours else emptyList(),
+                state = state,
+                avoid = buttonFrames.values.toList(),
+                onPick = { pickedNeighbour = it },
+            )
         }
-        CloudLayer(field, state, sprites, route, freshOutlines, you, cosmetics = cosmetics, animate = active)
-        StickerPinLayer(pins, state, onPick = onOpenSecret)
-        NeighbourLayer(
-            neighbours = if (addingStatus == null) model.neighbours else emptyList(),
-            state = state,
-            avoid = buttonFrames.values.toList(),
-            onPick = { pickedNeighbour = it },
-        )
 
         // Keeps the status bar readable over dark water.
         Box(

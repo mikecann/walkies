@@ -207,11 +207,60 @@ enum TabArt {
         return image
     }
 
+    /// A cream sheet with the same white edge and soft shadow as the map's stickers.
+    private static func sheetImages() -> (background: UIImage, shadow: UIImage) {
+        let radius: CGFloat = 22
+        let shadowHeight: CGFloat = 24
+        let width: CGFloat = 128
+        let fixedTop = radius + 2
+        let image = UIGraphicsImageRenderer(size: CGSize(width: width, height: shadowHeight + fixedTop + 1)).image { context in
+            // The bottom runs beyond the image, so only the top edge casts a shadow.
+            let sheet = UIBezierPath(
+                roundedRect: CGRect(x: 0, y: shadowHeight, width: width, height: 100),
+                byRoundingCorners: [.topLeft, .topRight],
+                cornerRadii: CGSize(width: radius, height: radius)
+            )
+            context.cgContext.saveGState()
+            context.cgContext.setShadow(offset: CGSize(width: 0, height: -3), blur: 12, color: UIColor.black.withAlphaComponent(0.24).cgColor)
+            UIColor(Color.cream).setFill()
+            sheet.fill()
+            context.cgContext.restoreGState()
+
+            // Only the top edge has a rim, with its stroke kept inside the sheet.
+            let rim = UIBezierPath()
+            rim.addArc(withCenter: CGPoint(x: radius, y: shadowHeight + radius), radius: radius - 1, startAngle: .pi, endAngle: .pi * 1.5, clockwise: true)
+            rim.addLine(to: CGPoint(x: width - radius, y: shadowHeight + 1))
+            rim.addArc(withCenter: CGPoint(x: width - radius, y: shadowHeight + radius), radius: radius - 1, startAngle: .pi * 1.5, endAngle: 0, clockwise: true)
+            rim.lineWidth = 2
+            UIColor.white.setStroke()
+            rim.stroke()
+        }
+
+        // UIKit puts the shadow above the bar. Splitting the drawing there keeps
+        // the bar's height and safe area unchanged, including on home-button phones.
+        func slice(y: CGFloat, height: CGFloat, top: CGFloat) -> UIImage {
+            UIGraphicsImageRenderer(size: CGSize(width: width, height: height)).image { _ in
+                image.draw(at: CGPoint(x: 0, y: -y))
+            }
+            .resizableImage(withCapInsets: UIEdgeInsets(top: top, left: radius + shadowHeight, bottom: 0, right: radius + shadowHeight), resizingMode: .stretch)
+            .withRenderingMode(.alwaysOriginal)
+        }
+        return (
+            // Leave a plain cream row below the rim's ends for vertical stretching.
+            slice(y: shadowHeight, height: fixedTop + 1, top: fixedTop),
+            slice(y: 0, height: shadowHeight, top: shadowHeight - 1)
+        )
+    }
+
     /// The tab bar in cream, with the reward badge in the app's orange.
     static func styleTabBar() {
         let appearance = UITabBarAppearance()
-        appearance.configureWithOpaqueBackground()
-        appearance.backgroundColor = UIColor(Color.cream)
+        appearance.configureWithTransparentBackground()
+        let sheet = sheetImages()
+        appearance.backgroundImage = sheet.background
+        appearance.backgroundImageContentMode = .scaleToFill
+        appearance.shadowColor = .clear
+        appearance.shadowImage = sheet.shadow
         for layout in [appearance.stackedLayoutAppearance, appearance.inlineLayoutAppearance, appearance.compactInlineLayoutAppearance] {
             layout.normal.titleTextAttributes = [.foregroundColor: UIColor(Color.ink.opacity(0.6))]
             layout.selected.titleTextAttributes = [.foregroundColor: UIColor.walkiesOrange]
