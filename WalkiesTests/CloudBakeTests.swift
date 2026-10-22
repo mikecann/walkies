@@ -221,6 +221,74 @@ struct CloudBakeTests {
         #expect(abs(flat.rect.minY + base.size.height * BakeFrame.margin) < 0.01)
     }
 
+    /// A bake from a camera that's since flown far off isn't shown at all, rather than
+    /// warped off the screen or to a speck; one that's only been panned a little shows,
+    /// with the overview round it once the screen's past its edge.
+    @Test func aBakeOnlyShowsWhileItLooksLikeWhatsOnScreen() {
+        let frame = BakeFrame.around(base.projection, size: base.size, displayScale: 3, draft: false)
+        func check(_ camera: TestCamera) -> (shows: Bool, covers: Bool) {
+            guard let warp = BakeWarp(now: camera.projection, frame: frame) else { return (false, false) }
+            return (warp.shows(size: camera.size, now: camera.projection), warp.covers(size: camera.size, now: camera.projection))
+        }
+        #expect(check(base) == (true, true))
+        #expect(check(base.pan(20, 30)) == (true, true))
+        // Past its margin: still shown, but not all of the screen.
+        #expect(check(base.pan(80, 0)) == (true, false))
+        #expect(check(base.zoomed(0.8)) == (true, false))
+        // Flown far off, or zoomed so far it'd be a speck or a blur.
+        #expect(check(base.pan(3000, 0)).shows == false)
+        #expect(check(base.zoomed(0.25)).shows == false)
+        #expect(check(base.zoomed(4)).shows == false)
+        #expect(check(base.zoomed(1 / 2000.0)).shows == false)
+    }
+
+    /// The overview, warped through its turned window, puts every bit of the ground
+    /// where the camera sees it, looking straight down or tilted right back, where
+    /// much of the place is behind the camera.
+    @Test func theOverviewLandsOnTheGroundUnderIt() throws {
+        let field = CloudTests().clearingField().after
+        let overview = CloudBakery.overview(field: field, fieldKey: "a", theme: "clouds.classic", clock: 0)
+        #expect(overview.image != nil)
+        #expect(Double(overview.pixels.width * overview.pixels.height) <= CloudBakery.overviewPixels * 1.01)
+        var near = base.zoomed(0.1)
+        near.centre = field.clearings[0].centre
+        let cameras = [
+            ("flat", near), ("tilted", near.tipped(55).turned(30)), ("turned round", near.tipped(40).turned(170)),
+            ("zoomed out", near.zoomed(0.05)), ("zoomed in", near.zoomed(6).tipped(55).turned(-60)),
+        ]
+        for (name, camera) in cameras {
+            let now = camera.projection
+            let placement = try #require(OverviewPlacement(overview: overview.projection, pixels: overview.pixels, now: now, size: camera.size), "\(name)")
+            #expect(placement.visible, "\(name)")
+            var checked = 0
+            for i in 0...6 {
+                for j in 0...6 {
+                    let s = CGPoint(x: camera.size.width * Double(i) / 6, y: camera.size.height * Double(j) / 6)
+                    if now.isFar(s, far: BakeFrame.far) { continue }
+                    let ground = camera.ground(s)
+                    // Where that ground is in the overview's picture, then where the layers put that.
+                    let pixel = overview.projection.point(ground)
+                    guard CGRect(origin: .zero, size: overview.pixels).contains(pixel) else { continue }
+                    let local = pixel.applying(placement.imageTransform)
+                    #expect(close(apply(placement.transform, local), s, within: 0.05), "\(name) at \(s)")
+                    #expect(CGRect(origin: .zero, size: placement.windowSize).insetBy(dx: -0.01, dy: -0.01).contains(local), "\(name) at \(s)")
+                    checked += 1
+                }
+            }
+            #expect(checked > 0, "\(name)")
+        }
+        // Soft zoomed in, so the live clouds stand in there; sharp zoomed out.
+        let zoomedIn = near.zoomed(20)
+        let zoomedOut = near.zoomed(0.05)
+        let soft = try #require(OverviewPlacement(overview: overview.projection, pixels: overview.pixels, now: zoomedIn.projection, size: zoomedIn.size))
+        let sharp = try #require(OverviewPlacement(overview: overview.projection, pixels: overview.pixels, now: zoomedOut.projection, size: zoomedOut.size))
+        #expect(soft.stretch > BakePolicy.overviewStretch)
+        #expect(sharp.stretch < BakePolicy.overviewStretch)
+        // Looking somewhere else entirely, there's nothing of it to show.
+        let away = try #require(OverviewPlacement(overview: overview.projection, pixels: overview.pixels, now: near.pan(50_000, 0).projection, size: near.size))
+        #expect(!away.visible)
+    }
+
     // MARK: When to bake
 
     private func shown(draft: Bool = false, clock: Double = 100, honeycomb: Bool = true) -> BakePolicy.Shown {
@@ -232,11 +300,12 @@ struct CloudBakeTests {
 
     private func decide(
         _ shown: BakePolicy.Shown?, wanted: BakePolicy.Wanted? = nil, fits: Bool = true, exact: Bool = true,
-        moving: Bool = false, dragging: Bool = false, clock: Double = 101, drifts: Bool = true, asked: BakePolicy.Asked? = nil
+        moving: Bool = false, dragging: Bool = false, clock: Double = 101, drifts: Bool = true, asked: BakePolicy.Asked? = nil,
+        flying: Bool = false
     ) -> BakePolicy.Request? {
         BakePolicy.decide(
             shown: shown, wanted: wanted ?? self.wanted, fits: fits, exact: exact, moving: moving,
-            dragging: dragging, clock: clock, drifts: drifts, asked: asked
+            dragging: dragging, clock: clock, drifts: drifts, asked: asked, flying: flying
         )
     }
 
@@ -273,6 +342,31 @@ struct CloudBakeTests {
         // But only once.
         #expect(decide(shown(draft: true), asked: .init(sameCamera: true, draft: false, honeycomb: true)) == nil)
         #expect(decide(shown(draft: true), asked: .init(sameCamera: false, draft: false, honeycomb: true)) == sharp)
+    }
+
+    /// While MapKit flies the camera by itself (opening the app on you), nothing's
+    /// baked from round it: it'd be far off by the time it was done.
+    @Test func nothingsBakedMidFlight() {
+        #expect(decide(nil, moving: true, flying: true) == nil)
+        #expect(decide(shown(), fits: false, exact: false, moving: true, flying: true) == nil)
+        #expect(decide(shown(draft: true), fits: false, exact: false, moving: true, flying: true) == nil)
+        // New tiles from the frame on screen are still fine, as they drop straight in.
+        let tiles = BakePolicy.Wanted(fieldKey: "b", theme: "clouds.classic")
+        #expect(decide(shown(), wanted: tiles, moving: true, flying: true) == .init(frame: .shown, clock: .shown, honeycomb: true))
+        #expect(decide(shown(), wanted: tiles, fits: false, moving: true, flying: true) == nil)
+        // Under a finger, as before.
+        #expect(decide(shown(), fits: false, exact: false, moving: true, dragging: true) == .init(frame: .fresh(draft: true), clock: .shown, honeycomb: true))
+    }
+
+    /// Bakes take 1 to 2 s on an iPhone XS Max and up to 2.5 s in a Debug build in the
+    /// simulator: none of those is given up on, but one many times slower than the
+    /// last is.
+    @Test func onlyAStuckBakeIsGivenUpOn() {
+        #expect(BakePolicy.giveUp(lastBake: nil) > 2.5)
+        #expect(BakePolicy.giveUp(lastBake: 0.2) == BakePolicy.minimumGiveUp)
+        #expect(BakePolicy.giveUp(lastBake: 0.2) > 2.5)
+        #expect(BakePolicy.giveUp(lastBake: 1.9) > 5)
+        #expect(BakePolicy.giveUp(lastBake: 2.5) > 7)
     }
 
     @Test func stillTheCloudsDriftOnEveryFewSeconds() {
@@ -451,6 +545,155 @@ struct BakedLayerTests {
         try compare(engine, with: field, on: camera, "after flying out past a stuck bake")
     }
 
+    /// Opening the app: MapKit starts on its own region, zoomed right out and off to
+    /// one side, and the first bake's from there. While that's being made it flies in
+    /// to the place, tipped back. The clouds show the whole time, from the overview
+    /// or the live Canvas; nothing's baked mid-flight; the first bake isn't waited
+    /// for once it's landed; and a sharp bake from where it landed fades in.
+    @Test func openingTheAppShowsCloudsAllTheWayAndLandsAFittingBake() async throws {
+        let field = CloudTests().clearingField().after
+        var target = TestCamera().zoomed(0.1).tipped(40)
+        target.centre = field.clearings[0].centre
+        target.size = CGSize(width: 402, height: 874)
+        let start = target.tipped(0).zoomed(0.002).pan(-30, 60)
+        let screen = Screen(start)
+        let handle = MapHandle()
+        let slow = SlowBakery(first: 1.5)
+        var events: [String] = []
+
+        let engine = BakedCloudEngine()
+        engine.testScreen = { (screen.camera.size, 3, screen.camera.projection) }
+        engine.bakery = { slow.bake($0) }
+        engine.log = { events.append($0) }
+        engine.update(field: field, handle: handle)
+
+        // The overview's ready quickly (well under a second on a phone, slower on a
+        // simulator running the suite in parallel), and stands in at once.
+        try await tick(engine, until: "the overview", within: 5) { engine.overview != nil }
+        engine.tick()
+        #expect(engine.showingOverview, "zoomed out, the overview stands in: \(events)")
+        #expect(!engine.status.needsLive)
+        // The first bake, from MapKit's own region, once the camera's been still a moment.
+        try await tick(engine, until: "the first bake", within: 2) { engine.baking }
+
+        // Flies in while it's being made.
+        handle.moving = true
+        let asksBefore = events.filter { $0.hasPrefix("ask #") }.count
+        for step in 1...12 {
+            let t = Double(step) / 12
+            var camera = target
+            camera.zoom = start.zoom * pow(target.zoom / start.zoom, t)
+            camera.pitch = target.pitch * t
+            camera.centre = MKMapPoint(x: start.centre.x + (target.centre.x - start.centre.x) * t, y: start.centre.y + (target.centre.y - start.centre.y) * t)
+            screen.camera = camera
+            engine.tick()
+            #expect(engine.status.needsLive || engine.showingOverview || engine.showingFront, "step \(step): bare map")
+            if engine.showingFront, let front = engine.front {
+                #expect(BakeWarp(now: camera.projection, frame: front.frame)?.shows(size: camera.size, now: camera.projection) == true, "step \(step): a bake from far off drawn")
+            }
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        handle.moving = false
+        engine.tick()
+        #expect(events.filter { $0.hasPrefix("ask #") }.count == asksBefore, "nothing baked mid-flight: \(events)")
+        // Landed, zoomed in and tipped back: the first bake's no use here.
+        #expect(!engine.showingFront)
+        #expect(engine.status.needsLive || engine.showingOverview)
+
+        let landed = Date.now
+        try await settle(engine, on: target)
+        let took = Date.now.timeIntervalSince(landed)
+        // Either it was superseded, or (on a slow simulator) it had already finished
+        // mid-flight; either way nothing waited on it and a fresh bake landed.
+        #expect(events.contains { $0.hasPrefix("supersede #1") || $0.hasPrefix("done #1") || $0.hasPrefix("drop #1") }, "the first bake shouldn't be waited for: \(events)")
+        #expect(engine.abandoned == 0)
+        // Once it's faded in over what stood in for it.
+        try await run(engine, for: BakePolicy.fade * 2 + 0.1)
+        #expect(engine.showingFront && !engine.showingOverview && !engine.status.needsLive)
+        try compare(engine, with: field, on: target, "after opening")
+        print("Opening: sharp bake \(String(format: "%.2f", took)) s after landing. \(events)")
+    }
+
+    /// A bake that no longer looks like what's on screen (the camera zoomed well out,
+    /// or panned far off, with the next one not done) isn't drawn: the overview stands
+    /// in, or where that's too soft, the live Canvas.
+    @Test func aBakeThatNoLongerFitsIsntDrawnOffTheScreen() async throws {
+        let field = CloudTests().clearingField().after
+        var camera = TestCamera().zoomed(0.1).tipped(40)
+        camera.centre = field.clearings[0].centre
+        camera.size = CGSize(width: 402, height: 874)
+        for coarse in [false, true] {
+            let screen = Screen(camera)
+            let gate = StuckBakery()
+            defer { gate.release() }
+            let engine = BakedCloudEngine()
+            if coarse { engine.overviewPixels = 400 }
+            engine.testScreen = { (screen.camera.size, 3, screen.camera.projection) }
+            engine.bakery = { gate.bake($0) }
+            engine.update(field: field, handle: MapHandle())
+            try await settle(engine, on: camera)
+            try await tick(engine, until: "the overview", within: 2) { engine.overview != nil }
+            try await run(engine, for: BakePolicy.fade * 2 + 0.1)
+            #expect(engine.showingFront && !engine.showingOverview && !engine.status.needsLive)
+
+            gate.stickNext()
+            let away = coarse ? camera.pan(300, 0) : camera.zoomed(0.3)
+            screen.camera = away
+            // As the next frame would: the camera's measured at most once a few milliseconds.
+            try await Task.sleep(for: .milliseconds(10))
+            engine.tick()
+            #expect(!engine.showingFront, "coarse \(coarse): the old bake shouldn't be drawn")
+            if coarse {
+                #expect(engine.status.needsLive && !engine.showingOverview, "zoomed in, the live clouds stand in")
+            } else {
+                #expect(engine.showingOverview && !engine.status.needsLive, "zoomed out, the overview stands in")
+                try compare(engine, with: field, on: away, "the overview standing in", simple: true)
+            }
+        }
+    }
+
+    /// A bake that takes 2.5 s, as one can in a Debug build, is waited for, not given
+    /// up on and asked for again.
+    @Test func aSlowBakeIsntGivenUpOn() async throws {
+        let field = CloudTests().clearingField().after
+        var camera = TestCamera().zoomed(0.1).tipped(40)
+        camera.centre = field.clearings[0].centre
+        camera.size = CGSize(width: 402, height: 874)
+        let screen = Screen(camera)
+        let engine = BakedCloudEngine()
+        engine.testScreen = { (screen.camera.size, 3, screen.camera.projection) }
+        engine.update(field: field, handle: MapHandle())
+        try await settle(engine, on: camera)
+
+        let slow = SlowBakery(every: 2.5)
+        engine.bakery = { slow.bake($0) }
+        screen.camera = camera.pan(60, -90)
+        try await settle(engine, on: screen.camera)
+        #expect(engine.abandoned == 0)
+        #expect(slow.count == 1, "asked \(slow.count) times")
+    }
+
+    /// Ticks the engine as its display link would for a while.
+    private func run(_ engine: BakedCloudEngine, for seconds: Double) async throws {
+        let deadline = Date.now.addingTimeInterval(seconds)
+        while Date.now < deadline {
+            engine.tick()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        engine.tick()
+    }
+
+    /// Ticks the engine as its display link would until `done`.
+    private func tick(_ engine: BakedCloudEngine, until what: String, within seconds: Double, _ done: () -> Bool) async throws {
+        let deadline = Date.now.addingTimeInterval(seconds)
+        while Date.now < deadline {
+            engine.tick()
+            if done() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("No \(what) within \(seconds) s")
+    }
+
     /// Ticks the engine as its display link would, until a sharp bake from exactly
     /// this camera is on screen.
     private func settle(_ engine: BakedCloudEngine, on camera: TestCamera) async throws {
@@ -469,10 +712,14 @@ struct BakedLayerTests {
 
     /// Samples the screen every few points: wherever the live renderer draws solid
     /// cloud, the baked layers show cloud, and where it draws none, they show none.
-    private func compare(_ engine: BakedCloudEngine, with field: CloudField, on camera: TestCamera, _ label: String) throws {
+    private func compare(
+        _ engine: BakedCloudEngine, with field: CloudField, on camera: TestCamera, _ label: String, simple: Bool = false
+    ) throws {
         let size = camera.size
         let bounds = CGRect(origin: .zero, size: size)
-        let scene = CloudScene(field: field, projection: camera.projection, bounds: bounds, clock: 0)
+        var scene = CloudScene(field: field, projection: camera.projection, bounds: bounds, clock: 0)
+        // The overview draws only the puffs' tops, as zoomed right out.
+        if simple { scene.detail = 0 }
         let live = try #require(CloudBakery.render(bounds, scale: 1) { scene.draw(in: $0, sprites: CloudSprites.sprites(for: "clouds.classic")) })
         let liveAlpha = Alphas(live)
         var composite = Composite()
@@ -539,6 +786,37 @@ nonisolated private final class StuckBakery: @unchecked Sendable {
         }
         if stick { gate.wait() }
         return CloudBakery.bake(job)
+    }
+}
+
+/// Bakes as the app does, but slower: the first one by `first` seconds, or every one
+/// by `every`, as a Debug build in the simulator might.
+nonisolated private final class SlowBakery: @unchecked Sendable {
+    private let lock = NSLock()
+    private var bakes = 0
+    private let first: Double
+    private let every: Double
+
+    init(first: Double = 0, every: Double = 0) {
+        self.first = first
+        self.every = every
+    }
+
+    var count: Int { lock.withLock { bakes } }
+
+    func bake(_ job: BakeJob) -> CloudBake {
+        let n = lock.withLock { bakes += 1; return bakes }
+        let started = Date.now
+        let bake = CloudBakery.bake(job)
+        let delay = (n == 1 ? first : 0) + every - Date.now.timeIntervalSince(started)
+        if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+        return bake
+    }
+}
+
+extension BakedCloudEngine {
+    func update(field: CloudField, handle: MapHandle) {
+        update(Inputs(field: field, key: "a", theme: "clouds.classic", walkTiles: [], marker: "marker.dot", reduceMotion: true), handle: handle)
     }
 }
 

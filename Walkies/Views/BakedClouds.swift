@@ -132,6 +132,10 @@ final class CloudRenderStats {
     var abandoned = 0
     /// Updates (about one a frame) when the live Canvas stood in for want of a bake.
     var liveTicks = 0
+    /// Updates when the overview stood in, or showed past the edge of a bake.
+    var overviewTicks = 0
+    var overviews = 0
+    var overviewMilliseconds = 0.0
     /// Frames the clouds round tiles clearing were drawn.
     var revealFrames = 0
 }
@@ -143,13 +147,24 @@ final class CloudRenderStats {
 ///
 /// - new tiles or a new look: from the same camera and drift if they still fit, so
 ///   the new one drops straight in (and tiles clearing open up over it);
-/// - while the map moves: a rough, wide bake only once the screen's half way into
+/// - while you move the map: a rough, wide bake only once the screen's half way into
 ///   the margin, or zoomed or turned well past, with the drift held;
+/// - while MapKit flies the camera by itself (as it does on opening): none, as it'd
+///   be far off by the time it was ready;
 /// - once it's been still a quarter of a second: a sharp one from exactly there;
 /// - still for 2.5 s: the same picture with the clouds drifted on, cross-faded in.
 ///
-/// One bake at a time, on a background thread. One that's taking too long is given
-/// up on (see `BakePolicy.giveUp`), but still shown if it turns up before a newer one.
+/// One bake at a time, on a background thread. One that's taking far longer than
+/// they have been is given up on (see `BakePolicy.giveUp`), but still shown if it
+/// turns up before a newer one. One for a camera that's since gone far off isn't
+/// waited for once the camera's still again.
+///
+/// Under the bake, wherever it doesn't reach (or there isn't one fit to show yet),
+/// the overview: every place's clouds from above, small, made once from the tiles.
+/// So the map's never bare, even zoomed right out where the live Canvas is slow.
+/// Zoomed right in, where the overview would look soft, the live Canvas stands in
+/// instead, as it's quick there. A bake that comes to cover the screen fades in over
+/// whichever it was, and the overview then fades out.
 final class BakedCloudEngine {
     struct Inputs {
         var field: CloudField
@@ -162,7 +177,7 @@ final class BakedCloudEngine {
 
     @Observable
     final class Status {
-        /// No bake fit to show, so the live Canvas stands in.
+        /// No bake fit to show and the overview too soft here, so the live Canvas stands in.
         var needsLive = false
     }
 
@@ -173,6 +188,9 @@ final class BakedCloudEngine {
     private final class Layers {
         let cloudHost = PlainLayer()
         let markerHost = PlainLayer()
+        /// The overview's window, warped onto the screen, under the bake.
+        let overviewRoot = PlainLayer()
+        let overviewImage = PlainLayer()
         /// The bake's box, warped onto the screen.
         let cloudRoot = PlainLayer()
         let cloudImage = PlainLayer()
@@ -182,21 +200,29 @@ final class BakedCloudEngine {
         let marker = MarkerLayers()
 
         init() {
-            for layer in [cloudRoot, honeycombRoot] {
+            for layer in [overviewRoot, cloudRoot, honeycombRoot] {
                 layer.anchorPoint = .zero
                 layer.position = .zero
                 layer.isHidden = true
             }
+            overviewRoot.masksToBounds = true
+            overviewImage.anchorPoint = .zero
+            overviewImage.position = .zero
             cloudImage.anchorPoint = .zero
             if LaunchArguments.has("-bakeOutline") {
-                // `-bakeOutline`: a red edge round the bake, to see where it's warped to.
+                // `-bakeOutline`: a red edge round the bake, to see where it's warped to,
+                // and a blue one round the bit of the overview that's showing.
                 cloudImage.borderWidth = 3
                 cloudImage.borderColor = UIColor.systemRed.cgColor
+                overviewRoot.borderWidth = 3
+                overviewRoot.borderColor = UIColor.systemBlue.cgColor
             }
             patchLayer.anchorPoint = .zero
             patchLayer.isHidden = true
+            overviewRoot.addSublayer(overviewImage)
             cloudRoot.addSublayer(cloudImage)
             cloudRoot.addSublayer(patchLayer)
+            cloudHost.addSublayer(overviewRoot)
             cloudHost.addSublayer(cloudRoot)
             cloudHost.addSublayer(honeycombRoot)
             markerHost.addSublayer(marker.accuracy)
@@ -206,6 +232,8 @@ final class BakedCloudEngine {
     private lazy var layers = Layers()
     var cloudHost: CALayer { layers.cloudHost }
     var markerHost: CALayer { layers.markerHost }
+    private var overviewRoot: CALayer { layers.overviewRoot }
+    private var overviewImage: CALayer { layers.overviewImage }
     private var cloudRoot: CALayer { layers.cloudRoot }
     private var cloudImage: CALayer { layers.cloudImage }
     private var patchLayer: CALayer { layers.patchLayer }
@@ -224,12 +252,37 @@ final class BakedCloudEngine {
     /// Every bake asked for is numbered, so one that turns up late can't replace a newer one.
     private var requests = 0
     private var frontRequest = 0
-    /// The bake being made, and when it was asked for.
-    private var inFlight: (request: Int, asked: Double)?
+    /// The bake being made, what it's from, and when it was asked for.
+    private var inFlight: (request: Int, frame: BakeFrame, asked: Double)?
     var baking: Bool { inFlight != nil }
+    /// How long the last bake took, from asking to having it, to know when one's stuck.
+    private var lastBakeSeconds: Double?
+    /// Bakes given up on for taking too long, and ones not waited for as the camera had
+    /// gone far from them.
+    private(set) var abandoned = 0
+    private(set) var superseded = 0
 
     /// Makes a bake, on a background thread. Tests stand in for it.
     var bakery: @Sendable (BakeJob) -> CloudBake = { CloudBakery.bake($0) }
+    /// Notes what the engine asks for and gets, for tests to check the order of.
+    var log: ((String) -> Void)?
+
+    private(set) var overview: CloudOverview?
+    private var overviewRequests = 0
+    private var overviewAsked: (key: String, theme: String)?
+    /// The overview's pixel budget. Tests make it tiny, to have it too soft to show.
+    var overviewPixels = CloudBakery.overviewPixels
+
+    /// What's on screen, as of the last tick.
+    private(set) var showingFront = false
+    private(set) var showingOverview = false
+    /// The front bake reaches past every edge of the screen.
+    private var frontCovers = false
+    private var frontFadeEnds = -Double.infinity
+    /// The live Canvas stays under a bake fading in over it until then.
+    private var liveHeldUntil = -Double.infinity
+    /// The overview's fading out over a bake that's come to cover the screen, until then.
+    private var overviewFadeEnds: Double?
 
     private struct Reveal {
         var started: Double
@@ -290,6 +343,8 @@ final class BakedCloudEngine {
 
     func tick() {
         guard let handle, let inputs else { return }
+        // Needs no camera, so it's started before the map's even laid out.
+        askOverview(inputs)
         let map = handle.map
         let test = testScreen?()
         let size: CGSize, displayScale: Double
@@ -321,53 +376,144 @@ final class BakedCloudEngine {
         let moving = handle.isMoving || now - lastCameraChange < BakePolicy.settle
         let clock = inputs.reduceMotion ? 0 : Date.timeIntervalSinceReferenceDate
 
-        if let inFlight, now - inFlight.asked > BakePolicy.giveUp {
-            // Stop waiting, and ask again: for the same camera too, if it's still there.
-            self.inFlight = nil
-            lastRequest = nil
-            CloudRenderStats.shared.abandoned += 1
+        if let inFlight {
+            if now - inFlight.asked > BakePolicy.giveUp(lastBake: lastBakeSeconds) {
+                // Stop waiting, and ask again: for the same camera too, if it's still there.
+                self.inFlight = nil
+                lastRequest = nil
+                abandoned += 1
+                CloudRenderStats.shared.abandoned += 1
+                log?("give up #\(inFlight.request)")
+            } else if !moving, !(BakeWarp(now: projection, frame: inFlight.frame)?.shows(size: size, now: projection) ?? false) {
+                // From a camera that's since gone far off (the map opening on you while
+                // the first bake was being made): no use waiting for it once it's still.
+                // It's left to finish, and dropped if a newer one's in by then.
+                self.inFlight = nil
+                superseded += 1
+                log?("supersede #\(inFlight.request)")
+            }
         }
         if !baking { ask(projection: projection, size: size, moving: moving, clock: clock, displayScale: displayScale) }
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let live = !place(projection: projection, now: now)
+        let live = present(projection: projection, size: size, now: now)
         if let map { placeMarker(map: map, projection: projection, inputs: inputs) }
         CATransaction.commit()
         if status.needsLive != live { status.needsLive = live }
         if live { CloudRenderStats.shared.liveTicks += 1 }
+        if showingOverview, overviewFadeEnds == nil { CloudRenderStats.shared.overviewTicks += 1 }
 
-        // Every frame while anything's moving; otherwise just often enough to notice
-        // the drift's due. The map changing wakes it straight away.
-        let busy = moving || handle.isDragging || handle.honeycomb(at: .now) > 0 || reveal != nil
+        // Every frame while anything's moving or fading; otherwise just often enough to
+        // notice the drift's due. The map changing wakes it straight away.
+        let fading = now < frontFadeEnds || overviewFadeEnds != nil || now < liveHeldUntil
+        let busy = moving || handle.isDragging || handle.honeycomb(at: .now) > 0 || reveal != nil || fading
         if busy != linkActive, let link {
             linkActive = busy
             link.preferredFrameRateRange = busy ? .default : CAFrameRateRange(minimum: 4, maximum: 10, preferred: 10)
         }
     }
 
-    /// Warps what's baked onto the screen. False if there's nothing fit to show.
-    private func place(projection: Projection, now: Double) -> Bool {
-        guard let inputs, let front, front.field.places == inputs.field.places, front.theme == inputs.theme,
-              let warp = BakeWarp(now: projection, frame: front.frame)
-        else {
-            cloudRoot.isHidden = true
-            honeycombRoot.isHidden = true
-            return false
+    /// Puts the bake, the overview and the honeycomb on screen as they fit the camera
+    /// now. True if the live Canvas has to stand in.
+    private func present(projection: Projection, size: CGSize, now: Double) -> Bool {
+        guard let inputs else { return true }
+        // The bake on screen, if it's of these places in this look and still shows
+        // something like what's on screen: never warped off it, or to a speck.
+        let warp = front.flatMap { front -> BakeWarp? in
+            guard front.field.places == inputs.field.places, front.theme == inputs.theme,
+                  let warp = BakeWarp(now: projection, frame: front.frame), warp.shows(size: size, now: projection)
+            else { return nil }
+            return warp
         }
-        cloudRoot.transform = warp.layerTransform
-        cloudRoot.isHidden = false
+        let covers = warp?.covers(size: size, now: projection) ?? false
+        frontCovers = covers
+        // The overview, if it's of these places (a new look can make do with the old
+        // one for the moment it takes) and sharp enough here.
+        let placement = overview.flatMap { overview -> OverviewPlacement? in
+            guard overview.places == inputs.field.places, overview.image != nil else { return nil }
+            return OverviewPlacement(overview: overview.projection, pixels: overview.pixels, now: projection, size: size)
+        }
+        let overviewFits = placement.map { !$0.visible || $0.stretch <= BakePolicy.overviewStretch } ?? false
+        var live = !covers && !overviewFits
 
-        let opacity = handle?.honeycomb(at: .now) ?? 0
-        if opacity > 0, let honeycomb, let warp = BakeWarp(now: projection, frame: honeycomb.frame) {
+        if let front, let warp, !live {
+            cloudRoot.transform = warp.layerTransform
+            if !showingFront {
+                // Over whatever stood in for it.
+                cloudRoot.isHidden = false
+                cloudRoot.removeAnimation(forKey: "fade")
+                let fade = CABasicAnimation(keyPath: "opacity")
+                fade.fromValue = 0
+                fade.toValue = 1
+                fade.duration = BakePolicy.fade
+                cloudRoot.add(fade, forKey: "fade")
+                frontFadeEnds = now + BakePolicy.fade
+                if status.needsLive { liveHeldUntil = frontFadeEnds }
+            }
+            showingFront = true
+            placeReveal(front: front, now: now)
+        } else {
+            cloudRoot.isHidden = true
+            showingFront = false
+        }
+        if covers, now < liveHeldUntil { live = true }
+
+        if let placement, overviewFits, !live, !covers || overviewFadeEnds != nil || showingOverview {
+            if placement.visible {
+                overviewRoot.bounds = CGRect(origin: .zero, size: placement.windowSize)
+                overviewRoot.transform = placement.transform
+                overviewImage.setAffineTransform(placement.imageTransform)
+                overviewRoot.isHidden = false
+            } else {
+                overviewRoot.isHidden = true
+            }
+            if !covers {
+                if overviewFadeEnds != nil || overviewRoot.opacity < 1 {
+                    overviewRoot.removeAnimation(forKey: "fade")
+                    overviewRoot.opacity = 1
+                    overviewFadeEnds = nil
+                }
+                showingOverview = true
+            } else if let ends = overviewFadeEnds {
+                // Fading out over the bake that's come.
+                if now >= ends { hideOverview() }
+            } else {
+                // Once the bake's faded in over it.
+                let delay = max(0, frontFadeEnds - now)
+                let fade = CABasicAnimation(keyPath: "opacity")
+                fade.fromValue = 1
+                fade.toValue = 0
+                fade.beginTime = CACurrentMediaTime() + delay
+                fade.duration = BakePolicy.fade
+                fade.fillMode = .backwards
+                overviewRoot.opacity = 0
+                overviewRoot.add(fade, forKey: "fade")
+                overviewFadeEnds = now + delay + BakePolicy.fade
+                showingOverview = true
+            }
+        } else {
+            hideOverview()
+        }
+
+        // The honeycomb from its own bake, while you drag.
+        let opacity = live ? 0 : handle?.honeycomb(at: .now) ?? 0
+        if opacity > 0, let honeycomb, let warp = BakeWarp(now: projection, frame: honeycomb.frame), warp.shows(size: size, now: projection) {
             honeycombRoot.transform = warp.layerTransform
             honeycombRoot.opacity = Float(opacity)
             honeycombRoot.isHidden = false
         } else {
             honeycombRoot.isHidden = true
         }
-        placeReveal(front: front, now: now)
-        return true
+        return live
+    }
+
+    private func hideOverview() {
+        overviewRoot.isHidden = true
+        overviewRoot.removeAnimation(forKey: "fade")
+        overviewRoot.opacity = 1
+        overviewFadeEnds = nil
+        showingOverview = false
     }
 
     /// Tiles clearing: the bake everywhere but round them, and there the clouds drawn
@@ -423,6 +569,42 @@ final class BakedCloudEngine {
 
     // MARK: Baking
 
+    /// The overview, once for each set of tiles and look, on a thread of its own so it
+    /// never waits behind a bake.
+    private func askOverview(_ inputs: Inputs) {
+        if let overview, overview.fieldKey == inputs.key, overview.theme == inputs.theme { return }
+        if let asked = overviewAsked, asked.key == inputs.key, asked.theme == inputs.theme { return }
+        overviewAsked = (inputs.key, inputs.theme)
+        overviewRequests += 1
+        let id = overviewRequests
+        let (field, key, theme, pixels) = (inputs.field, inputs.key, inputs.theme, overviewPixels)
+        let clock = inputs.reduceMotion ? 0 : Date.timeIntervalSinceReferenceDate
+        log?("ask overview #\(id)")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let overview = CloudBakery.overview(field: field, fieldKey: key, theme: theme, clock: clock, pixels: pixels)
+            DispatchQueue.main.async { self?.accept(overview, request: id) }
+        }
+    }
+
+    private var overviewRequest = 0
+
+    private func accept(_ overview: CloudOverview, request: Int) {
+        guard request > overviewRequest else { return }
+        overviewRequest = request
+        if request == overviewRequests { overviewAsked = nil }
+        log?("overview #\(request) \(Int(overview.milliseconds)) ms")
+        let stats = CloudRenderStats.shared
+        stats.overviews += 1
+        stats.overviewMilliseconds += overview.milliseconds
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        overviewImage.bounds = CGRect(origin: .zero, size: overview.pixels)
+        overviewImage.contents = overview.image
+        CATransaction.commit()
+        self.overview = overview
+        tick()
+    }
+
     private func ask(projection: Projection, size: CGSize, moving: Bool, clock: Double, displayScale: Double) {
         guard let inputs, let handle else { return }
         let walkKey = walkKey
@@ -444,7 +626,8 @@ final class BakedCloudEngine {
             fits: warp?.fits(size: size, now: projection, moving: moving) ?? false,
             exact: warp?.exact(size: size) ?? false,
             moving: moving, dragging: handle.isDragging, clock: clock,
-            drifts: !inputs.reduceMotion && reveal == nil, asked: asked
+            drifts: !inputs.reduceMotion && reveal == nil, asked: asked,
+            flying: moving && !handle.isDragging
         ) else { return }
 
         let frame: BakeFrame
@@ -464,23 +647,32 @@ final class BakedCloudEngine {
         lastRequest = (frame, request.honeycomb)
         requests += 1
         let id = requests
-        inFlight = (id, CACurrentMediaTime())
-        // Quickly when there's nothing to show; otherwise behind the main thread and
-        // MapKit for the big cores. On a Dispatch queue rather than Swift's shared
-        // threads, which the app's other background work can keep busy for seconds on
-        // end (and the simulator has fewer of), and which a slow bake would hold up.
-        let qos: DispatchQoS.QoSClass = front == nil || status.needsLive ? .userInitiated : .utility
+        let askedAt = CACurrentMediaTime()
+        inFlight = (id, frame, askedAt)
+        // Quickly while something's standing in for it; otherwise behind the main
+        // thread and MapKit for the big cores. On a Dispatch queue rather than Swift's
+        // shared threads, which the app's other background work can keep busy for
+        // seconds on end (and the simulator has fewer of), and which a slow bake would hold up.
+        let urgent = !frontCovers
+        let qos: DispatchQoS.QoSClass = urgent ? .userInitiated : .utility
+        log?("ask #\(id) \(request.frame == .shown ? "same frame" : frame.draft ? "draft" : "sharp")\(urgent ? " urgent" : "")")
         let bakery = bakery
         DispatchQueue.global(qos: qos).async { [weak self] in
             let bake = bakery(job)
-            DispatchQueue.main.async { self?.finished(bake, request: id) }
+            DispatchQueue.main.async { self?.finished(bake, request: id, asked: askedAt) }
         }
     }
 
-    private func finished(_ bake: CloudBake, request: Int) {
+    private func finished(_ bake: CloudBake, request: Int, asked: Double) {
+        let took = CACurrentMediaTime() - asked
+        lastBakeSeconds = took
         if inFlight?.request == request { inFlight = nil }
         // One given up on can still turn up first; one older than what's on screen can't help.
-        guard request > frontRequest else { return }
+        guard request > frontRequest else {
+            log?("drop #\(request)")
+            return
+        }
+        log?("done #\(request) \(Int(took * 1000)) ms")
         frontRequest = request
         accept(bake)
     }

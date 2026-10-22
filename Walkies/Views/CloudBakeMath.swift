@@ -82,20 +82,26 @@ nonisolated struct BakeFrame: Sendable {
     /// The frame for baking what `projection` sees on a screen of `size`, on a phone
     /// with `displayScale` pixels to the point.
     static func around(_ projection: Projection, size: CGSize, displayScale: Double, draft: Bool) -> BakeFrame {
-        let width = Double(size.width), height = Double(size.height)
-        let margin = draft ? draftMargin : self.margin
-        let left = -width * margin, right = width * (1 + margin)
-        var top = -height * margin
-        let bottom = height * (1 + margin)
-        // Stop where the ground's too far away: above that row there's only horizon.
-        for x in [left, right] {
-            if let row = projection.farRow(atX: x, far: far), row > top { top = min(row, bottom - 1) }
-        }
+        let region = region(projection, size: size, margin: draft ? draftMargin : margin)
+        let left = Double(region.minX), right = Double(region.maxX), top = Double(region.minY), bottom = Double(region.maxY)
         var scale = draft ? min(draftScale, displayScale) : min(maxScale, displayScale)
         let pixels = (right - left) * scale * (bottom - top) * scale
         if pixels > maxPixels { scale *= (maxPixels / pixels).squareRoot() }
         scale = min(scale, maxSide / max(right - left, bottom - top))
-        return BakeFrame(projection: projection, rect: CGRect(x: left, y: top, width: right - left, height: bottom - top), scale: scale, draft: draft)
+        return BakeFrame(projection: projection, rect: region, scale: scale, draft: draft)
+    }
+
+    /// A screen of `size` and `margin` of its size all round, in screen points,
+    /// stopping where the ground's too far away: above that row there's only horizon.
+    static func region(_ projection: Projection, size: CGSize, margin: Double) -> CGRect {
+        let width = Double(size.width), height = Double(size.height)
+        let left = -width * margin, right = width * (1 + margin)
+        var top = -height * margin
+        let bottom = height * (1 + margin)
+        for x in [left, right] {
+            if let row = projection.farRow(atX: x, far: far), row > top { top = min(row, bottom - 1) }
+        }
+        return CGRect(x: left, y: top, width: right - left, height: bottom - top)
     }
 }
 
@@ -160,7 +166,11 @@ nonisolated struct BakeWarp {
     var layerTransform: CATransform3D {
         let r = frame.rect
         let shift = simd_double3x3(rows: [SIMD3(1, 0, Double(r.minX)), SIMD3(0, 1, Double(r.minY)), SIMD3(0, 0, 1)])
-        let m = matrix * shift
+        return Self.layerTransform(matrix * shift)
+    }
+
+    /// A homography from a layer's own points to the screen, as Core Animation takes it.
+    static func layerTransform(_ m: simd_double3x3) -> CATransform3D {
         // m[col][row].
         var t = CATransform3DIdentity
         t.m11 = m[0][0]; t.m21 = m[1][0]; t.m31 = 0; t.m41 = m[2][0]
@@ -201,19 +211,57 @@ nonisolated struct BakeWarp {
 
     /// The warp's local stretch and turn at a bake point: within `stretch` either way
     /// along both axes, and turned less than `turn` radians.
-    private func looksRight(at p: CGPoint, stretch: Double, turn: Double) -> Bool {
+    private func looksRight(at p: CGPoint, stretch: Double, turn: Double = .infinity) -> Bool {
         let (a, b, c, d) = jacobian(at: p)
-        // Its two singular values, from the closed form for 2x2.
-        let e = (a + d) / 2, f = (a - d) / 2, g = (c + b) / 2, h = (c - b) / 2
-        let q = hypot(e, h), r = hypot(f, g)
-        let biggest = q + r, smallest = abs(q - r)
+        let (biggest, smallest) = Self.stretches(a, b, c, d)
         if biggest > stretch || smallest < 1 / stretch { return false }
         return abs(atan2(c - b, a + d)) < turn
     }
 
+    /// How much a 2x2 matrix stretches things most and least: its two singular values,
+    /// from the closed form.
+    static func stretches(_ a: Double, _ b: Double, _ c: Double, _ d: Double) -> (biggest: Double, smallest: Double) {
+        let e = (a + d) / 2, f = (a - d) / 2, g = (c + b) / 2, h = (c - b) / 2
+        let q = hypot(e, h), r = hypot(f, g)
+        return (q + r, abs(q - r))
+    }
+
+    /// Past this much bigger or smaller, a bake isn't shown at all: something else
+    /// stands in until the next one's ready.
+    static let showable = 3.0
+
+    /// Whether the bake's worth showing on a screen of `size` now: the middle of the
+    /// screen (or low down, if the middle's by the horizon) is on it, and not
+    /// stretched or squashed past `showable`. False for one from a camera that's since
+    /// flown far off, which would otherwise be warped off the screen or to a speck.
+    func shows(size: CGSize, now: Projection) -> Bool {
+        let width = Double(size.width), height = Double(size.height)
+        var screen = CGPoint(x: width / 2, y: height / 2)
+        if now.isFar(screen, far: BakeFrame.far) { screen.y = height * 0.9 }
+        guard let b = unmap(screen), frame.rect.contains(b) else { return false }
+        return looksRight(at: b, stretch: Self.showable)
+    }
+
+    /// Whether the bake reaches past every edge of a screen of `size` now (bar sky and
+    /// the far distance), so nothing need show under it.
+    func covers(size: CGSize, now: Projection) -> Bool {
+        let width = Double(size.width), height = Double(size.height)
+        let r = frame.rect.insetBy(dx: -0.5, dy: -0.5)
+        for (fx, fy) in Self.checks {
+            let screen = CGPoint(x: fx * width, y: fy * height)
+            if now.isFar(screen, far: BakeFrame.far) { continue }
+            guard let b = unmap(screen), r.contains(b) else { return false }
+        }
+        return true
+    }
+
     /// d(screen now) / d(bake screen) at a bake point: (dx/dx, dx/dy, dy/dx, dy/dy).
     func jacobian(at p: CGPoint) -> (Double, Double, Double, Double) {
-        let m = matrix
+        Self.jacobian(matrix, at: p)
+    }
+
+    /// d(out) / d(in) of a homography at a point: (dx/dx, dx/dy, dy/dx, dy/dy).
+    static func jacobian(_ m: simd_double3x3, at p: CGPoint) -> (Double, Double, Double, Double) {
         let x = Double(p.x), y = Double(p.y)
         // Rows of m: m[col][row].
         let w = m[0][2] * x + m[1][2] * y + m[2][2]
@@ -250,9 +298,25 @@ nonisolated enum BakePolicy {
     static let driftPeriod = 2.5
     /// How long a drift bake fades in over the last.
     static let driftFade = 1.0
-    /// A bake still not done after this long, in seconds, is given up on and another
-    /// asked for, so one that's stuck can't leave the clouds where they were for good.
-    static let giveUp = 2.0
+    /// A bake still not done after `giveUp` seconds is given up on and another asked
+    /// for, so one that's stuck can't leave the clouds where they were for good.
+    /// Never sooner than this: bakes take 1 to 2 s on an iPhone XS Max and up to
+    /// 2.5 s in a Debug build in the simulator, and giving up on those only to ask
+    /// again wastes the bake thread.
+    static let minimumGiveUp = 3.0
+
+    /// Three times as long as the last bake took, from asking to having it, or twice
+    /// the minimum before there's been one (the first bake loads the sprites).
+    static func giveUp(lastBake: Double?) -> Double {
+        guard let lastBake else { return minimumGiveUp * 2 }
+        return max(minimumGiveUp, lastBake * 3)
+    }
+
+    /// How long a bake fades in over whatever stood in for it, and that then fades out.
+    static let fade = 0.3
+    /// The overview stands in up to this many screen points to its pixel. Any softer
+    /// and the live clouds do instead: that's zoomed in, where they're quick to draw.
+    static let overviewStretch = 2.0
 
     struct Shown: Sendable {
         var frame: BakeFrame
@@ -295,17 +359,22 @@ nonisolated enum BakePolicy {
 
     /// `fits` and `exact` are about the bake on screen and the camera now (false if
     /// it can't be warped at all). `clock` is the drift now; `drifts` false when
-    /// reduce motion is on or the tiles are clearing.
+    /// reduce motion is on or the tiles are clearing. `flying` is the camera moving
+    /// by itself (MapKit flying it somewhere, as it does on opening), not under a
+    /// finger: nothing's baked from round it until it lands, as by then it'd be far
+    /// off, and the overview or the live clouds stand in meanwhile.
     static func decide(
         shown: Shown?, wanted: Wanted, fits: Bool, exact: Bool, moving: Bool, dragging: Bool,
-        clock: Double, drifts: Bool, asked: Asked?
+        clock: Double, drifts: Bool, asked: Asked?, flying: Bool = false
     ) -> Request? {
         guard let shown, shown.fieldKey == wanted.fieldKey, shown.theme == wanted.theme else {
             // New tiles or a new look. From the same camera and drift as what's on
             // screen if that still fits; mid-pan, the same drift at least.
-            if shown == nil { return Request(frame: .fresh(draft: moving), clock: .now, honeycomb: true) }
+            if shown == nil { return flying ? nil : Request(frame: .fresh(draft: moving), clock: .now, honeycomb: true) }
+            if !fits, flying { return nil }
             return Request(frame: fits ? .shown : .fresh(draft: moving), clock: fits || moving ? .shown : .now, honeycomb: true)
         }
+        if flying { return nil }
         if moving {
             // Only once the picture's about to run out, roughly, with the drift held.
             if fits || asked?.sameCamera == true { return nil }
@@ -320,5 +389,90 @@ nonisolated enum BakePolicy {
             return Request(frame: .shown, clock: .now, honeycomb: false)
         }
         return nil
+    }
+}
+
+/// Where the overview (every place's clouds from straight above, see `CloudOverview`)
+/// goes on screen now. The whole of it can't be warped into perspective, as a tilted
+/// camera has some of it behind, so only the window of it the screen can see is: a
+/// box turned to the camera's heading, so its near edge runs along the bottom of the
+/// screen and none of it's behind the camera.
+///
+/// Shown as two layers: a window layer clipped to its bounds, warped onto the screen
+/// by `transform`, holding the overview's picture turned and moved by `imageTransform`.
+nonisolated struct OverviewPlacement {
+    /// The window, in its own points (turned overview pixels).
+    let windowSize: CGSize
+    /// The window's points to the screen now, for a layer anchored at its top left at (0, 0).
+    let transform: CATransform3D
+    /// The overview's pixels to the window's points.
+    let imageTransform: CGAffineTransform
+    /// Screen points per overview pixel in the middle of the screen: the more, the softer it looks.
+    let stretch: Double
+    /// False if none of the overview's on screen now, so there's nothing to show.
+    let visible: Bool
+
+    /// How far past each edge of the screen it's shown.
+    static let margin = 0.1
+
+    /// `overview` takes the ground to the overview's pixels; it's `pixels` big.
+    init?(overview: Projection, pixels: CGSize, now: Projection, size: CGSize) {
+        // Screen points now to overview pixels.
+        guard let m = overview.relative(to: now), abs(m.determinant) > 1e-300 else { return nil }
+        let region = BakeFrame.region(now, size: size, margin: Self.margin)
+        var corners: [SIMD2<Double>] = []
+        for (x, y) in [(region.minX, region.maxY), (region.maxX, region.maxY), (region.maxX, region.minY), (region.minX, region.minY)] {
+            let v = m * SIMD3(Double(x), Double(y), 1)
+            guard v.z > 0, v.x.isFinite, v.y.isFinite else { return nil }
+            corners.append(SIMD2(v.x / v.z, v.y / v.z))
+        }
+        // Turned so the bottom of the screen runs along the window's x axis. The ground
+        // under any row of the screen is a line that way, all of it as far from the
+        // camera, so a box between the bottom and top rows is all in front.
+        let along = corners[1] - corners[0]
+        guard simd_length(along) > 1e-9 else { return nil }
+        let angle = atan2(along.y, along.x)
+        let c = cos(angle), s = sin(angle)
+        func turn(_ p: SIMD2<Double>) -> SIMD2<Double> { SIMD2(c * p.x + s * p.y, -s * p.x + c * p.y) }
+        func box(_ points: [SIMD2<Double>]) -> CGRect {
+            let turned = points.map(turn)
+            let xs = turned.map(\.x), ys = turned.map(\.y)
+            return CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+        }
+        let w = Double(pixels.width), h = Double(pixels.height)
+        let window = box(corners).intersection(box([SIMD2(0, 0), SIMD2(w, 0), SIMD2(w, h), SIMD2(0, h)]))
+        imageTransform = CGAffineTransform(a: c, b: -s, c: s, d: c, tx: -window.minX, ty: -window.minY)
+        guard !window.isNull, window.width > 0.5, window.height > 0.5 else {
+            windowSize = .zero
+            transform = CATransform3DIdentity
+            stretch = 0
+            visible = false
+            return
+        }
+        // The window's points to overview pixels, then to the screen now.
+        let wx = Double(window.minX), wy = Double(window.minY)
+        let toOverview = simd_double3x3(rows: [
+            SIMD3(c, -s, c * wx - s * wy),
+            SIMD3(s, c, s * wx + c * wy),
+            SIMD3(0, 0, 1),
+        ])
+        var toScreen = m.inverse * toOverview
+        let ww = Double(window.width), wh = Double(window.height)
+        let middle = toScreen * SIMD3(ww / 2, wh / 2, 1)
+        guard middle.z > 0, middle.z.isFinite else { return nil }
+        toScreen = (1 / middle.z) * toScreen
+        for (x, y) in [(0.0, 0.0), (ww, 0), (ww, wh), (0, wh)] {
+            guard (toScreen * SIMD3(x, y, 1)).z > 0 else { return nil }
+        }
+        windowSize = window.size
+        transform = BakeWarp.layerTransform(toScreen)
+        visible = true
+
+        var screen = CGPoint(x: Double(size.width) / 2, y: Double(size.height) / 2)
+        if now.isFar(screen, far: BakeFrame.far) { screen.y = size.height * 0.9 }
+        let o = m * SIMD3(Double(screen.x), Double(screen.y), 1)
+        guard o.z > 0 else { return nil }
+        let (a, b, cc, d) = BakeWarp.jacobian(m.inverse, at: CGPoint(x: o.x / o.z, y: o.y / o.z))
+        stretch = BakeWarp.stretches(a, b, cc, d).biggest
     }
 }

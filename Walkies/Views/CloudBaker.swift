@@ -50,6 +50,46 @@ nonisolated final class CloudBake: @unchecked Sendable {
     }
 }
 
+/// Every place's clouds at once, from straight above, north up, small and soft: the
+/// tops of the puffs only, with no shadows, grid or streets, as zoomed right out.
+/// It doesn't depend on the camera, so it's made as soon as the tiles are known and
+/// again only when they or the look change, and stands in wherever the sharp bake
+/// doesn't reach (opening the app, zooming out past it, a fast pan) until the next
+/// one's ready. See `OverviewPlacement` for how it's put on screen.
+nonisolated final class CloudOverview: @unchecked Sendable {
+    let image: CGImage?
+    /// The map points it covers. Its pixels are its points.
+    let area: MKMapRect
+    let pixels: CGSize
+    let fieldKey: String
+    let theme: String
+    let places: [UUID]
+    let milliseconds: Double
+
+    /// The ground to its pixels.
+    var projection: Projection { Self.projection(area: area, pixels: pixels) }
+
+    init(image: CGImage?, area: MKMapRect, pixels: CGSize, fieldKey: String, theme: String, places: [UUID], milliseconds: Double) {
+        self.image = image
+        self.area = area
+        self.pixels = pixels
+        self.fieldKey = fieldKey
+        self.theme = theme
+        self.places = places
+        self.milliseconds = milliseconds
+    }
+
+    static func projection(area: MKMapRect, pixels: CGSize) -> Projection {
+        let w = Double(pixels.width), h = Double(pixels.height)
+        let ground = [
+            MKMapPoint(x: area.minX, y: area.minY), MKMapPoint(x: area.maxX, y: area.minY),
+            MKMapPoint(x: area.maxX, y: area.maxY), MKMapPoint(x: area.minX, y: area.maxY),
+        ]
+        let screen = [CGPoint(x: 0, y: 0), CGPoint(x: w, y: 0), CGPoint(x: w, y: h), CGPoint(x: 0, y: h)]
+        return Projection(ground: ground, screen: screen, width: w, centre: MKMapPoint(x: area.midX, y: area.midY))
+    }
+}
+
 /// Draws bakes into bitmaps, off the main thread.
 nonisolated enum CloudBakery {
     /// The honeycomb's only lines and flat fills, faint and moving, so it bakes a bit softer.
@@ -75,6 +115,47 @@ nonisolated enum CloudBakery {
         }
         let took = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6
         return CloudBake(job: job, clouds: clouds, honeycomb: honeycomb, leaving: leaving, leavingMist: leavingMist, milliseconds: took)
+    }
+
+    /// The overview's most pixels: 2 MB at 4 bytes each, which a phone draws in a
+    /// fraction of a second.
+    static let overviewPixels = 500_000.0
+    /// And no wider or taller than this.
+    static let overviewSide = 2048.0
+
+    static func overview(field: CloudField, fieldKey: String, theme: String, clock: Double, pixels budget: Double = overviewPixels) -> CloudOverview {
+        let started = DispatchTime.now().uptimeNanoseconds
+        // Room round every puff for its drift and swell.
+        var area = MKMapRect.null
+        for puff in field.puffs {
+            let r = puff.radius * 1.3
+            area = area.union(MKMapRect(x: puff.centre.x - r, y: puff.centre.y - r, width: r * 2, height: r * 2))
+        }
+        for patch in field.mist {
+            let r = patch.radius
+            area = area.union(MKMapRect(x: patch.centre.x - r, y: patch.centre.y - r, width: r * 2, height: r * 2))
+        }
+        func done(_ image: CGImage?, _ area: MKMapRect, _ pixels: CGSize) -> CloudOverview {
+            let took = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6
+            return CloudOverview(image: image, area: area, pixels: pixels, fieldKey: fieldKey, theme: theme, places: field.places, milliseconds: took)
+        }
+        guard !area.isNull, area.width > 0, area.height > 0 else { return done(nil, .null, .zero) }
+        var scale = (budget / (area.width * area.height)).squareRoot()
+        scale = min(scale, overviewSide / max(area.width, area.height))
+        let pixels = CGSize(width: max(1, (area.width * scale).rounded(.up)), height: max(1, (area.height * scale).rounded(.up)))
+        // Out to whole pixels, so the picture's pixels are exactly its points.
+        area.size = MKMapSize(width: Double(pixels.width) / scale, height: Double(pixels.height) / scale)
+        var simple = field
+        simple.lines = []
+        simple.gridEdges = []
+        simple.outline = []
+        simple.outlines = []
+        let bounds = CGRect(origin: .zero, size: pixels)
+        var scene = CloudScene(field: simple, projection: CloudOverview.projection(area: area, pixels: pixels), bounds: bounds, clock: clock, puffMargin: 0.05)
+        scene.detail = 0
+        let sprites = CloudSprites.sprites(for: theme)
+        let image = render(bounds, scale: 1) { scene.draw(in: $0, sprites: sprites) }
+        return done(image, area, pixels)
     }
 
     /// A bitmap of `rect` (in screen points) at `scale` pixels to the point, drawn in

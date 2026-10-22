@@ -182,6 +182,8 @@ final class PerfRun {
             "draftBakes": stats.drafts,
             "bakeMsAvg": stats.bakes > 0 ? (stats.bakeMilliseconds / Double(stats.bakes) * 10).rounded() / 10 : 0,
             "bakeMsMax": (stats.longestBake * 10).rounded() / 10,
+            "abandonedBakes": stats.abandoned,
+            "overviewMsAvg": stats.overviews > 0 ? (stats.overviewMilliseconds / Double(stats.overviews) * 10).rounded() / 10 : 0,
         ])
         guard !LaunchArguments.has("-perfStay") else { return }
         try? await Task.sleep(for: .milliseconds(500))
@@ -312,6 +314,7 @@ private final class FrameMeter {
     @ObservationIgnored private var last: Double?
     @ObservationIgnored private var since = 0.0
     @ObservationIgnored private var liveTicks = 0
+    @ObservationIgnored private var overviewTicks = 0
 
     private final class Target: NSObject {
         weak var meter: FrameMeter?
@@ -338,7 +341,8 @@ private final class FrameMeter {
         if since == 0 { since = link.timestamp }
         guard link.timestamp - since >= 0.5, !intervals.isEmpty else { return }
         let stats = FrameStats(intervals: intervals, refresh: link.duration)
-        // How many bakes so far, how many were given up on, and "+live" while the live Canvas is standing in for one.
+        // How many bakes so far, how many were given up on, and "+live" or "+overview"
+        // while the live Canvas or the overview is standing in for (or showing past) one.
         let clouds = CloudRenderStats.shared
         var renderer = CloudRenderer.current.rawValue
         if CloudRenderer.current == .baked {
@@ -346,6 +350,8 @@ private final class FrameMeter {
             if clouds.abandoned > 0 { renderer += " (\(clouds.abandoned) stuck)" }
             if clouds.liveTicks != liveTicks { renderer += " +live" }
             liveTicks = clouds.liveTicks
+            if clouds.overviewTicks != overviewTicks { renderer += " +overview" }
+            overviewTicks = clouds.overviewTicks
         }
         text = String(format: "%.0f fps  p90 %.1f  max %.0f ms  %d hitch%@  %@", stats.fps, stats.p90, stats.longest, stats.hitches, stats.hitches == 1 ? "" : "es", renderer)
         intervals.removeAll(keepingCapacity: true)
