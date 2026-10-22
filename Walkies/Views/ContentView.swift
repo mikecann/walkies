@@ -8,9 +8,15 @@ struct ContentView: View {
     @Environment(Account.self) private var account
     @Environment(SyncEngine.self) private var sync
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var navigation = AppNavigation()
     /// The recap on screen. Every recap plays from here, once any sheet is out of the way.
     @State private var shownRecap: WalkRecap?
+    @State private var stickerDismissed = false
+    /// Goes up each time a discovery card closes, to give the Secrets tab a wiggle and a "+1".
+    @State private var bookNudge = 0
+    @State private var bookTilt = 0.0
+    @State private var bookPlusOne = false
 
     var body: some View {
         @Bindable var navigation = navigation
@@ -26,8 +32,9 @@ struct ContentView: View {
                 StickerBookView()
                     .tint(.burnt)
             } label: {
-                tabLabel("Secrets", art: "icon-book", tab: .secrets)
+                tabLabel("Secrets", art: "icon-book", tab: .secrets, tilt: bookTilt)
             }
+            .badge(bookPlusOne ? Text("+1") : nil)
             Tab(value: AppNavigation.Tab.progress) {
                 ProgressPage()
                     .tint(.burnt)
@@ -64,11 +71,17 @@ struct ContentView: View {
             // A separate host for the new-sticker pop-up, so it doesn't fight the other sheets.
             Color.clear
                 .allowsHitTesting(false)
-                .sheet(item: newSticker) { entry in
+                .sheet(item: newSticker, onDismiss: {
+                    if stickerDismissed {
+                        stickerDismissed = false
+                        bookNudge += 1
+                    }
+                }) { entry in
                     LoreCardView(entry: entry, foundAt: model.foundStickers[entry.id], isNew: true)
                 }
         }
         .sensoryFeedback(.success, trigger: model.stickerQueue.count) { old, new in new > old }
+        .task(id: bookNudge) { await nudgeBook() }
         .fullScreenCover(item: Binding(get: { shownRecap }, set: { shownRecap = $0; if $0 == nil { model.recap = nil } })) { recap in
             CelebrationView(
                 recap: recap,
@@ -112,17 +125,37 @@ struct ContentView: View {
         }
     }
 
-    private func tabLabel(_ title: String, art: String, tab: AppNavigation.Tab) -> some View {
+    private func tabLabel(_ title: String, art: String, tab: AppNavigation.Tab, tilt: Double = 0) -> some View {
         Label {
             Text(title)
         } icon: {
-            Image(uiImage: TabArt.icon(art, selected: navigation.tab == tab))
+            Image(uiImage: TabArt.icon(art, selected: navigation.tab == tab, tilt: tilt))
                 .renderingMode(.original)
         }
     }
 
     private var sheetOpen: Bool {
         navigation.showingPlaces || navigation.openSecret != nil || model.pendingTeamInvite != nil
+    }
+
+    /// A receipt at the book once a discovery card has closed, so you know where it went:
+    /// three quick wiggles and a "+1" badge. The tab bar draws the icon itself, so the
+    /// wiggle is a few tilted copies of the art, one after another.
+    private func nudgeBook() async {
+        guard bookNudge > 0 else { return }
+        do {
+            bookPlusOne = true
+            if !reduceMotion {
+                for frame in 1...15 {
+                    try await Task.sleep(for: .milliseconds(30))
+                    bookTilt = frame == 15 ? 0 : 12 * sin(Double(frame) / 15 * 3 * 2 * .pi)
+                }
+            }
+            try await Task.sleep(for: .seconds(1.2))
+            bookPlusOne = false
+        } catch {
+            // A newer nudge has taken over.
+        }
     }
 
     /// Plays a recap that arrived while a sheet was up, now it's gone.
@@ -138,6 +171,7 @@ struct ContentView: View {
         } set: { value in
             if value == nil, !model.stickerQueue.isEmpty {
                 model.stickerQueue.removeFirst()
+                stickerDismissed = true
             }
         }
     }
@@ -148,14 +182,18 @@ struct ContentView: View {
 enum TabArt {
     private static var cache: [String: UIImage] = [:]
 
-    static func icon(_ name: String, selected: Bool) -> UIImage {
-        let key = "\(name)-\(selected)"
+    /// `tilt` turns the art that many degrees about its middle, for the Secrets tab's wiggle.
+    static func icon(_ name: String, selected: Bool, tilt: Double = 0) -> UIImage {
+        let key = "\(name)-\(selected)-\(Int(tilt.rounded()))"
         if let cached = cache[key] { return cached }
         guard let art = UIImage(named: name) else { return UIImage() }
         let size = CGSize(width: 28, height: 28)
         let fit = min(size.width / art.size.width, size.height / art.size.height)
         let drawn = CGSize(width: art.size.width * fit, height: art.size.height * fit)
-        let image = UIGraphicsImageRenderer(size: size).image { _ in
+        let image = UIGraphicsImageRenderer(size: size).image { context in
+            context.cgContext.translateBy(x: size.width / 2, y: size.height / 2)
+            context.cgContext.rotate(by: tilt.rounded() * .pi / 180)
+            context.cgContext.translateBy(x: -size.width / 2, y: -size.height / 2)
             art.draw(
                 in: CGRect(x: (size.width - drawn.width) / 2, y: (size.height - drawn.height) / 2, width: drawn.width, height: drawn.height),
                 blendMode: .normal, alpha: selected ? 1 : 0.55

@@ -260,13 +260,12 @@ struct LoreCardView: View {
         ScrollView {
             VStack(spacing: 16) {
                 if isNew {
-                    Text("Secret found")
-                        .font(.subheadline.weight(.bold))
-                        .textCase(.uppercase)
-                        .foregroundStyle(Color.walkiesOrange)
+                    NewStickerReveal(entry: entry)
+                        .id(entry.id)
+                } else {
+                    StickerArt(entry: entry, size: 170)
+                        .padding(.top, 8)
                 }
-                StickerArt(entry: entry, size: 170)
-                    .padding(.top, isNew ? 0 : 8)
 
                 VStack(spacing: 6) {
                     Text(entry.title)
@@ -330,6 +329,91 @@ struct LoreCardView: View {
         .background(Color.cream)
         .presentationBackground(Color.cream)
         .presentationDetents(isNew ? [.medium, .large] : [.large])
+    }
+}
+
+/// Just the discovery card gets the slap and chime. Reading it again stays quiet.
+private struct NewStickerReveal: View {
+    let entry: LoreEntry
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var landed = false
+    @State private var impact = false
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Secret found")
+                .font(.subheadline.weight(.bold))
+                .textCase(.uppercase)
+                .foregroundStyle(Color.walkiesOrange)
+                .opacity(impact ? 1 : 0)
+                .animation(.easeOut(duration: 0.15), value: impact)
+
+            StickerArt(entry: entry, size: 170)
+                .scaleEffect(reduceMotion || landed ? 1 : 1.4)
+                .rotationEffect(.degrees(reduceMotion || landed ? -4 : -14))
+                .offset(y: reduceMotion || landed ? 0 : -65)
+                .opacity(landed ? 1 : 0)
+                .background {
+                    SunburstView()
+                        .opacity(impact ? 1 : 0)
+                        .animation(.easeOut(duration: 0.2), value: impact)
+                }
+                .background {
+                    if !reduceMotion {
+                        Circle()
+                            .stroke(.white.opacity(0.85), lineWidth: 9)
+                            .frame(width: 160, height: 160)
+                            .blur(radius: 3)
+                            .keyframeAnimator(initialValue: 0.0, trigger: impact) { [impact] ring, progress in
+                                ring
+                                    .scaleEffect(1 + progress * 0.5)
+                                    .opacity(impact ? 1 - progress : 0)
+                            } keyframes: { _ in
+                                LinearKeyframe(1, duration: 0.4)
+                            }
+                    }
+                }
+        }
+        .allowsHitTesting(false)
+        .task {
+            guard !landed else { return }
+            do {
+                try await Task.sleep(for: .milliseconds(120))
+                try Task.checkCancellation()
+                withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.32, dampingFraction: 0.55)) {
+                    landed = true
+                }
+                // The spring reaches the card a little before it settles.
+                if !reduceMotion { try await Task.sleep(for: .milliseconds(130)) }
+                try Task.checkCancellation()
+                impact = true
+                SoundFX.shared.play(.chime)
+            } catch {
+                // Closing a card before it lands mustn't leave a chime behind.
+            }
+        }
+    }
+}
+
+/// Matches SecretPop's gold rays without changing the walk replay presentation.
+private struct SunburstView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var spin = false
+
+    var body: some View {
+        Circle()
+            .fill(AngularGradient(
+                colors: (0..<16).map { $0 % 2 == 0 ? Color(red: 1, green: 0.85, blue: 0.4).opacity(0.55) : .clear },
+                center: .center
+            ))
+            .frame(width: 300, height: 300)
+            .mask(RadialGradient(colors: [.black, .clear], center: .center, startRadius: 40, endRadius: 150))
+            .rotationEffect(.degrees(!reduceMotion && spin ? 360 : 0))
+            .animation(reduceMotion ? nil : .linear(duration: 12).repeatForever(autoreverses: false), value: spin)
+            .onAppear { spin = !reduceMotion }
+            .onChange(of: reduceMotion) { spin = !reduceMotion }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
