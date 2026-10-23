@@ -1,5 +1,7 @@
 import { httpRouter } from "convex/server";
-import { httpAction } from "./_generated/server";
+import { registerStaticRoutes } from "@convex-dev/static-hosting";
+import { components } from "./_generated/api";
+import { httpAction, type ActionCtx } from "./_generated/server";
 
 const http = httpRouter();
 
@@ -60,39 +62,59 @@ ${deepLink === null ? "<p>Ask someone in the team for a fresh link or check the 
   }),
 });
 
-// The home page and privacy policy Google's sign-in screen links to.
-function page(title: string, body: string) {
-  return new Response(`<!doctype html>
+// The website: the home page, /privacy and /support, built from web/ and uploaded to
+// static hosting (`npm run web:upload:prod`). The App Store listing and Google's sign-in
+// screen link to /privacy and /support, which are plain .html files there.
+async function uploadedPage(ctx: ActionCtx, path: string): Promise<string | null> {
+  try {
+    const asset = await ctx.runQuery(components.staticHosting.lib.resolveAssetForHttp, { path, spaFallback: false });
+    if (asset?.storageUrl) {
+      const res = await fetch(asset.storageUrl);
+      if (res.ok) return await res.text();
+    }
+  } catch (error) {
+    console.error(`Couldn't load ${path} from static hosting`, error);
+  }
+  return null;
+}
+
+/** Until the site's uploaded: just enough to read, and who to ask. */
+function fallbackPage(title: string, body: string) {
+  return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title}</title><style>
-body { margin: 0; background: #faf3e5; color: #343b30; font: 18px/1.6 system-ui, sans-serif; }
+body { margin: 0; background: #fbf4e6; color: #3b312b; font: 18px/1.6 system-ui, sans-serif; }
 main { max-width: 34rem; margin: 0 auto; padding: 3rem 1.5rem; } h1 { font-size: 2rem; line-height: 1.2; }
-a { color: #3c6549; }
-</style></head><body><main>${body}</main></body></html>`, {
-    status: 200,
-    headers: { "Content-Type": "text/html; charset=utf-8", "X-Content-Type-Options": "nosniff" },
+a { color: #c9573b; }
+</style></head><body><main>${body}</main></body></html>`;
+}
+
+// Keep these in step with web/src/privacy.html and web/src/support.html.
+const FALLBACK: Record<string, string> = {
+  "/privacy": fallbackPage("Privacy · Walkies", `<h1>Walkies' privacy policy</h1>
+<p>Walkies keeps your name and email from Sign in with Apple or Google (and your photo if you use Google), the places you add, your walks (GPS points, times and steps), the tiles, secrets and shells you've collected, the teams you're in, and anything you send with Suggest a feature. It's kept on your phone and backed up to your account on Convex, in Sydney (aws-ap-southeast-2).</p>
+<p>The app also talks to Apple Maps for the satellite map, OpenStreetMap's Nominatim and Overpass for suburb outlines and streets, and Apple and Google for signing in. People in a team with you see your name, colour and Google photo, but not your walks. There's no ads or analytics, and nothing is sold.</p>
+<p>To delete your account and everything in it, go to Settings in the app and tap Delete account, or email <a href="mailto:walkies@mikecann.app">walkies@mikecann.app</a>.</p>`),
+  "/support": fallbackPage("Help · Walkies", `<h1>Help with Walkies</h1>
+<p>Email <a href="mailto:walkies@mikecann.app">walkies@mikecann.app</a>, or tap Suggest a feature in the app's Settings.</p>`),
+};
+
+for (const path of ["/privacy", "/support"]) {
+  http.route({
+    path,
+    method: "GET",
+    handler: httpAction(async (ctx) => {
+      const html = (await uploadedPage(ctx, `${path}.html`)) ?? FALLBACK[path]!;
+      return new Response(html, {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff" },
+      });
+    }),
   });
 }
 
-http.route({
-  path: "/",
-  method: "GET",
-  handler: httpAction(async () => page("Walkies", `<h1>Walkies</h1>
-<p>Clear the clouds by walking. A small app by Mike Cann.</p>
-<p><a href="/privacy">Privacy</a></p>`)),
-});
-
-http.route({
-  path: "/privacy",
-  method: "GET",
-  handler: httpAction(async () => page("Walkies privacy", `<h1>Walkies privacy</h1>
-<p>Walkies is a small app made by Mike Cann for exploring your area on foot.</p>
-<p><strong>What it keeps:</strong> your name, email and profile photo from Google or Apple sign-in; the places you add; your walks (routes and times); the tiles and secrets you've uncovered; and your shells and rewards.</p>
-<p><strong>Where:</strong> on your phone, and in your Walkies account on Convex (the database it runs on), so it's backed up and syncs.</p>
-<p><strong>Location:</strong> Walkies uses your location in the background to record walks, and only to clear tiles on your map.</p>
-<p><strong>Who sees it:</strong> just you. If you join a team, your teammates see your name and photo. Nothing is sold or shared, and there are no ads or trackers.</p>
-<p><strong>Deleting your data:</strong> email <a href="mailto:mike.cann@gmail.com">mike.cann@gmail.com</a> and everything in your account is deleted.</p>
-<p><a href="/">Walkies</a></p>`)),
-});
+// Everything else, the home page included: the uploaded site's files, and a real 404
+// for anything that isn't one.
+registerStaticRoutes(http, components.staticHosting, { spaFallback: false });
 
 export default http;
