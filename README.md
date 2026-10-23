@@ -15,7 +15,7 @@ Based on an idea from James.
 - **Neighbours**: zoomed out, the suburbs within about 5 km of your places are outlined with a "+ name" button to add them. Overpass finds the localities (admin_level 9 in WA, 10 elsewhere in Australia) and one Nominatim lookup fetches their outlines. Overpass is often slow or down, so if it fails the app asks Nominatim which suburb each point on a 2.5 km grid is in instead, and retries a few times if that fails too. The list is kept in `nearby.json` for a month. Every place uses the world hex grid, so tiles line up along the borders, and the map draws every place's clouds at once.
 - **The map** starts tilted at an isometric angle with Apple's 3D buildings (Settings > 3D view to flatten it). Your position is drawn on top of the clouds, since MapKit's own dot would be under them.
 - **Walking only**: fixes worse than 30 m accuracy are ignored, anything faster than about 12 km/h (by the GPS's own speed reading) doesn't count, and the phone's motion chip vetoes anything it thinks is cycling or driving, however slow. A spot only counts once two on-foot fixes in a row agree, and gaps over 150 m aren't joined up.
-- **Secrets**: 40 bits of local history, Wardandi Noongar heritage and nature for the Busselton area, in `Walkies/Lore/geographe.json` (research notes and sources in `design/lore/`). Each is hidden under a tile, with nothing on the map to give it away: stories about a spot go under the nearest street tile to it, the rest are spread out. Walk over one and you get a pop-up, or a notification if the phone's in your pocket. Found secrets are pinned on the map and kept in the Secrets book, each with its own sticker. In the code they're `LoreEntry` and "stickers". The art is made by `scripts/make-stickers.mjs` (Gemini 3 Pro Image, then cut out with Vision by `scripts/cutout.swift`).
+- **Secrets**: 136 bits of local history, Wardandi Noongar heritage and nature across about 30 suburbs of the Busselton area, in `Walkies/Lore/geographe.json` and `busselton-area.json` (research notes and sources in `design/lore/`). Each is hidden under a tile, with nothing on the map to give it away: stories about a spot go under the nearest street tile to it, the rest are spread out. Walk over one and you get a pop-up, or a notification if the phone's in your pocket. Found secrets are pinned on the map and kept in the Secrets book, each with its own sticker. In the code they're `LoreEntry` and "stickers". The art is made by `scripts/make-stickers.mjs` (Gemini 3 Pro Image, then cut out with Vision by `scripts/cutout.swift`).
 - **History**: every GPS fix from every walk is kept. A new city is built by replaying all past walks, so if you add a city later, the walks you've already done there count.
 - **Storage** is local-first: everything is JSON in the app's Application Support folder, and the app works fully offline. Whenever there's signal it syncs with your account on Convex, so a lost phone loses nothing and a new phone gets everything back when you sign in.
 - **Accounts** use Convex Auth v2 (`@convex-dev/auth` 2.0 beta) with Sign in with Apple and Google, so every account has an email address to reach people with. Each person only sees their own data.
@@ -116,6 +116,24 @@ Settings has "Suggest a feature", which opens Chef, Seth Raphael's feedback boar
 - Backend: the component in `convex/convex.config.ts`, the API in `convex/chef.ts` (written by `npx chef init --no-cloud`, then pointed at `currentUserId` so merged accounts are one person). The package is vendored in `vendor/` from a pinned commit of `convex/chef-cloud` (was `sethconvex/feedback-chef`).
 - App: the `ChefKit` Swift package, pinned to the same commit. `Walkies/Services/ChefConnection.swift` lets it use Walkies' own HTTP client and sign-in, polling where ChefKit expects live subscriptions. Its floating button is hidden; Settings opens it with `ChefKit.present()`.
 - Admin: `npx convex run chef:chefSetAdmin '{"userId":"<users _id>"}' --prod`.
+
+## Website
+
+`web/` is the website, [walkies.mikecann.app](https://walkies.mikecann.app): the home page, `/privacy` and `/support`, which the App Store listing and Google's sign-in screen link to. It's plain HTML with no bundler: `scripts/build-web.mjs` wraps each page in `web/src/layout.html` and copies `web/public` alongside into `web/dist`. The few things that change (the App Store link and `APP_STORE_LIVE`, the support email, the GitHub link, the privacy policy's date) are in `web/site.mjs`. It's served by Convex static hosting on the same deployment as the backend, so `convex/http.ts` keeps the app's own routes (sign-in, the association file, `/join/<code>`) and has built-in `/privacy` and `/support` pages for until the site's uploaded.
+
+| Script | What it does |
+|---|---|
+| `npm run web:build` | Build into `web/dist` |
+| `npm run web:serve` | Build and serve it on http://localhost:5175, the way prod does |
+| `npm run web:shots` | Phone and desktop screenshots of every page into `web-shots/` |
+| `npm run web:screens -- <folder>` | Make `web/public/screens/*.webp` from full-size iPhone screenshots (needs ffmpeg) |
+| `npm run web:images` | Remake the icons, stickers and the link preview (`og.jpg`) in `web/public/img` |
+| `npm run web:upload:dev` | Build and upload to dev's static hosting |
+| `npm run web:upload:prod` | Build and upload to prod's |
+
+Deploy the backend first (it adds the static hosting component), then upload. Once Walkies is on the App Store, set `APP_STORE_LIVE` to `true` in `web/site.mjs` and upload again, so the badges link to it.
+
+Pointing `walkies.mikecann.app` at prod takes two things. In the Convex dashboard, open the prod deployment (`savory-bee-296`), go to Settings > Custom Domains and add `walkies.mikecann.app` for HTTP actions. Then in Cloudflare, add the two records the dashboard asks for on `mikecann.app`: a CNAME `walkies` to `convex.domains`, proxied (the orange cloud, the same as `poddle`), and a TXT `_convex_domains.walkies` set to `savory-bee-296`. Both were added on 23 Oct 2026. If the dashboard offers to make it the deployment's `CONVEX_SITE_URL`, leave that off for now: Convex Auth builds the Apple and Google return URLs from it, and those are registered on the `convex.site` address.
 
 ## Code map
 

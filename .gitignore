@@ -5,3 +5,5 @@ xcuserdata/
 .DS_Store
 node_modules/
 .env.local
+web/dist/
+web-shots/
