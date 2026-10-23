@@ -172,8 +172,12 @@ export const deleteAccount = mutation({
     const scrub = { deletedAt: Date.now(), name: undefined, email: undefined, emailVerified: undefined, picture: undefined };
     await ctx.db.patch("users", userId, scrub);
     // Older user rows folded into this one (the same person through the other provider).
+    // Merging moved their data across, but anything still filed under them goes too.
     const merged = await ctx.db.query("users").withIndex("by_mergedInto", (q) => q.eq("mergedInto", userId)).collect();
-    for (const m of merged) await ctx.db.patch("users", m._id, scrub);
+    for (const m of merged) {
+      await ctx.db.patch("users", m._id, scrub);
+      await startDeletion(ctx, m._id);
+    }
     return { deletionId: await startDeletion(ctx, userId) };
   },
 });

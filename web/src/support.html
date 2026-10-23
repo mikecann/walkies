@@ -1,33 +1,31 @@
-<!--page {"title": "Help · Walkies", "description": "How to get help with Walkies, and answers to the things people ask most.", "path": "/support"} -->
+<!--page {"title": "Help · Walkies", "description": "How to get help with Walkies, and answers to the things people run into, like tiles that didn't clear, Always on and battery.", "path": "/support"} -->
+<!-- The support page the App Store listing links to. The answers are checked against the
+     app (CoverageTracer in Walkies/Model/Walk.swift, AppModel.swift, SettingsView.swift). -->
     <article class="prose card">
-      <span class="eyebrow">Help</span>
-      <h1>Getting help with Walkies</h1>
-      <p>It's just me making Walkies, so the quickest way to reach me is email: <a href="mailto:{{email}}">{{email}}</a>. Tell me what phone you've got and what happened, and a screenshot helps loads. I'll get back to you as soon as I can.</p>
-      <p>Got an idea, or found a bug? In the app, go to <b>Settings</b> and tap <b>Suggest a feature</b>. You can type it, or send a screenshot with a voice note, and follow along as it gets looked at.</p>
+      <h1>Help with Walkies</h1>
+      <p class="lede">It's just me making Walkies, so the best way to reach me is email: <a href="mailto:{{email}}">{{email}}</a>. Let me know what happened and what iPhone you've got (a screenshot helps loads) and I'll get back to you as soon as I can.</p>
+      <p>If you've got an idea or found a bug, you can also tap <b>Suggest a feature</b> in Settings. You can type it, or send a screenshot with a voice note, and then follow along as it gets looked at.</p>
 
-      <h2>Things people ask</h2>
+      <h2>Why didn't a tile clear?</h2>
+      <p>First check Walkies is allowed your location, in the iPhone's Settings app under Privacy &amp; Security &gt; Location Services &gt; Walkies. After that it's usually the GPS. Walkies ignores fixes that are out by more than 30 metres, which can happen between tall buildings or under thick trees, and anything faster than about 12 km/h or that the motion chip thinks is a bike or a car.</p>
+      <p>A spot also only counts once two good fixes in a row agree you walked there, and if the GPS drops out and you pop up more than 150 metres away it doesn't join the dots. With Always on, nothing clears until you're about 150 metres from where you set off, then everything since you left clears at once.</p>
 
-      <h3>Why is my walk not clearing anything?</h3>
-      <p>Walkies needs your location while you walk. Check it's allowed in the iPhone's Settings app, under Privacy &amp; Security &gt; Location Services &gt; Walkies. It ignores anything faster than a jog (about 12 km/h), anything the phone thinks is a bike or a car, and GPS fixes that are too fuzzy, which can happen between tall buildings or under thick trees.</p>
+      <h2>Why is there still cloud over the bush or the water?</h2>
+      <p>Only tiles with a street or path you can walk on count towards your 100%, so bush, wetland and water never stop you finishing. Those patches clear all at once when you walk a tile next to them. If you do walk through a tile that wasn't counted, like a beach, it gets added and counts too.</p>
 
-      <h3>Do I have to press Start walk every time?</h3>
-      <p>No. Turn on <b>Always on</b> in Settings and set Walkies' location permission to "Always", and it'll notice when you head out on foot and record the walk by itself. A walk ends after ten minutes without moving. If you'd rather it didn't, turn Always on off and press Start walk when you go.</p>
+      <h2>What does Always on do, and how do I turn it off?</h2>
+      <p>With Always on, and Walkies' location set to "Always", it notices when you head out on foot and records the walk by itself, so you don't have to remember to press anything. The walk ends once you've stopped for ten minutes, or if you hop on a bike or in a car partway. It gets switched on when you first set Walkies up.</p>
+      <p>To turn it off, go to <b>Settings</b> and switch off <b>Always on</b>, then press <b>Start walk</b> when you go. You can also set Walkies' location back to "While Using the App" in the iPhone's Settings app.</p>
 
-      <h3>Why are there clouds over the bush, the beach or the water?</h3>
-      <p>Only tiles with a street or path through them count towards your 100%, so you're never stuck needing to swim across a lake. The bits with no path clear when you walk the street nearest to them. If you walk through a tile that wasn't counted, like a beach, it gets added and counts too.</p>
+      <h2>Will it flatten my battery?</h2>
+      <p>Always on keeps an eye on your location in the background, so it does use some battery, but GPS pauses by itself while you're sitting still and only picks up again once you've moved off. If you'd rather it didn't run at all when you're not walking, switch Always on off in Settings and press Start walk instead. Steps come from the phone's motion chip, so counting them doesn't cost anything extra.</p>
 
-      <h3>Where are the secrets?</h3>
-      <p>Each one is hidden under a tile near where its story happened, with nothing on the map to give it away. Right now they're all around Busselton in Western Australia. Other places get the clouds and the tiles, and I'm hoping to add secrets for more places over time.</p>
+      <h2>Why are there no secrets where I live?</h2>
+      <p>Each secret is a researched bit of history or a story about a real spot, so they take a while to put together, and right now there's only the 136 around Busselton in WA. Everywhere else gets the clouds and the tiles, just no secrets yet. Hopefully I can add more places over time, and if you know some good stories about where you live I'd love to hear them.</p>
 
-      <h3>Will it flatten my battery?</h3>
-      <p>Less than you'd think. GPS only runs while you're walking, and with Always on it pauses while you're sitting still. Steps come from the phone's motion chip, which doesn't cost anything extra.</p>
+      <h2>I've got a new phone. Will I lose everything?</h2>
+      <p>No. Everything backs up to your Walkies account whenever there's signal, so sign in on the new phone with the same Apple or Google account as before and it all comes back. Before you wipe the old one, open <b>Settings</b> and check Sync says it's up to date, so nothing's still waiting to upload.</p>
 
-      <h3>I've got a new phone. Will I lose everything?</h3>
-      <p>No. Everything backs up to your Walkies account when there's signal. Sign in on the new phone with the same Apple or Google account and it all comes back.</p>
-
-      <h3>How do I delete my account?</h3>
-      <p>In the app, go to <b>Settings</b> and tap <b>Delete account</b>. It asks twice, signs you out, clears the phone and deletes everything from Walkies' server. The <a href="/privacy">privacy policy</a> has the details. If you can't get into the app, email me from the address you signed in with and I'll do it for you.</p>
-
-      <h3>Is it on Android?</h3>
-      <p>Not yet. It's iPhone only for now.</p>
+      <h2>How do I delete my account?</h2>
+      <p>In the app, go to <b>Settings</b> and tap <b>Delete account</b>. It deletes your account and everything in it from Walkies' server, then clears the phone and signs you out, and you can't undo it. The <a href="/privacy">privacy policy</a> has the details. If you can't get into the app, email me from the address you signed in with and I'll do it for you.</p>
     </article>

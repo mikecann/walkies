@@ -11,10 +11,9 @@
 // Idempotent: it reads everything first and only writes what differs. Screenshots, the build and
 // the App Privacy answers are separate (docs/runbooks/appstore-release.md).
 //
-// The listing copy is checked first (lengths, no em dashes), so --dry-run is a quick check of
-// metadata.json even before the app exists. It then refuses to go on while APP_ID in
-// scripts/appstore-lib.mjs is still TODO. The review contact's email and phone come from
-// ~/.config/poddle/review-contact.json and are never printed.
+// The listing copy is checked first (lengths, no em dashes), then it reads the app from App
+// Store Connect (Apple ID in scripts/appstore-lib.mjs). The review contact's phone comes from
+// ~/.config/poddle/review-contact.json and is never printed.
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

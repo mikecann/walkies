@@ -86,17 +86,20 @@ struct SettingsView: View {
                     Text("Account")
                 }
 
-                Section {
-                    Button(role: .destructive, action: deleteAccount) {
-                        if deleting {
-                            HStack { Text("Deleting…"); Spacer(); ProgressView() }
-                        } else {
-                            Text("Delete account")
+                // Worded the same as "Deleting your account" on the website's privacy page.
+                if account.isSignedIn {
+                    Section {
+                        Button(role: .destructive, action: deleteAccount) {
+                            if deleting {
+                                HStack { Text("Deleting…"); Spacer(); ProgressView() }
+                            } else {
+                                Text("Delete account")
+                            }
                         }
+                        .disabled(deleting)
+                    } footer: {
+                        Text("Deletes your account and everything in it from Walkies' server, then clears Walkies off this phone and signs you out. You can't undo it.")
                     }
-                    .disabled(deleting)
-                } footer: {
-                    Text("Deletes your account and everything in it: walks, places, progress, secrets, team memberships and feature requests.")
                 }
 
                 Section {

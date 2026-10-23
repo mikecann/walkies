@@ -10,8 +10,6 @@
 # BUILD_NUMBER is set. The version (MARKETING_VERSION, 1.0.0) comes from the project. Everything
 # lands in OUT (default /tmp/walkies-appstore/<build>). VALIDATE=0 skips `altool --validate-app`.
 # The API key is Poddle's team-wide one (same team), read from ~/.config/poddle and never printed.
-# It refuses to run until APP_ID in scripts/appstore-lib.mjs is set (the app has to exist in App
-# Store Connect for validating and uploading to work).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -25,12 +23,6 @@ OUT=${OUT:-/tmp/walkies-appstore/$BUILD}
 DD=${DD:-/tmp/walkies-dd-appstore}
 ARCHIVE="$OUT/Walkies.xcarchive"
 
-APP_ID=$(node -e 'import("./scripts/appstore-lib.mjs").then((m) => console.log(m.APP_ID))')
-[[ "$APP_ID" =~ ^[0-9]+$ ]] || {
-  echo "APP_ID in scripts/appstore-lib.mjs is \"$APP_ID\". Make the Walkies app in App Store Connect first" >&2
-  echo "(docs/runbooks/appstore-release.md, step 1), then set APP_ID to its Apple ID." >&2
-  exit 1
-}
 [[ -f "$ASC_KEY" ]] || { echo "No App Store Connect API key at $ASC_KEY" >&2; exit 1; }
 auth=(-allowProvisioningUpdates -authenticationKeyPath "$ASC_KEY"
   -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
@@ -63,9 +55,14 @@ xcodebuild archive -project Walkies.xcodeproj -scheme Walkies -configuration Rel
   || { grep -E " error:|ARCHIVE FAILED" "$OUT/archive.log" >&2; echo "Archive failed, see $OUT/archive.log" >&2; exit 1; }
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :ApplicationProperties:CFBundleShortVersionString" "$ARCHIVE/Info.plist")
 echo "Archived Walkies $VERSION ($BUILD)"
-# The App Store build must only know about prod, and never ship the screenshot sample.
-if strings "$ARCHIVE/Products/Applications/Walkies.app/Walkies" | grep -q "resolute-pig-177"; then
+# The App Store build must only know about prod, and have none of the Debug-only screenshot
+# mode or test sign-in in it.
+BINARY="$ARCHIVE/Products/Applications/Walkies.app/Walkies"
+if strings "$BINARY" | grep -q "resolute-pig-177"; then
   echo "The archive mentions the dev deployment (resolute-pig-177). Check Backend in Convex.swift." >&2; exit 1
+fi
+if strings "$BINARY" | grep -qE "WalkiesScreen|signInForTesting"; then
+  echo "The archive has the screenshot mode or test sign-in in it. Is it a Release build?" >&2; exit 1
 fi
 
 echo "Exporting for App Store Connect…"

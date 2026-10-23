@@ -1,232 +1,237 @@
-/* Walkies' website: the app's cream die-cut sticker look (Walkies/Views/Theme.swift). */
+/* Walkies' website, in the app's look (Walkies/Views/Theme.swift): cream paper, cards with a
+   white die-cut edge like the stickers, the burnt orange accent and the map's hex tiles.
+   The layout follows Poddle's home page (poddle.mikecann.app). */
+
 :root {
-  --cream: #fbf4e6;
-  --sand: #eadbc0;
-  --ink: #3b312b;
-  --ink-soft: #6b5d52;
-  --burnt: #c9573b;
-  --orange: #ff782e;
-  --teal: #21a699;
-  --badge-teal: #4a9494;
-  --sky: #cfe6f7;
-  --radius: 22px;
-  --shadow: 0 3px 16px rgba(0, 0, 0, 0.14);
+  --cream: #fbf4e6; --card: #fdf8ee; --sand: #eadbc0; --well: #efe3cd;
+  --ink: #3b312b; --body: #54473e; --ink-soft: #6b5d52; --ink-faint: #9a8b7d;
+  --burnt: #c9573b; --burnt-d: #a9442b; --orange: #ff782e; --teal: #21a699; --badge-teal: #4a9494;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --round: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+  /* The app's sticker cards: a white rim and a soft shadow. */
+  --rim: 3px solid #fff;
+  --lift: 0 3px 16px rgba(59, 49, 43, .13);
   color-scheme: light;
 }
 
-* { box-sizing: border-box; }
-
+* { box-sizing: border-box; margin: 0; padding: 0; }
 html { -webkit-text-size-adjust: 100%; }
-
 body {
-  margin: 0;
-  color: var(--ink);
-  background-color: var(--cream);
+  font-family: var(--sans); color: var(--ink); background-color: var(--cream);
   /* Faint hex tiles, like the map's. */
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='84' height='145.5' viewBox='0 0 84 145.5'%3E%3Cg fill='none' stroke='%23eadbc0' stroke-width='1.5'%3E%3Cpath d='M42 0 84 24.25v48.5L42 97 0 72.75v-48.5z'/%3E%3Cpath d='M42 97v48.5'/%3E%3C/g%3E%3C/svg%3E");
   background-size: 84px 145.5px;
-  font: 17px/1.6 ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
+  -webkit-font-smoothing: antialiased; min-height: 100vh; min-height: 100dvh;
+  position: relative; display: flex; flex-direction: column;
 }
-
-a { color: var(--burnt); text-underline-offset: 0.15em; }
-a:hover { color: var(--orange); }
+main { flex: 1; width: 100%; }
+a { color: var(--burnt-d); text-underline-offset: 3px; }
+a:hover { color: var(--burnt); }
 img { max-width: 100%; height: auto; }
+:focus-visible { outline: 2.5px solid var(--orange); outline-offset: 2px; border-radius: 6px; }
 
-h1, h2, h3 { line-height: 1.15; letter-spacing: -0.01em; }
-h1 { font-size: clamp(2.2rem, 7vw, 3.6rem); font-weight: 900; margin: 0 0 0.4em; }
-h2 { font-size: clamp(1.6rem, 4.5vw, 2.2rem); font-weight: 850; margin: 0 0 0.6em; }
-h3 { font-size: 1.2rem; font-weight: 800; margin: 0.4em 0 0.3em; }
-
-/* A cream card with a white die-cut edge and a soft shadow, like a sticker. */
-.card {
-  background: var(--cream);
-  border: 3px solid #fff;
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+/* ---------- frame ---------- */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  max-width: 1080px; width: 100%; margin: 0 auto; padding: max(16px, env(safe-area-inset-top)) 20px 6px;
+}
+/* "Made with Convex" and GitHub corner triangles (layout.html). They hang off the page's
+   top corners, so the top bar moves in when the screen is too narrow to clear them. */
+.corner { position: absolute; top: 0; z-index: 20; width: 72px; height: 72px; display: block; }
+.corner svg { width: 100%; height: 100%; display: block; fill: var(--ink); }
+.corner.convex { left: 0; clip-path: polygon(0 0, 100% 0, 0 100%); }
+.corner.convex img { position: absolute; top: 7px; left: 7px; width: 26px; height: 26px; transition: transform .2s; }
+.corner.convex:hover img { transform: scale(1.12); }
+.corner.github { right: 0; clip-path: polygon(0 0, 100% 0, 100% 100%); }
+.corner.github .octo { fill: var(--cream); }
+.corner.github:hover .arm { animation: octo-wave 560ms ease-in-out; transform-origin: 130px 106px; }
+@keyframes octo-wave { 0%, 100% { transform: rotate(0) } 20%, 60% { transform: rotate(-25deg) } 40%, 80% { transform: rotate(10deg) } }
+@media (max-width: 1240px) { .topbar { padding-left: 64px; padding-right: 64px; } }
+@media (max-width: 600px) {
+  .corner { width: 54px; height: 54px; }
+  .corner.convex img { top: 5px; left: 5px; width: 20px; height: 20px; }
+  .topbar { padding-left: 50px; padding-right: 50px; }
+}
+.brand { display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; }
+.brand:hover { color: var(--ink); }
+.brand img { border-radius: 10px; border: 2px solid #fff; box-shadow: var(--lift); }
+.brand b { font: 900 23px/1 var(--round); letter-spacing: -.02em; }
+.topbar nav { display: flex; gap: 8px; }
+.topbar nav a {
+  font: 700 15px/20px var(--round); color: var(--burnt-d); text-decoration: none; padding: 7px 13px;
+  border-radius: 999px; background: var(--card); border: 2px solid #fff; box-shadow: var(--lift);
+}
+.topbar nav a:hover, .topbar nav a[aria-current="page"] { color: var(--ink); }
+@media (max-width: 600px) {
+  .brand { gap: 8px; }
+  .brand b { font-size: 21px; }
+  .brand img { width: 32px; height: 32px; border-radius: 9px; }
+  .topbar nav { gap: 6px; }
+  .topbar nav a { padding: 5px 10px; font-size: 14px; }
+}
+@media (max-width: 370px) {
+  .brand b { font-size: 19px; }
+  .brand img { width: 28px; height: 28px; }
+  .topbar nav a { padding: 4px 8px; font-size: 13.5px; }
 }
 
-.top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  max-width: 1120px;
-  width: 100%;
-  margin: 0 auto;
-  padding: max(1rem, env(safe-area-inset-top)) 1.25rem 0.5rem;
+.footer {
+  max-width: 1080px; width: 100%; margin: 0 auto; text-align: center;
+  padding: 26px 20px max(30px, env(safe-area-inset-bottom)); font: 500 13.5px/19px var(--sans); color: var(--ink-soft);
 }
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.6rem;
-  color: var(--ink);
-  text-decoration: none;
-  font-weight: 900;
-  font-size: 1.35rem;
-}
-.brand img { border-radius: 11px; border: 2px solid #fff; box-shadow: var(--shadow); }
-.top nav { display: flex; gap: 1.1rem; }
-.top nav a { color: var(--ink); font-weight: 700; text-decoration: none; }
-.top nav a:hover, .top nav a[aria-current="page"] { color: var(--burnt); }
+.footer p { max-width: 520px; margin: 0 auto; }
+.footer a { color: var(--ink-soft); }
+.footer nav { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px 18px; margin-top: 8px; }
+.footer nav a { text-decoration: none; }
+.footer a:hover { color: var(--burnt-d); }
 
-main {
-  flex: 1;
-  width: 100%;
-  max-width: 1120px;
-  margin: 0 auto;
-  padding: 0 1.25rem 3rem;
-}
+/* ---------- type ---------- */
+h1, h2, h3 { font-family: var(--round); color: var(--ink); text-wrap: balance; }
+h1 { font-weight: 900; font-size: clamp(30px, 6vw, 42px); line-height: 1.08; letter-spacing: -.02em; }
+.lede { font: 400 17px/26px var(--sans); color: var(--body); max-width: 600px; margin-top: 12px; }
+.muted { color: var(--ink-soft); font: 500 15px/21px var(--sans); }
+p { text-wrap: pretty; }
 
-/* Home */
+/* A cream card with a white die-cut edge, like the app's. */
+.card { background: var(--card); border: var(--rim); border-radius: 26px; box-shadow: var(--lift); }
 
-.hero {
-  display: grid;
-  gap: 2rem;
-  align-items: center;
-  padding: 2rem 0 3rem;
-}
-.lede { font-size: 1.15rem; color: var(--ink-soft); max-width: 34rem; }
-.small { font-size: 0.9rem; color: var(--ink-soft); margin-top: 0.8rem; }
-.hero-art img {
-  display: block;
-  width: min(100%, 460px);
-  margin: 0 auto;
-  border-radius: 34px;
-  border: 4px solid #fff;
-  box-shadow: 0 10px 40px rgba(59, 49, 43, 0.22);
-  transform: rotate(2deg);
-}
-
-/* The App Store badge, drawn here rather than hotlinked, or Apple's own when it's in img/. */
+/* ---------- the App Store badge, after Apple's black one ---------- */
 .appstore {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-top: 0.6rem;
-  padding: 0.55rem 1.2rem 0.6rem 1rem;
-  border-radius: 14px;
-  background: #000;
-  color: #fff;
-  text-decoration: none;
-  line-height: 1.05;
+  display: inline-flex; align-items: center; gap: 7px; height: 54px; padding: 0 18px 0 13px; border-radius: 12px;
+  background: #000; color: #fff; border: 1px solid #a6a6a6; text-decoration: none; white-space: nowrap;
+  font-family: var(--sans); box-shadow: 0 6px 16px rgba(40, 25, 15, .18);
 }
-.appstore:hover { color: #fff; background: #222; }
-.appstore svg { width: 28px; height: 28px; fill: currentColor; }
-.appstore small { display: block; font-size: 0.72rem; font-weight: 600; }
-.appstore b { display: block; font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; }
-.appstore.soon { background: var(--ink); cursor: default; }
-.appstore-official img { height: 54px; width: auto; display: block; margin-top: 0.6rem; }
+.appstore-logo { width: 32px; height: 32px; margin-top: -4px; flex: none; fill: currentColor; }
+.appstore span { display: flex; flex-direction: column; align-items: flex-start; }
+.appstore small { font-size: 11.5px; font-weight: 500; line-height: 1.1; letter-spacing: .01em; }
+.appstore b { font-size: 23px; font-weight: 600; line-height: 1.05; letter-spacing: -.025em; }
+a.appstore:hover { background: #1c1c1c; color: #fff; }
+a.appstore:active { transform: translateY(1px); }
+.appstore.soon { cursor: default; }
 
-.steps { padding: 1rem 0 2rem; }
-.cards {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 1.25rem;
+/* ---------- the home page ---------- */
+.section-title, .closing h2 { font-weight: 900; letter-spacing: -.025em; }
+.page-index h3 { font: 850 clamp(22px, 3vw, 28px)/1.15 var(--round); letter-spacing: -.015em; }
+
+/* A phone, drawn round a screenshot. --w sets its width. */
+.phone {
+  --w: 240px; width: var(--w); flex: none; padding: calc(var(--w) * .03); border-radius: calc(var(--w) * .165);
+  background: linear-gradient(150deg, #4c4039, #1f1915 45%, #2f2621);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .1), 0 30px 46px -26px rgba(70, 45, 25, .6), 0 10px 22px rgba(70, 45, 25, .14);
 }
-.cards .card { padding: 1.4rem 1.4rem 1.2rem; }
-.cards .card img { width: 72px; height: 72px; }
-.cards p { margin: 0; color: var(--ink-soft); }
+.phone img { display: block; width: 100%; height: auto; border-radius: calc(var(--w) * .135); background: var(--well); }
 
-.screens { padding: 2rem 0; }
-.screen-row {
-  list-style: none;
-  margin: 0 -1.25rem;
-  padding: 0.5rem 1.25rem 1.5rem;
-  display: flex;
-  gap: 1.25rem;
-  overflow-x: auto;
-  scroll-snap-type: x mandatory;
+/* hero */
+.hero {
+  max-width: 1080px; margin: 0 auto; padding: clamp(18px, 5vw, 56px) 20px 24px;
+  display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 40px; align-items: center;
 }
-.screen-row li { flex: 0 0 auto; scroll-snap-align: center; text-align: center; }
-.screen-row img {
-  width: 230px;
-  border-radius: 30px;
-  border: 4px solid #fff;
-  box-shadow: var(--shadow);
-  display: block;
+.hero-icon { display: block; border-radius: 18px; border: 3px solid #fff; margin-bottom: 18px; box-shadow: 0 8px 18px rgba(70, 45, 25, .2); }
+.hero h1 { font-size: clamp(38px, 5.6vw, 60px); line-height: 1.03; letter-spacing: -.03em; }
+.hero .lede { font-size: 18.5px; line-height: 28px; max-width: 520px; margin-top: 18px; }
+.hero-cta { display: flex; align-items: center; gap: 12px 16px; flex-wrap: wrap; margin-top: 28px; }
+.hero-media { position: relative; display: flex; justify-content: center; align-items: center; padding: 24px 0 12px; }
+/* A patch of sky behind the phones. */
+.hero-media::before {
+  content: ""; position: absolute; inset: 4% 0 0; border-radius: 48% 52% 46% 54% / 50% 46% 54% 50%;
+  background: radial-gradient(60% 60% at 45% 42%, #d3e9f7, rgba(207, 230, 247, .55) 55%, rgba(251, 244, 230, 0) 75%);
 }
-.screen-row span { display: block; margin-top: 0.5rem; font-weight: 700; font-size: 0.95rem; }
+.hero-media .phone { position: relative; --w: clamp(190px, 21vw, 262px); }
+.hero-media .back { transform: rotate(-7deg) translate(8%, 6%); margin-right: calc(var(--w) * -.32); }
+.hero-media .front { transform: rotate(4deg); z-index: 1; }
 
-.more {
-  display: grid;
-  gap: 1.5rem;
-  align-items: center;
-  padding: 2rem 0;
+/* features */
+.features, .closing { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+.section-title { display: block; font-size: clamp(30px, 4.4vw, 42px); line-height: 1.1; text-align: center; margin: clamp(48px, 8vw, 96px) 0 28px; }
+.feature {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: stretch; overflow: hidden;
+  background: var(--card); border: var(--rim); border-radius: 32px; box-shadow: var(--lift);
 }
-.more ul { padding-left: 1.2rem; margin: 0; }
-.more li { margin-bottom: 0.6rem; }
-.more-art { display: flex; justify-content: center; gap: 1rem; }
-.more-art img { width: 92px; filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.15)); }
-.more-art img:nth-child(2) { transform: translateY(-16px) rotate(-6deg); }
-
-.stickers { padding: 2rem 0; }
-.sticker-row {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 1rem;
+.feature + .feature { margin-top: 22px; }
+.feature-copy { padding: clamp(28px, 5vw, 56px); align-self: center; }
+.feature-copy p { font: 400 17.5px/28px var(--sans); color: var(--body); margin-top: 14px; max-width: 460px; }
+.feature-media {
+  position: relative; display: flex; justify-content: center; align-items: center; gap: 18px; padding: 40px 24px;
+  background: radial-gradient(90% 80% at 50% 45%, #fbe7d3, #f4d5bd);
 }
-.sticker-row li { text-align: center; font-weight: 700; font-size: 0.95rem; }
-.sticker-row img { width: 140px; display: block; margin: 0 auto 0.3rem; filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.16)); }
-.sticker-row li:nth-child(odd) img { transform: rotate(-4deg); }
-.sticker-row li:nth-child(even) img { transform: rotate(3deg); }
+.feature:nth-of-type(2) .feature-media { background: radial-gradient(90% 80% at 50% 45%, #e3f1ed, #cbe4dd); }
+.feature:nth-of-type(3) .feature-media { background: radial-gradient(90% 80% at 50% 45%, #f8ecd0, #efdcb2); }
+.feature.flip .feature-copy { order: 2; }
+.feature-media .phone { --w: 236px; }
+.feature-media.pair .phone { --w: 206px; }
+.feature-media.pair .phone:last-child { transform: translateY(22px); }
 
-.story { padding: 1.6rem 1.6rem 1.2rem; margin: 2rem 0 0; max-width: 44rem; }
-.story p { color: var(--ink-soft); }
-.sign { font-weight: 800; color: var(--ink) !important; }
+/* The secrets' stickers, stuck round the phone. */
+.sticker { position: absolute; z-index: 1; width: 112px; height: auto; filter: drop-shadow(0 5px 8px rgba(70, 45, 25, .2)); pointer-events: none; }
+.sticker.s1 { top: 7%; left: 6%; transform: rotate(-9deg); }
+.sticker.s2 { top: 40%; right: 5%; transform: rotate(7deg); }
+.sticker.s3 { bottom: 6%; left: 9%; transform: rotate(5deg); }
 
-/* Privacy and help */
+.bits { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; margin-top: 22px; }
+.bit { background: var(--card); border: var(--rim); border-radius: 28px; box-shadow: var(--lift); padding: 28px 30px; }
+.page-index .bit h3 { font-size: 22px; }
+.bit p { font: 400 16.5px/26px var(--sans); color: var(--body); margin-top: 10px; }
+.bit.story { grid-column: 1 / -1; display: flex; align-items: center; gap: 30px; background: linear-gradient(120deg, #fdf3e4, #f7e2cf); }
+.bit.story img { width: 132px; flex: none; transform: rotate(-8deg); filter: drop-shadow(0 5px 8px rgba(70, 45, 25, .18)); }
+.bit.story p { max-width: 680px; }
 
-.prose { padding: 1.6rem 1.4rem; margin: 1.5rem auto 0; max-width: 46rem; }
-.prose h2 { font-size: 1.45rem; margin-top: 1.6em; }
-.prose h3 { margin-top: 1.4em; }
-.prose li { margin-bottom: 0.55rem; }
-.prose ul { padding-left: 1.2rem; }
-.eyebrow {
-  display: inline-block;
-  font-size: 0.8rem;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #fff;
-  background: var(--badge-teal);
-  padding: 0.15rem 0.6rem;
-  border-radius: 999px;
-  margin-bottom: 0.6rem;
+/* gallery: one row of phones that scrolls sideways */
+.strip {
+  list-style: none; display: flex; gap: 22px; overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain;
+  padding: 8px 20px 26px; scrollbar-width: thin; scrollbar-color: var(--sand) transparent;
+  /* All six fit side by side on a wide screen, so centre them there. "safe" falls back to
+     the start once they don't fit, so the first one never gets cut off. */
+  justify-content: safe center;
 }
-.meta { color: var(--ink-soft); font-size: 0.9rem; margin-top: -0.6rem; }
+.strip li { flex: none; scroll-snap-align: center; }
+.strip figure { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.strip .phone { --w: 210px; }
+.strip figcaption { font: 800 15px/18px var(--round); color: var(--ink-soft); }
 
-.bottom {
-  max-width: 1120px;
-  width: 100%;
-  margin: 0 auto;
-  padding: 1.5rem 1.25rem max(2rem, env(safe-area-inset-bottom));
-  font-size: 0.9rem;
-  color: var(--ink-soft);
-  border-top: 2px dashed var(--sand);
-}
-.bottom p { margin: 0.3rem 0; }
+/* closing */
+.closing { margin-top: clamp(40px, 7vw, 80px); padding-bottom: 40px; text-align: center; display: flex; flex-direction: column; align-items: center; }
+.closing h2 { font-size: clamp(32px, 5vw, 46px); line-height: 1.1; }
+.closing .lede { text-align: center; max-width: 560px; margin: 14px 0 26px; }
 
-@media (min-width: 760px) {
-  body { font-size: 18px; }
-  .hero { grid-template-columns: 1.1fr 0.9fr; padding: 3.5rem 0 4rem; gap: 3rem; }
-  .cards { grid-template-columns: repeat(3, 1fr); }
-  .more { grid-template-columns: 1.4fr 0.6fr; }
-  .more-art { flex-direction: column; align-items: center; }
-  .more-art img:nth-child(2) { transform: translateX(-30px) rotate(-6deg); }
-  .sticker-row { grid-template-columns: repeat(6, 1fr); }
-  .screen-row { justify-content: center; }
-  .prose { padding: 2.4rem 2.6rem; }
+@media (max-width: 960px) {
+  .bits { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 860px) {
+  .hero { grid-template-columns: 1fr; text-align: center; gap: 12px; }
+  .hero-icon { margin: 0 auto 16px; }
+  .hero .lede { margin-left: auto; margin-right: auto; }
+  .hero-cta { justify-content: center; flex-direction: column; }
+  .hero-media .phone { --w: min(44vw, 230px); }
+  .feature { grid-template-columns: 1fr; }
+  .feature.flip .feature-copy { order: 0; }
+  .feature-copy { padding: 30px 24px 26px; }
+  .feature-media { padding: 30px 16px 34px; }
+  .feature-media .phone { --w: min(56vw, 240px); }
+  .feature-media.pair { gap: 12px; }
+  .feature-media.pair .phone { --w: min(38vw, 200px); }
+  .sticker { width: min(22vw, 104px); }
+  .sticker.s1 { left: 4%; }
+  .sticker.s2 { right: 3%; }
+  .sticker.s3 { left: 5%; }
+  .strip .phone { --w: min(52vw, 210px); }
+}
+@media (max-width: 640px) {
+  .bits { grid-template-columns: 1fr; }
+  .bit { padding: 24px; }
+  .bit.story { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .bit.story img { width: 96px; }
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .hero-art img { transition: transform 0.4s ease; }
-  .hero-art img:hover { transform: rotate(0deg) scale(1.02); }
-}
+/* ---------- privacy and help ---------- */
+.prose { max-width: 740px; margin: 18px auto 56px; padding: clamp(26px, 5vw, 48px) clamp(22px, 5vw, 52px); }
+.prose h1 { margin-bottom: 8px; }
+.prose h2 { font: 850 21px/27px var(--round); letter-spacing: -.01em; margin: 32px 0 0; }
+.prose p, .prose li { font: 400 16.5px/26px var(--sans); color: var(--body); }
+.prose p { margin-top: 12px; }
+.prose .lede { font-size: 17.5px; line-height: 27px; max-width: none; }
+.prose ul { padding-left: 22px; margin-top: 12px; }
+.prose li + li { margin-top: 8px; }
+.prose li::marker { color: var(--burnt); }
+.prose b { color: var(--ink); font-weight: 650; }
+.prose .meta { font: 500 15px/21px var(--sans); color: var(--ink-soft); }
+@media (max-width: 600px) { .prose { margin: 12px 14px 40px; border-radius: 22px; } }

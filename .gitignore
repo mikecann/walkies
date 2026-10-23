@@ -6,3 +6,6 @@ xcuserdata/
 node_modules/
 .env.local
 web/dist/
+web-shots/
+# App Store screenshots: big, and remade any time by scripts/screenshots.sh.
+appstore/screenshots/

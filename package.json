@@ -11,7 +11,9 @@
     "web:serve": "node scripts/build-web.mjs && node scripts/serve-web.mjs",
     "web:upload:dev": "static-hosting upload --dist web/dist --build-command 'npm run web:build'",
     "web:upload:prod": "static-hosting upload --prod --dist web/dist --build-command 'npm run web:build'",
-    "web:shots": "node scripts/web-shots.mjs"
+    "web:shots": "node scripts/web-shots.mjs",
+    "web:screens": "node scripts/make-web-screens.mjs",
+    "web:images": "xcrun swiftc -O scripts/make-web-images.swift -o /tmp/make-web-images && /tmp/make-web-images"
   },
   "dependencies": {
     "@convex-dev/auth": "2.0.0-beta.0",

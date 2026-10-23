@@ -4,10 +4,11 @@ import Foundation
 
 /// App Store screenshots (scripts/screenshots.sh): `-WalkiesScreen <screen>` opens
 /// Walkies straight on that screen as a made-up explorer a few weeks into Fremantle, WA,
-/// built from `appstore/sample/fremantle.json` (the script copies it into the app's
-/// Application Support as ScreenshotSample.json). Everything lives in a scratch folder
-/// that's made again on every launch, the saved session isn't read, and nothing syncs,
-/// so it never shows or touches anyone's real walks. Debug builds only.
+/// who's also had a long weekend in Busselton, where the secrets are. It's built from
+/// `appstore/sample/*.json`, which the script copies into the app's Application Support
+/// under ScreenshotSamples. Everything lives in a scratch folder that's made again on
+/// every launch, the saved session isn't read, and nothing syncs, so it never shows or
+/// touches anyone's real walks. Debug builds only.
 enum ScreenshotMode {
     enum Screen: String, CaseIterable {
         case map, recap, secrets, progress, quests, walks, settings
@@ -16,38 +17,48 @@ enum ScreenshotMode {
     static let screen: Screen? = LaunchArguments.value(after: "-WalkiesScreen").flatMap(Screen.init(rawValue:))
     static var isOn: Bool { screen != nil }
 
-    static let sampleFile = URL.applicationSupportDirectory.appending(path: "ScreenshotSample.json")
+    static let samples = URL.applicationSupportDirectory.appending(path: "ScreenshotSamples", directoryHint: .isDirectory)
     private static let root = URL.temporaryDirectory.appending(path: "WalkiesScreenshots", directoryHint: .isDirectory)
 
-    /// Secrets the explorer has found: stories from the Busselton lore, which is all
-    /// there is so far. Their area shows opened up in the book.
-    static let secretsArea = "Busselton"
-    private static let foundCount = 9
+    /// What the made-up explorer is called.
+    static let explorerName = "Sam"
 
-    /// A fresh store holding the sample, or an empty one if the sample file's missing.
+    /// How far up the map opens, in metres (1,500 normally).
+    static let mapDistance = 4_000.0
+
+    /// The secrets book opens with this area showing: the one the Busselton weekend found.
+    static let secretsArea = "Busselton"
+
+    /// A fresh store holding the sample, or an empty one if the sample files are missing.
     static func makeStore(now: Date = .now) -> Store {
         try? FileManager.default.removeItem(at: root)
         let store = Store(root: root)
-        guard let data = try? Data(contentsOf: sampleFile),
-              let place = try? JSONDecoder().decode(CachedPlaceData.self, from: data)
-        else {
-            print("ScreenshotMode: no sample at \(sampleFile.path); run scripts/screenshots.sh")
+        func load(_ name: String) -> CachedPlaceData? {
+            try? JSONDecoder().decode(CachedPlaceData.self, from: Data(contentsOf: samples.appending(path: "\(name).json")))
+        }
+        guard let fremantle = load("fremantle") else {
+            print("ScreenshotMode: no samples in \(samples.path); run scripts/screenshots.sh")
             return store
         }
-        let result = PlaceResult(id: 0, name: "Fremantle", detail: "Western Australia, Australia", kind: "suburb",
-                                 boundary: place.boundary, area: 0, osmId: 11689400)
-        let sample = SampleExplorer.make(place: result, ways: place.ways, home: SampleExplorer.fremantleHome, now: now)
+        // Fremantle first, so it's the place the map opens on.
+        var trips = [SampleExplorer.Trip(
+            place: PlaceResult(id: 0, name: "Fremantle", detail: "Western Australia, Australia", kind: "suburb",
+                               boundary: fremantle.boundary, area: 0, osmId: 11689400),
+            ways: fremantle.ways, home: SampleExplorer.fremantleHome, walks: SampleExplorer.fremantleWalks
+        )]
+        if let busselton = load("busselton") {
+            trips.append(SampleExplorer.Trip(
+                place: PlaceResult(id: 1, name: "Busselton", detail: "Western Australia, Australia", kind: "suburb",
+                                   boundary: busselton.boundary, area: 0, osmId: 11688699),
+                ways: busselton.ways, home: SampleExplorer.busseltonStay, walks: SampleExplorer.busseltonWalks,
+                targets: SampleExplorer.busseltonTargets
+            ))
+        }
+        let sample = SampleExplorer.make(trips, now: now)
         store.save(sample.cities)
         store.flush()
         for walk in sample.walks { store.save(walk) }
-        // Found on the walks, a few days apart, the newest first in the book.
-        let ends = sample.walks.compactMap(\.endedAt)
-        let found = LoreLibrary.all.filter { $0.suburb == secretsArea }.sorted { $0.id < $1.id }.prefix(foundCount)
-        var stickers: [String: Date] = [:]
-        for (i, entry) in found.enumerated() where !ends.isEmpty {
-            stickers[entry.id] = ends[min(ends.count - 1, i * ends.count / foundCount)]
-        }
-        store.save(stickers: stickers)
+        store.save(stickers: sample.secrets)
         return store
     }
 
@@ -63,11 +74,12 @@ enum ScreenshotMode {
         }
     }
 
-    /// Where "you" are on the map: home again, at the end of today's walk.
+    /// Where "you" are: out in the middle of Fremantle, so the map has clouds all round.
+    /// The front door's near the edge, where the next suburb has none. screenshots.sh
+    /// sets the simulator's location here too, which is what the map opens on.
     static var location: CLLocation {
-        let home = SampleExplorer.fremantleHome
-        return CLLocation(
-            coordinate: CLLocationCoordinate2D(latitude: home.lat, longitude: home.lon),
+        CLLocation(
+            coordinate: CLLocationCoordinate2D(latitude: -32.0545, longitude: 115.7515),
             altitude: 0, horizontalAccuracy: 5, verticalAccuracy: 5, timestamp: .now
         )
     }

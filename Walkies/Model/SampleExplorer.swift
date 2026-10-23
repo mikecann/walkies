@@ -1,72 +1,127 @@
 #if DEBUG
 import Foundation
 
-/// A made-up explorer for the App Store screenshots (ScreenshotMode.swift): a place
-/// built from real streets, and a few weeks of walks from one front door along them,
-/// so the map is part uncovered the way a real one is. Same seed, same walks. Only in
-/// Debug builds; nothing here ever touches anyone's real walks.
+/// A made-up explorer for the App Store screenshots (ScreenshotMode.swift): places
+/// built from real streets, and a few weeks of walks from a front door along them, so
+/// the map is part uncovered the way a real one is. The secrets they've found are the
+/// ones those walks went over, hidden the way the app hides them. Same seed, same walks.
+/// Only in Debug builds; nothing here ever touches anyone's real walks.
 nonisolated enum SampleExplorer {
     struct Sample: Sendable {
         var cities: [City]
         var walks: [Walk]
+        /// The secrets the walks went over, and when.
+        var secrets: [String: Date]
+    }
+
+    /// One place the explorer walks in.
+    struct Trip {
+        var place: PlaceResult
+        var ways: [OSMWay]
+        /// Where every walk there sets off from and comes back to.
+        var home: Coordinate
+        /// Each walk's day (before `now`; 0 is today) and the hour it set off, oldest first.
+        var walks: [(day: Int, hour: Int)]
+        /// Somewhere to head for on each walk, in order. Walks past the end of this go
+        /// somewhere new round the compass instead.
+        var targets: [Coordinate] = []
     }
 
     /// The made-up explorer's front door: a side street in Fremantle, WA, by Fremantle Park.
     static let fremantleHome = Coordinate(lat: -32.0512, lon: 115.7560)
+    /// Where they stayed on a long weekend down in Busselton, a street back from the foreshore.
+    static let busseltonStay = Coordinate(lat: -33.6478, lon: 115.3420)
 
-    /// Days before `now` that each walk was on, oldest first. The last is today.
-    static let days = [-24, -21, -19, -17, -14, -12, -10, -8, -6, -5, -3, -1, 0]
+    /// Fremantle mornings over the last few weeks. The last one is today.
+    static let fremantleWalks = [-24, -21, -19, -17, -14, -12, -10, -8, -6, -5, -3, -1, 0].map { (day: $0, hour: 7) }
+    /// The Busselton weekend: out to the jetty, round the town centre and along the foreshore.
+    static let busseltonWalks = [(day: -16, hour: 8), (day: -16, hour: 16), (day: -15, hour: 8)]
+    static let busseltonTargets = [
+        Coordinate(lat: -33.6444, lon: 115.3449),
+        Coordinate(lat: -33.6530, lon: 115.3480),
+        Coordinate(lat: -33.6436, lon: 115.3505),
+    ]
     /// A stroll, not a hike: about 1.35 m/s.
     static let pace = 1.35
 
-    static func make(place: PlaceResult, ways: [OSMWay], home: Coordinate, now: Date = .now, seed: UInt64 = 7) -> Sample {
-        var city = CityBuilder.build(from: place, ways: ways, walks: [], streetsVersion: WalkableRule.version)
-        city.createdAt = now.addingTimeInterval(TimeInterval(days[0] - 1) * 86_400)
-        let graph = Graph(lines: city.roads ?? [], shape: city.shape(), projection: city.grid.projection)
+    static func make(_ trips: [Trip], lore: [LoreEntry] = LoreLibrary.all, now: Date = .now, seed: UInt64 = 7) -> Sample {
         var rng = Random(seed: seed)
+        var cities: [City] = []
+        var walks: [Walk] = []
+        for trip in trips {
+            var city = CityBuilder.build(from: trip.place, ways: trip.ways, walks: [], streetsVersion: WalkableRule.version)
+            let firstDay = trip.walks.first?.day ?? 0
+            city.createdAt = now.addingTimeInterval(TimeInterval(firstDay - 1) * 86_400)
+            walks += self.walks(for: trip, in: city, now: now, rng: &rng)
+            cities.append(city)
+        }
+        // Each place's secrets are hidden when it's added, before any of its tiles are
+        // walked, the same way AppModel does it.
+        let assigned = LoreLibrary.assign(lore, to: cities) { city, point in
+            city.shape().contains(city.grid.projection.project(point))
+        }
+        for i in cities.indices {
+            cities[i].stickers = cities[i].placeStickers(assigned[cities[i].id] ?? [])
+        }
+        let replay = CityBuilder.replay(walks, through: cities)
+        cities = replay.cities
+        for i in cities.indices { cities[i].updatedAt = now }
+        return Sample(cities: cities, walks: replay.walks, secrets: replay.secrets)
+    }
+
+    private static func walks(for trip: Trip, in city: City, now: Date, rng: inout Random) -> [Walk] {
+        let graph = Graph(lines: city.roads ?? [], shape: city.shape(), projection: city.grid.projection)
         var walked = Set<Graph.Edge>()
         let calendar = Calendar.current
         var walks: [Walk] = []
-        guard let start = graph.nearest(to: home) else { return Sample(cities: [city], walks: []) }
+        guard let start = graph.nearest(to: trip.home) else { return [] }
         let origin = graph.nodes[start]
-        for (i, day) in days.enumerated() {
-            // Somewhere new each time: round the compass by the golden angle, 600 m to 1.4 km
-            // out. The sea's to the west, so a try that comes back short goes round again.
-            // Today's is the one the celebration shows, so it goes the newest way of all.
-            let today = i == days.count - 1
+        let connected = graph.reachable(from: start)
+        for (i, slot) in trip.walks.enumerated() {
+            let today = slot.day == 0
             var route: [Coordinate] = []
-            var bestNew = -1.0
-            for attempt in 0..<(today ? 16 : 8) {
-                let angle = Double(i * 3 + attempt + 1) * 2.39996
-                let reach = 600 + Double(rng.next() % 800)
-                let target = Coordinate(lat: origin.lat + reach * cos(angle) / 111_320,
-                                        lon: origin.lon + reach * sin(angle) / (111_320 * cos(origin.lat * .pi / 180)))
-                var tried = walked
-                let destination = graph.nearest(to: target) ?? start
-                let candidate = graph.loop(from: start, to: destination, walked: &tried)
-                let fresh = Double(tried.subtracting(walked).count)
-                let long = CoverageTracer.distanceAlong(candidate) > 1_800
-                if today ? (long && fresh > bestNew) : (long || attempt == 7) {
-                    route = candidate
-                    bestNew = fresh
-                    if !today { walked = tried; break }
+            if i < trip.targets.count {
+                // Out to somewhere in particular, and back another way. Only streets joined
+                // up to home count, or a target near a lone path would make an empty walk.
+                let destination = graph.nearest(to: trip.targets[i], among: connected) ?? start
+                route = graph.loop(from: start, to: destination, walked: &walked)
+            } else {
+                // Somewhere new each time: round the compass by the golden angle, 600 m to
+                // 1.4 km out. Fremantle's sea is to the west, so a try that comes back short
+                // goes round again. Today's is the one the celebration shows, so it goes the
+                // newest way of all.
+                var bestNew = -1.0
+                for attempt in 0..<(today ? 16 : 8) {
+                    let angle = Double(i * 3 + attempt + 1) * 2.39996
+                    let reach = 600 + Double(rng.next() % 800)
+                    let target = Coordinate(lat: origin.lat + reach * cos(angle) / 111_320,
+                                            lon: origin.lon + reach * sin(angle) / (111_320 * cos(origin.lat * .pi / 180)))
+                    var tried = walked
+                    let destination = graph.nearest(to: target) ?? start
+                    let candidate = graph.loop(from: start, to: destination, walked: &tried)
+                    let fresh = Double(tried.subtracting(walked).count)
+                    let long = CoverageTracer.distanceAlong(candidate) > 1_800
+                    if today ? (long && fresh > bestNew) : (long || attempt == 7) {
+                        route = candidate
+                        bestNew = fresh
+                        if !today { walked = tried; break }
+                    }
                 }
+                if today { walked.formUnion(Graph.edges(of: route, in: graph)) }
             }
-            if today { walked.formUnion(Graph.edges(of: route, in: graph)) }
             let duration = CoverageTracer.distanceAlong(route) / pace
-            // Mornings, a bit after seven. Today's finished about half an hour ago.
-            let morning = calendar.date(bySettingHour: 7, minute: Int(rng.next() % 40), second: 0, of: now.addingTimeInterval(TimeInterval(day) * 86_400)) ?? now
-            let started = i == days.count - 1 ? now.addingTimeInterval(-duration - 1_800) : morning
+            let date = now.addingTimeInterval(TimeInterval(slot.day) * 86_400)
+            var started = calendar.date(bySettingHour: slot.hour, minute: Int(rng.next() % 40), second: 0, of: date) ?? date
+            // Today's has to be over already: before the 9:41 on the screenshots' clock if
+            // they're taken later in the day, or else about half an hour ago.
+            if today { started = min(started, now.addingTimeInterval(-duration - 1_800)) }
             let points = trackPoints(along: route, from: started)
             let ended = Date(timeIntervalSince1970: points.last?.time ?? started.timeIntervalSince1970)
             var walk = Walk(startedAt: started, endedAt: ended, points: points)
             walk.steps = Int(CoverageTracer.distance(for: points) / 0.74)
             walks.append(walk)
         }
-        let replay = CityBuilder.replay(walks, through: [city])
-        var cities = replay.cities
-        for i in cities.indices { cities[i].updatedAt = now }
-        return Sample(cities: cities, walks: replay.walks)
+        return walks
     }
 
     /// GPS fixes every 10 metres or so along the route, at walking pace.
@@ -128,6 +183,20 @@ nonisolated enum SampleExplorer {
 
         func nearest(to c: Coordinate) -> Int? {
             nodes.indices.filter { !neighbours[$0].isEmpty }.min { nodes[$0].distance(to: c) < nodes[$1].distance(to: c) }
+        }
+
+        func nearest(to c: Coordinate, among candidates: Set<Int>) -> Int? {
+            candidates.min { nodes[$0].distance(to: c) < nodes[$1].distance(to: c) }
+        }
+
+        /// Every node you can get to from `start` along the streets.
+        func reachable(from start: Int) -> Set<Int> {
+            var seen: Set = [start]
+            var queue = [start]
+            while let n = queue.popLast() {
+                for m in neighbours[n] where seen.insert(m).inserted { queue.append(m) }
+            }
+            return seen
         }
 
         /// Out to `destination` and back by another way, both along streets it hasn't

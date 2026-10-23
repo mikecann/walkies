@@ -94,6 +94,10 @@ final class Account {
         #endif
         // didSet doesn't run in init.
         profile = Profile(session)
+        #if DEBUG
+        // The made-up explorer gets a name, so their head on the map isn't a "?".
+        if ScreenshotMode.isOn { profile.name = ScreenshotMode.explorerName }
+        #endif
         #if DEBUG && targetEnvironment(simulator)
         automaticTestSignInRequested = session == nil && ProcessInfo.processInfo.arguments.contains("-testSignIn")
         #endif

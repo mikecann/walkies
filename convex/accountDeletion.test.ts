@@ -156,11 +156,15 @@ describe("account deletion", { timeout: 60_000 }, () => {
   test("an account merged into theirs is scrubbed too", async () => {
     const { t, alice, aliceId } = await setup();
     const oldId = await t.run((ctx) => ctx.db.insert("users", { name: "Alice (Google)", email: "alice@example.com", emailVerified: true, mergedInto: aliceId }));
+    // Merging doesn't move rate-limit rows, so some can still be filed under the old account.
+    await t.run((ctx) => ctx.db.insert("placeCalls", { userId: oldId, windowStart: 0, count: 1 }));
     await alice.mutation(api.users.deleteAccount, {});
     await drain(t);
     expect(await t.withIdentity({ subject: oldId }).query(api.users.me)).toBeNull();
     const old = await t.run((ctx) => ctx.db.get(oldId));
     expect(old?.deletedAt).toEqual(expect.any(Number));
     expect([old?.name, old?.email]).toEqual([undefined, undefined]);
+    const left = await counts(t, oldId);
+    expect(left).toEqual(allZero(left));
   });
 });

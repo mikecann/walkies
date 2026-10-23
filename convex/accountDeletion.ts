@@ -109,6 +109,9 @@ const SWEEPS: Record<PersonalTable | "chefRequests", Sweep> = {
   placeCalls: plain("placeCalls"),
   // Chef: their feature requests, with screenshots, voice notes, votes on them and
   // notifications (the feedback component's items.remove). Counts requests, not rows.
+  // Their votes on other people's requests and Chef's own row for them stay, since the
+  // component has no way to list those by person, but they only hold this user's id,
+  // which by then points at an empty tombstone.
   chefRequests: async (ctx, userId, budget) => {
     let deleted = 0;
     while (deleted < budget) {

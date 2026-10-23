@@ -2,10 +2,13 @@
 // Makes the sample suburb for App Store screenshots (scripts/screenshots.sh): a real
 // suburb's OpenStreetMap boundary and walkable streets, in the same compact format as
 // the shared street cache (convex/placeData.ts), saved to appstore/sample/<name>.json.
-// It's Fremantle, WA by default: pretty from above, and nowhere near Mike's own walks.
+// It's Fremantle, WA by default: pretty from above, and nowhere near Mike's own walks. The
+// explorer's long weekend in Busselton, where the secrets are, uses busselton.json.
+// Overpass is often busy, so it can take a couple of goes.
 //
 //   node scripts/make-screenshot-sample.mjs                 # Fremantle (relation 11689400)
 //   node scripts/make-screenshot-sample.mjs 11689400 fremantle
+//   node scripts/make-screenshot-sample.mjs 11688699 busselton
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

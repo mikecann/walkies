@@ -3,13 +3,20 @@
 /** Where the site lives: prod's Convex deployment, on its own domain. */
 export const SITE_URL = "https://walkies.mikecann.app";
 
-/**
- * The App Store page, e.g. "https://apps.apple.com/app/walkies/id1234567890". Until it's
- * set, the site says "Coming soon to the App Store" instead of showing the badge.
- */
-export const APP_STORE_URL = null;
+/** Walkies on the App Store (Apple ID 6826001880). Also used for Safari's Smart App Banner. */
+export const APP_STORE_URL = "https://apps.apple.com/app/id6826001880";
 
-/** Where people write for help. A placeholder until the mailbox exists (docs/decisions.md). */
+/**
+ * Flip to true once Walkies is out on the App Store. Until then every App Store badge
+ * on the site says "Coming soon to the App Store" and isn't a link, and the structured
+ * data leaves out the download link.
+ */
+export const APP_STORE_LIVE = false;
+
+/** The code, for the GitHub corner. */
+export const GITHUB_URL = "https://github.com/mikecann/walkies";
+
+/** Where people write for help. */
 export const SUPPORT_EMAIL = "walkies@mikecann.app";
 
 /** The privacy policy's date. Change it whenever the policy changes. */

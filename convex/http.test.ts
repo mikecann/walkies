@@ -33,7 +33,9 @@ describe("http routes", () => {
     const t = setup();
     const privacy = await t.fetch("/privacy");
     expect(privacy.status).toBe(200);
-    expect(await privacy.text()).toContain("Delete account");
+    const policy = await privacy.text();
+    expect(policy).toContain("Delete account");
+    expect(policy).toContain("aws-ap-southeast-2");
     const support = await t.fetch("/support");
     expect(support.status).toBe(200);
     expect(await support.text()).toContain("walkies@mikecann.app");

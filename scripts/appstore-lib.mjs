@@ -6,12 +6,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-/**
- * Walkies' Apple ID in App Store Connect (App Information > General > Apple ID).
- * TODO: the app doesn't exist yet. Make it (docs/runbooks/appstore-release.md, step 1),
- * then put its number here. Every script refuses to run until it's set.
- */
-export const APP_ID = "TODO";
+/** "Walkies: Explore Your Suburb" in App Store Connect (App Information > General > Apple ID). */
+export const APP_ID = "6826001880";
 export const BUNDLE_ID = "com.mikecann.walkies";
 
 export const KEY_ID = process.env.ASC_KEY_ID ?? "7SS6J9F98P";
@@ -20,13 +16,8 @@ export const KEY_PATH = process.env.ASC_KEY ?? join(homedir(), ".config/poddle",
 /** The App Review contact's email and phone, kept out of git (shared with Poddle). */
 export const REVIEW_CONTACT_FILE = join(homedir(), ".config/poddle/review-contact.json");
 
-/** Stops with a clear message while APP_ID is still TODO, or the key's missing. */
+/** Stops with a clear message if the API key's missing. */
 export function requireApp() {
-  if (!/^\d+$/.test(APP_ID)) {
-    console.error(`✗ APP_ID in scripts/appstore-lib.mjs is "${APP_ID}". Make the Walkies app in App Store Connect first`);
-    console.error("  (docs/runbooks/appstore-release.md, step 1), then set APP_ID to its Apple ID.");
-    process.exit(1);
-  }
   if (!existsSync(KEY_PATH)) {
     console.error(`✗ No App Store Connect API key at ${KEY_PATH}`);
     process.exit(1);

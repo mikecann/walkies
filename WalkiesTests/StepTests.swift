@@ -134,7 +134,9 @@ struct WalkStepFinishTests {
         let store = store()
         defer { store.wipe() }
         let start = Date.now.addingTimeInterval(-600)
-        let last = start.addingTimeInterval(300)
+        // A whole second, so it comes back the same from the point's timeIntervalSince1970.
+        // Any old time can be a rounding error out, which made this fail now and then.
+        let last = Date(timeIntervalSince1970: (start.timeIntervalSince1970 + 300).rounded())
         store.save(Walk(startedAt: start, points: [TrackPoint(lat: 1, lon: 1, time: last.timeIntervalSince1970, accuracy: 5)]))
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false, stepQuery: { from, to in
             #expect(from == start)
