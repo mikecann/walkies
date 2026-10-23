@@ -15,16 +15,24 @@ nonisolated enum CloudRenderer: String, Sendable {
 }
 
 /// Launch arguments, read by hand: `UserDefaults` would read `-perfRun -cloudRenderer live`
-/// as perfRun = "-cloudRenderer".
+/// as perfRun = "-cloudRenderer". They're for testing, so Release builds ignore them all.
 nonisolated enum LaunchArguments {
     static func has(_ flag: String) -> Bool {
+        #if DEBUG
         ProcessInfo.processInfo.arguments.contains(flag)
+        #else
+        false
+        #endif
     }
 
     static func value(after flag: String) -> String? {
+        #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         guard let i = arguments.firstIndex(of: flag), i + 1 < arguments.count else { return nil }
         return arguments[i + 1]
+        #else
+        nil
+        #endif
     }
 }
 

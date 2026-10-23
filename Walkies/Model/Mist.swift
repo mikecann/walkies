@@ -58,10 +58,13 @@ nonisolated enum Mist {
     static let defaultDays = 60.0
 
     /// How long until a walked tile mists over. `-mistDays <number>` overrides it
-    /// (0.001 is about a minute and a half), to see it without waiting two months.
+    /// (0.001 is about a minute and a half), to see it without waiting two months. Debug only.
     static var days: Double {
+        #if DEBUG
         let override = UserDefaults.standard.double(forKey: "mistDays")
-        return override > 0 ? override : defaultDays
+        if override > 0 { return override }
+        #endif
+        return defaultDays
     }
 
     /// A tile walked within this many seconds isn't noted again as you walk round it,

@@ -17,7 +17,28 @@ export default defineSchema({
      * linked by email. Everything treats it as this other user instead.
      */
     mergedInto: v.optional(v.id("users")),
-  }).index("by_email", ["email"]),
+    /**
+     * Set when the account was deleted (users:deleteAccount). The row stays as an empty
+     * tombstone, so Convex Auth's sign-ins that still point at it count as signed out.
+     */
+    deletedAt: v.optional(v.number()),
+  }).index("by_email", ["email"]).index("by_mergedInto", ["mergedInto"]),
+
+  /**
+   * A deleted account's data going, a batch at a time. Each step records how far it
+   * got, so an interrupted one picks up where it left off (accountDeletion.ts).
+   */
+  accountDeletions: defineTable({
+    userId: v.id("users"),
+    requestedAt: v.number(),
+    /** The table being emptied now (`accountDeletion.STAGES`), or "done". */
+    stage: v.string(),
+    /** Full passes over every stage; another runs if rows turned up behind it. */
+    passes: v.number(),
+    deletedRows: v.number(),
+    lastStepAt: v.number(),
+    finishedAt: v.optional(v.number()),
+  }).index("by_user", ["userId"]).index("by_finishedAt_lastStepAt", ["finishedAt", "lastStepAt"]),
 
   walks: defineTable({
     userId: v.id("users"),

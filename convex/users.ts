@@ -2,7 +2,8 @@ import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { vAppleProfile } from "@convex-dev/auth/methods/apple/server";
 import { vGoogleProfile } from "@convex-dev/auth/methods/google/server";
-import { env, internalMutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { env, internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { deletionInProgress, startDeletion } from "./accountDeletion";
 import { mergeLedgers, parseLedger } from "./progression";
 import type { Id } from "./_generated/dataModel";
 
@@ -27,13 +28,17 @@ export const createUserAnonymous = internalMutation({
 
 /**
  * Who's signed in: the user their session belongs to, or the one that user was
- * merged into. Use this rather than getAuthUserId everywhere.
+ * merged into. Use this rather than getAuthUserId everywhere. A deleted account
+ * counts as signed out, so every session it had stops working straight away.
  */
 export async function currentUserId(ctx: QueryCtx | MutationCtx): Promise<Id<"users"> | null> {
   const userId = await getAuthUserId(ctx);
   if (userId === null) return null;
   const user = await ctx.db.get("users", userId);
-  return user?.mergedInto ?? userId;
+  if (user === null) return null;
+  const owner = user.mergedInto ? await ctx.db.get("users", user.mergedInto) : user;
+  if (owner === null || owner.deletedAt !== undefined) return null;
+  return owner._id;
 }
 
 /**
@@ -56,6 +61,7 @@ async function existingUser(ctx: MutationCtx, details: Details): Promise<Id<"use
  * Apple only sends the name the first time, so an empty one never wipes a saved one.
  */
 async function saveDetails(ctx: MutationCtx, userId: Id<"users">, details: Details) {
+  await reviveIfDeleted(ctx, userId);
   const user = await ctx.db.get("users", userId);
   if (user === null) return;
   await ctx.db.patch("users", userId, {
@@ -63,6 +69,27 @@ async function saveDetails(ctx: MutationCtx, userId: Id<"users">, details: Detai
     email: details.email ?? user.email,
     emailVerified: details.email === undefined ? user.emailVerified : details.emailVerified,
   });
+}
+
+/**
+ * Someone who deleted their account is signing in again with the same Apple or
+ * Google account. Convex Auth still points that account at their old, emptied user,
+ * so it comes back as a fresh, empty account once the old data has finished going.
+ */
+async function reviveIfDeleted(ctx: MutationCtx, userId: Id<"users">) {
+  const user = await ctx.db.get("users", userId);
+  if (user === null) throw new ConvexError({ code: "unknownUser", message: "That account doesn't exist any more." });
+  const owner = user.mergedInto ? await ctx.db.get("users", user.mergedInto) : user;
+  const deleted = [...new Set([user, owner])].filter((u) => u !== null && u.deletedAt !== undefined) as NonNullable<typeof user>[];
+  for (const u of deleted) {
+    if (await deletionInProgress(ctx, u._id)) {
+      throw new ConvexError({
+        code: "accountDeleting",
+        message: "Your old account is still being deleted. Give it a few minutes and try again.",
+      });
+    }
+  }
+  for (const u of deleted) await ctx.db.patch("users", u._id, { deletedAt: undefined });
 }
 
 export const createUserApple = internalMutation({
@@ -124,6 +151,30 @@ export const me = query({
     const user = await ctx.db.get("users", userId);
     if (user === null) return null;
     return { name: user.name ?? null, email: user.email ?? null, picture: user.picture ?? null };
+  },
+});
+
+/**
+ * Deletes the signed-in person's account (App Store Guideline 5.1.1(v)). They're
+ * signed out straight away: the user row loses its name, email and photo and becomes
+ * a tombstone every session treats as signed out (currentUserId). Their walks, places,
+ * progress, secrets, team memberships and Chef requests are then deleted in the
+ * background (accountDeletion.ts). The app wipes its own copy and calls auth:signOut.
+ * Convex Auth v2 keeps no Apple or Google tokens to revoke, and its own account and
+ * session rows (in its components) only point at the tombstone.
+ */
+export const deleteAccount = mutation({
+  args: {},
+  returns: v.object({ deletionId: v.id("accountDeletions") }),
+  handler: async (ctx) => {
+    const userId = await currentUserId(ctx);
+    if (userId === null) throw new ConvexError({ code: "UNAUTHENTICATED", message: "Sign in first." });
+    const scrub = { deletedAt: Date.now(), name: undefined, email: undefined, emailVerified: undefined, picture: undefined };
+    await ctx.db.patch("users", userId, scrub);
+    // Older user rows folded into this one (the same person through the other provider).
+    const merged = await ctx.db.query("users").withIndex("by_mergedInto", (q) => q.eq("mergedInto", userId)).collect();
+    for (const m of merged) await ctx.db.patch("users", m._id, scrub);
+    return { deletionId: await startDeletion(ctx, userId) };
   },
 });
 

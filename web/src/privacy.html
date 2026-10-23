@@ -1,0 +1,56 @@
+<!--page {"title": "Privacy · Walkies", "description": "What Walkies keeps about you, why, where it lives, and how to delete it.", "path": "/privacy"} -->
+<!-- Keep this in step with what the backend stores (convex/schema.ts), Walkies/PrivacyInfo.xcprivacy
+     and docs/runbooks/app-privacy-answers.md. If one changes, change all three, and the date in web/site.mjs. -->
+    <article class="prose card">
+      <span class="eyebrow">Privacy</span>
+      <h1>Walkies' privacy policy</h1>
+      <p class="meta">Last updated {{privacyUpdated}}</p>
+
+      <p>Walkies is an app I (Mike Cann) made for exploring your suburb on foot. This page says what it keeps about you, why, where it lives, and how to get rid of it. The short version: it keeps what it needs to clear your clouds and back them up to your account, and nothing else. No ads, no tracking, and I don't sell anything to anyone.</p>
+
+      <h2>What Walkies stores</h2>
+      <ul>
+        <li><b>Your account:</b> your name and email address from Sign in with Apple or Google, and your Google profile photo if you use Google. If you use Apple's "Hide My Email", I only ever see the relay address.</li>
+        <li><b>Your walks:</b> the GPS points along each walk (where you were and when, how accurate the fix was and how fast you were going), when it started and ended, how far you went, how many tiles it uncovered, and its step count. Each point also notes whether the phone's motion chip thought you were standing still or on wheels, which is how bikes and cars are kept out.</li>
+        <li><b>Your places:</b> the suburbs you've added, with their outlines and streets from OpenStreetMap, the tiles you've uncovered and when you last walked each one.</li>
+        <li><b>Your progress:</b> the secrets you've found, your shells, what you've bought with them and which rewards you've picked.</li>
+        <li><b>Teams:</b> if you start or join a team, its name and invite code, the name and colour you chose, and when you joined. People in the same team see your name, colour and Google photo.</li>
+        <li><b>Feature requests:</b> if you use "Suggest a feature", what you write, plus any screenshots and voice notes you attach, and the words of the voice note.</li>
+      </ul>
+      <p>All of this is saved on your phone first, so the app works without signal, and then backed up to your Walkies account so it comes back on a new phone.</p>
+
+      <h2>Location</h2>
+      <p>Walkies uses your location to clear the tiles you walk through and to show where you are on the map. With the "While Using the App" permission it records the walks you start yourself, including with the phone locked in your pocket. If you turn on <b>Always on</b> and allow "Always", it also notices when you head out on foot and records the walk by itself. Then only the points where you were on foot are kept, not ones from a bike, car or bus, and GPS pauses while you're sitting still. A walk you start yourself keeps every point until you press End walk, though only the walking ones clear tiles. You can turn Always on off in Settings, or change the permission in the iPhone's Settings app, whenever you like.</p>
+
+      <h2>Motion and steps</h2>
+      <p>Walkies asks for Motion &amp; Fitness access to tell walking from cycling or driving, and to count your steps. The step count for each walk is saved with the walk. Walkies doesn't read or write Apple Health. You can turn step counting off in Settings.</p>
+
+      <h2>Why</h2>
+      <p>Only to run Walkies for you: to sign you in, clear your clouds, back up your walks and progress, show your team to the people in it, and read your feature requests. It's never used for advertising, and it's never shared with anyone for their own use.</p>
+
+      <h2>Where it lives, and who handles it</h2>
+      <ul>
+        <li><b>Convex</b> hosts Walkies' database, file storage and website, in Sydney, Australia. Everything above is stored there.</li>
+        <li><b>Apple</b> and <b>Google</b> handle signing in. They tell Walkies your name and email (and Google your photo), and that's it.</li>
+        <li><b>Apple Maps</b> draws the satellite map, and suggests suburbs as you type one in, so Apple sees the map areas you look at and what you type into that box, as with any app that uses Apple's maps.</li>
+        <li><b>OpenStreetMap</b> (its Nominatim and Overpass services) provides suburb outlines and streets. When you add a place, the suburb you searched for is sent to it, from your phone or from Walkies' server. To find the suburbs next door, the app asks it about the area around your places. It never gets your walks or your account.</li>
+        <li><b>Apple's speech recognition</b> writes out a voice note as you record it, if you record one in "Suggest a feature".</li>
+      </ul>
+      <p>The pictures in the secrets come bundled in the app, so looking at them doesn't fetch anything.</p>
+
+      <h2>No ads, no tracking, no selling</h2>
+      <p>Walkies has no ads, no analytics or tracking SDKs, and doesn't follow you across other apps or websites. I don't sell or rent your data, and I never will.</p>
+
+      <h2>Deleting your account</h2>
+      <p>You can delete your account whenever you like: in the app, go to <b>Settings</b> and tap <b>Delete account</b>. You're signed out straight away, everything is cleared off your phone, and your walks, places, progress, secrets, team memberships and feature requests are deleted from Walkies' database within a few minutes. If you made a team that still has other people in it, it's handed to whoever has been in it longest. Convex keeps backups for a short while, so a copy can hang around in those until they expire.</p>
+      <p>If you can't get into the app, email me at <a href="mailto:{{email}}">{{email}}</a> from the address you signed in with and I'll delete it for you.</p>
+
+      <h2>Kids</h2>
+      <p>Walkies isn't made for children under 13, and doesn't knowingly collect anything from them.</p>
+
+      <h2>Changes</h2>
+      <p>If this policy changes, I'll update it here and change the date at the top.</p>
+
+      <h2>Questions</h2>
+      <p>Email me at <a href="mailto:{{email}}">{{email}}</a> and I'll get back to you.</p>
+    </article>

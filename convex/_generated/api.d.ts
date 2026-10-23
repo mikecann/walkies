@@ -8,8 +8,10 @@
  * @module
  */
 
+import type * as accountDeletion from "../accountDeletion.js";
 import type * as auth from "../auth.js";
 import type * as chef from "../chef.js";
+import type * as crons from "../crons.js";
 import type * as grid from "../grid.js";
 import type * as http from "../http.js";
 import type * as placeData from "../placeData.js";
@@ -26,8 +28,10 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  accountDeletion: typeof accountDeletion;
   auth: typeof auth;
   chef: typeof chef;
+  crons: typeof crons;
   grid: typeof grid;
   http: typeof http;
   placeData: typeof placeData;
@@ -70,4 +74,5 @@ export declare const components: {
   authGoogle: import("@convex-dev/auth/components/google/_generated/component.js").ComponentApi<"authGoogle">;
   authAnonymous: import("@convex-dev/auth/components/anonymous/_generated/component.js").ComponentApi<"authAnonymous">;
   feedback: import("@convex-dev/feedback/_generated/component.js").ComponentApi<"feedback">;
+  staticHosting: import("@convex-dev/static-hosting/_generated/component.js").ComponentApi<"staticHosting">;
 };

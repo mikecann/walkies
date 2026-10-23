@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Debug builds. Release builds use Walkies.entitlements, which only has prod.
+	     Links the app to the Convex deployments' own domains. Each serves
+	     /.well-known/apple-app-site-association (convex/http.ts), for passwords and
+	     passkeys later. Sign-in doesn't rely on it: it comes back on walkies://.
+	     The dev one is fetched straight from the domain in developer mode. -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>webcredentials:savory-bee-296.ap-southeast-2.convex.site</string>
+		<string>webcredentials:resolute-pig-177.ap-southeast-2.convex.site?mode=developer</string>
+	</array>
+</dict>
+</plist>

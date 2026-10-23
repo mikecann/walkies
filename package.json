@@ -6,17 +6,24 @@
     "dev": "convex dev",
     "deploy": "convex deploy",
     "typecheck": "tsc -p convex --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "web:build": "node scripts/build-web.mjs",
+    "web:serve": "node scripts/build-web.mjs && node scripts/serve-web.mjs",
+    "web:upload:dev": "static-hosting upload --dist web/dist --build-command 'npm run web:build'",
+    "web:upload:prod": "static-hosting upload --prod --dist web/dist --build-command 'npm run web:build'",
+    "web:shots": "node scripts/web-shots.mjs"
   },
   "dependencies": {
     "@convex-dev/auth": "2.0.0-beta.0",
     "@convex-dev/feedback": "file:vendor/convex-dev-feedback-0.0.1.tgz",
+    "@convex-dev/static-hosting": "^0.2.1",
     "convex": "1.47.0"
   },
   "devDependencies": {
     "@edge-runtime/vm": "^5.0.0",
     "convex-test": "^0.0.58",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.7"
+    "vitest": "^3.2.7",
+    "playwright": "^1.64.1"
   }
 }

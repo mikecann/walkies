@@ -5,6 +5,7 @@ import apple from "@convex-dev/auth/components/apple/convex.config.js";
 import google from "@convex-dev/auth/components/google/convex.config.js";
 import anonymous from "@convex-dev/auth/components/anonymous/convex.config.js";
 import feedback from "@convex-dev/feedback/convex.config.js";
+import staticHosting from "@convex-dev/static-hosting/convex.config.js";
 
 const app = defineApp({
   env: {
@@ -54,5 +55,8 @@ app.use(anonymous);
 
 // Chef: requests, voting and approvals.
 app.use(feedback);
+
+// The website (web/, `npm run web:upload:prod`). http.ts serves it under its own routes.
+app.use(staticHosting);
 
 export default app;

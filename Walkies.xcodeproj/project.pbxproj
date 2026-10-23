@@ -292,11 +292,11 @@
 				DEVELOPMENT_TEAM = 4DTAZSZL6B;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				CODE_SIGN_ENTITLEMENTS = Config/Walkies.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "Config/Walkies-Debug.entitlements";
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Walkies;
-				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "With Always on, Walkies records your walks in the background, so you never have to press Start walk.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Walkies uses your location to uncover the tiles you walk through.";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "With Always on, Walkies notices when you head out on foot and records the walk by itself, so you never have to press Start walk. It only keeps your location while you're walking, to clear the tiles you walk through.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Walkies uses your location to show where you are on the map and to uncover the tiles you walk through.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Walkies records a voice note when you suggest a feature, so you can say it rather than type it.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "Walkies uses motion to tell walking from cycling or driving, and to count your steps.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Walkies writes out your voice note as you speak when you suggest a feature.";
@@ -308,7 +308,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mikecann.walkies;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -333,8 +333,8 @@
 				CODE_SIGN_ENTITLEMENTS = Config/Walkies.entitlements;
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Walkies;
-				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "With Always on, Walkies records your walks in the background, so you never have to press Start walk.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Walkies uses your location to uncover the tiles you walk through.";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "With Always on, Walkies notices when you head out on foot and records the walk by itself, so you never have to press Start walk. It only keeps your location while you're walking, to clear the tiles you walk through.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Walkies uses your location to show where you are on the map and to uncover the tiles you walk through.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Walkies records a voice note when you suggest a feature, so you can say it rather than type it.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "Walkies uses motion to tell walking from cycling or driving, and to count your steps.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Walkies writes out your voice note as you speak when you suggest a feature.";
@@ -346,7 +346,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mikecann.walkies;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -366,7 +366,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 4DTAZSZL6B;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mikecann.walkiesTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -386,7 +386,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 4DTAZSZL6B;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.mikecann.walkiesTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;

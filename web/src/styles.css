@@ -1,0 +1,232 @@
+/* Walkies' website: the app's cream die-cut sticker look (Walkies/Views/Theme.swift). */
+:root {
+  --cream: #fbf4e6;
+  --sand: #eadbc0;
+  --ink: #3b312b;
+  --ink-soft: #6b5d52;
+  --burnt: #c9573b;
+  --orange: #ff782e;
+  --teal: #21a699;
+  --badge-teal: #4a9494;
+  --sky: #cfe6f7;
+  --radius: 22px;
+  --shadow: 0 3px 16px rgba(0, 0, 0, 0.14);
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background-color: var(--cream);
+  /* Faint hex tiles, like the map's. */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='84' height='145.5' viewBox='0 0 84 145.5'%3E%3Cg fill='none' stroke='%23eadbc0' stroke-width='1.5'%3E%3Cpath d='M42 0 84 24.25v48.5L42 97 0 72.75v-48.5z'/%3E%3Cpath d='M42 97v48.5'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: 84px 145.5px;
+  font: 17px/1.6 ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+}
+
+a { color: var(--burnt); text-underline-offset: 0.15em; }
+a:hover { color: var(--orange); }
+img { max-width: 100%; height: auto; }
+
+h1, h2, h3 { line-height: 1.15; letter-spacing: -0.01em; }
+h1 { font-size: clamp(2.2rem, 7vw, 3.6rem); font-weight: 900; margin: 0 0 0.4em; }
+h2 { font-size: clamp(1.6rem, 4.5vw, 2.2rem); font-weight: 850; margin: 0 0 0.6em; }
+h3 { font-size: 1.2rem; font-weight: 800; margin: 0.4em 0 0.3em; }
+
+/* A cream card with a white die-cut edge and a soft shadow, like a sticker. */
+.card {
+  background: var(--cream);
+  border: 3px solid #fff;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  max-width: 1120px;
+  width: 100%;
+  margin: 0 auto;
+  padding: max(1rem, env(safe-area-inset-top)) 1.25rem 0.5rem;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 900;
+  font-size: 1.35rem;
+}
+.brand img { border-radius: 11px; border: 2px solid #fff; box-shadow: var(--shadow); }
+.top nav { display: flex; gap: 1.1rem; }
+.top nav a { color: var(--ink); font-weight: 700; text-decoration: none; }
+.top nav a:hover, .top nav a[aria-current="page"] { color: var(--burnt); }
+
+main {
+  flex: 1;
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 1.25rem 3rem;
+}
+
+/* Home */
+
+.hero {
+  display: grid;
+  gap: 2rem;
+  align-items: center;
+  padding: 2rem 0 3rem;
+}
+.lede { font-size: 1.15rem; color: var(--ink-soft); max-width: 34rem; }
+.small { font-size: 0.9rem; color: var(--ink-soft); margin-top: 0.8rem; }
+.hero-art img {
+  display: block;
+  width: min(100%, 460px);
+  margin: 0 auto;
+  border-radius: 34px;
+  border: 4px solid #fff;
+  box-shadow: 0 10px 40px rgba(59, 49, 43, 0.22);
+  transform: rotate(2deg);
+}
+
+/* The App Store badge, drawn here rather than hotlinked, or Apple's own when it's in img/. */
+.appstore {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+  padding: 0.55rem 1.2rem 0.6rem 1rem;
+  border-radius: 14px;
+  background: #000;
+  color: #fff;
+  text-decoration: none;
+  line-height: 1.05;
+}
+.appstore:hover { color: #fff; background: #222; }
+.appstore svg { width: 28px; height: 28px; fill: currentColor; }
+.appstore small { display: block; font-size: 0.72rem; font-weight: 600; }
+.appstore b { display: block; font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; }
+.appstore.soon { background: var(--ink); cursor: default; }
+.appstore-official img { height: 54px; width: auto; display: block; margin-top: 0.6rem; }
+
+.steps { padding: 1rem 0 2rem; }
+.cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1.25rem;
+}
+.cards .card { padding: 1.4rem 1.4rem 1.2rem; }
+.cards .card img { width: 72px; height: 72px; }
+.cards p { margin: 0; color: var(--ink-soft); }
+
+.screens { padding: 2rem 0; }
+.screen-row {
+  list-style: none;
+  margin: 0 -1.25rem;
+  padding: 0.5rem 1.25rem 1.5rem;
+  display: flex;
+  gap: 1.25rem;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+}
+.screen-row li { flex: 0 0 auto; scroll-snap-align: center; text-align: center; }
+.screen-row img {
+  width: 230px;
+  border-radius: 30px;
+  border: 4px solid #fff;
+  box-shadow: var(--shadow);
+  display: block;
+}
+.screen-row span { display: block; margin-top: 0.5rem; font-weight: 700; font-size: 0.95rem; }
+
+.more {
+  display: grid;
+  gap: 1.5rem;
+  align-items: center;
+  padding: 2rem 0;
+}
+.more ul { padding-left: 1.2rem; margin: 0; }
+.more li { margin-bottom: 0.6rem; }
+.more-art { display: flex; justify-content: center; gap: 1rem; }
+.more-art img { width: 92px; filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.15)); }
+.more-art img:nth-child(2) { transform: translateY(-16px) rotate(-6deg); }
+
+.stickers { padding: 2rem 0; }
+.sticker-row {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+.sticker-row li { text-align: center; font-weight: 700; font-size: 0.95rem; }
+.sticker-row img { width: 140px; display: block; margin: 0 auto 0.3rem; filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.16)); }
+.sticker-row li:nth-child(odd) img { transform: rotate(-4deg); }
+.sticker-row li:nth-child(even) img { transform: rotate(3deg); }
+
+.story { padding: 1.6rem 1.6rem 1.2rem; margin: 2rem 0 0; max-width: 44rem; }
+.story p { color: var(--ink-soft); }
+.sign { font-weight: 800; color: var(--ink) !important; }
+
+/* Privacy and help */
+
+.prose { padding: 1.6rem 1.4rem; margin: 1.5rem auto 0; max-width: 46rem; }
+.prose h2 { font-size: 1.45rem; margin-top: 1.6em; }
+.prose h3 { margin-top: 1.4em; }
+.prose li { margin-bottom: 0.55rem; }
+.prose ul { padding-left: 1.2rem; }
+.eyebrow {
+  display: inline-block;
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #fff;
+  background: var(--badge-teal);
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  margin-bottom: 0.6rem;
+}
+.meta { color: var(--ink-soft); font-size: 0.9rem; margin-top: -0.6rem; }
+
+.bottom {
+  max-width: 1120px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem max(2rem, env(safe-area-inset-bottom));
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+  border-top: 2px dashed var(--sand);
+}
+.bottom p { margin: 0.3rem 0; }
+
+@media (min-width: 760px) {
+  body { font-size: 18px; }
+  .hero { grid-template-columns: 1.1fr 0.9fr; padding: 3.5rem 0 4rem; gap: 3rem; }
+  .cards { grid-template-columns: repeat(3, 1fr); }
+  .more { grid-template-columns: 1.4fr 0.6fr; }
+  .more-art { flex-direction: column; align-items: center; }
+  .more-art img:nth-child(2) { transform: translateX(-30px) rotate(-6deg); }
+  .sticker-row { grid-template-columns: repeat(6, 1fr); }
+  .screen-row { justify-content: center; }
+  .prose { padding: 2.4rem 2.6rem; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .hero-art img { transition: transform 0.4s ease; }
+  .hero-art img:hover { transform: rotate(0deg) scale(1.02); }
+}

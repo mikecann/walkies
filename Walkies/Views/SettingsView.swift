@@ -8,6 +8,10 @@ struct SettingsView: View {
     @State private var confirmingSignOut = false
     @State private var cantSignOut: String?
     @State private var notUploaded: Int?
+    @State private var confirmingDelete = false
+    @State private var reallyDeleting = false
+    @State private var deleting = false
+    @State private var deleteFailed: String?
 
     private var syncText: String {
         switch sync.status {
@@ -38,6 +42,30 @@ struct SettingsView: View {
         }
     }
 
+    private func deleteAccount() {
+        if model.activeWalk != nil {
+            cantSignOut = "Finish your walk first."
+        } else {
+            confirmingDelete = true
+        }
+    }
+
+    /// The account goes first, so a phone that's offline keeps everything and can try
+    /// again. Then this phone's copy, the same way signing out clears it.
+    private func deleteAccountNow() {
+        deleting = true
+        Task {
+            do {
+                try await account.deleteAccount()
+                await sync.wipe()
+                await account.signOut()
+            } catch {
+                deleteFailed = error.localizedDescription
+            }
+            deleting = false
+        }
+    }
+
     var body: some View {
         @Bindable var model = model
 
@@ -56,6 +84,19 @@ struct SettingsView: View {
                     Button("Sign out", role: .destructive, action: signOut)
                 } header: {
                     Text("Account")
+                }
+
+                Section {
+                    Button(role: .destructive, action: deleteAccount) {
+                        if deleting {
+                            HStack { Text("Deleting…"); Spacer(); ProgressView() }
+                        } else {
+                            Text("Delete account")
+                        }
+                    }
+                    .disabled(deleting)
+                } footer: {
+                    Text("Deletes your account and everything in it: walks, places, progress, secrets, team memberships and feature requests.")
                 }
 
                 Section {
@@ -96,12 +137,38 @@ struct SettingsView: View {
                     } label: {
                         Label("Suggest a feature", systemImage: "lightbulb")
                     }
+                    Link(destination: Backend.website.appending(path: "support")) {
+                        Label("Help", systemImage: "questionmark.circle")
+                    }
+                    Link(destination: Backend.website.appending(path: "privacy")) {
+                        Label("Privacy", systemImage: "hand.raised")
+                    }
+                } footer: {
+                    // OpenStreetMap's licence asks for credit wherever its data is shown.
+                    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+                    Text("Walkies \(version). Suburb outlines and streets © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright).")
                 }
             }
             .confirmationDialog("Sign out of Walkies?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
                 Button("Sign out", role: .destructive, action: signOutNow)
             } message: {
                 Text("This clears Walkies off this phone. Everything's saved in your account and comes back when you sign in again.")
+            }
+            .confirmationDialog("Delete your Walkies account?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+                Button("Delete account", role: .destructive) { reallyDeleting = true }
+            } message: {
+                Text("Your walks, places, uncovered tiles, shells, secrets and feature requests are deleted from your account and this phone, and you leave any teams. This can't be undone.")
+            }
+            .alert("Are you sure?", isPresented: $reallyDeleting) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete everything", role: .destructive, action: deleteAccountNow)
+            } message: {
+                Text("Everything you've uncovered goes for good. You can sign in again later, but you'll start from scratch.")
+            }
+            .alert("Couldn't delete your account", isPresented: Binding(get: { deleteFailed != nil }, set: { if !$0 { deleteFailed = nil } })) {
+                Button("OK") {}
+            } message: {
+                Text(deleteFailed ?? "")
             }
             .alert("Not yet", isPresented: Binding(get: { cantSignOut != nil }, set: { if !$0 { cantSignOut = nil } })) {
                 Button("OK") {}
