@@ -1,6 +1,6 @@
 # Secrets for new suburbs: what the apps get
 
-The server researches and writes secrets for a suburb once someone has added it and walked in it (`convex/lore.ts`). This is what the iPhone and Android apps build against to download them. The apps don't use any of it yet.
+The server researches and writes secrets for a suburb once someone has added it and walked in it (`convex/lore.ts`). This is what the iPhone and Android apps download them with (`Walkies/Model/ServerLore.swift`, `ServerLore.kt`, and `updateLore` in each `AppModel`). The apps keep their own copy of `bundledOsmIds` in `Walkies/Lore/bundled-places.json`, so bundled places never ask; `convex/lore.test.ts` checks the two match.
 
 ## `lore:forPlace`
 
@@ -50,6 +50,18 @@ Each entry is the same JSON as a `LoreEntry` in `Walkies/Lore/*.json` (`Walkies/
 - `suburb` is the place's OpenStreetMap name. Assign server entries to a city by `City.osmId`, not by matching this.
 - `photos` is never set.
 - `sticker` is what the art shows. The art itself is at `stickerUrl`: a 512 × 512 PNG on a transparent background, the same as the bundled `sticker-<id>` assets. It's `null` if the drawing failed, so show a plain placeholder sticker.
+
+## Mike's review in the app
+
+Public, but only for Chef's admin (the `admin` role in the feedback component, the same one `chef:amAdmin` checks). The iPhone shows them in Settings under "Secrets waiting for you".
+
+| Function | What it does |
+|---|---|
+| `lore:adminPending` (query) | The secrets waiting for review, the same as `lore:pending` (which now says each one's `suburb` too). `null` for anyone else, so the app hides the list. |
+| `lore:adminApprove({ entryId })` (mutation) | `lore:approve`. Throws for anyone else. |
+| `lore:adminHide({ entryId })` (mutation) | `lore:hide`. Throws for anyone else. |
+
+Approving or hiding one bumps the place's `version`, so phones pick the change up the next time they ask.
 
 ## Running it by hand
 

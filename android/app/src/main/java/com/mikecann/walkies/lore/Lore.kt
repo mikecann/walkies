@@ -9,11 +9,15 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
+import kotlinx.serialization.json.put
 import java.io.File
 import java.util.UUID
 
@@ -54,10 +58,38 @@ data class LoreEntry(
         val source: String,
     )
 
+    /** The same JSON as the iPhone's Codable LoreEntry, for server-lore.json. */
+    fun toJson(): JsonObject = buildJsonObject {
+        put("id", id)
+        put("title", title)
+        put("body", body)
+        put("category", category)
+        place?.let { p ->
+            put("place", buildJsonObject {
+                put("name", p.name)
+                put("lat", p.lat)
+                put("lon", p.lon)
+            })
+        }
+        put("sticker", sticker)
+        put("sources", JsonArray(sources.map(::JsonPrimitive)))
+        suburb?.let { put("suburb", it) }
+        photos?.let { list ->
+            put("photos", JsonArray(list.map { photo ->
+                buildJsonObject {
+                    put("asset", photo.asset)
+                    put("caption", photo.caption)
+                    put("credit", photo.credit)
+                    put("source", photo.source)
+                }
+            }))
+        }
+    }
+
     companion object {
         fun parse(json: String): List<LoreEntry> = Json.parseToJsonElement(json).jsonArray.map { from(it.jsonObject) }
 
-        private fun from(o: JsonObject): LoreEntry {
+        fun from(o: JsonObject): LoreEntry {
             fun string(key: String) = o[key]?.takeIf { it !is JsonNull }?.jsonPrimitive?.contentOrNull
             val place = o["place"]?.takeIf { it !is JsonNull }?.jsonObject?.let { p ->
                 Place(
@@ -87,8 +119,10 @@ data class LoreEntry(
 }
 
 /**
- * The lore that ships with the app: the Busselton area so far. LoreLibrary in Lore.swift.
- * On the phone the app points [reader] at its assets before anything reads [all];
+ * The lore the app knows about: what ships with it (the Busselton area so far), and
+ * what the server has written for your other places ([ServerLore]), which the app
+ * hands over with [useServer]. LoreLibrary in Lore.swift.
+ * On the phone the app points [reader] at its assets before anything reads [bundled];
  * on the JVM in tests it reads the iPhone's Walkies/Lore folder directly.
  */
 object LoreLibrary {
@@ -100,26 +134,79 @@ object LoreLibrary {
         folder?.let { File(it, "$name.json").takeIf(File::exists)?.readText() }
     }
 
-    val all: List<LoreEntry> by lazy {
+    /** The secrets that ship with the app. */
+    val bundled: List<LoreEntry> by lazy {
         files.flatMap { name -> runCatching { reader(name)?.let(LoreEntry::parse) }.getOrNull().orEmpty() }
+    }
+
+    /**
+     * The OpenStreetMap relations the bundled secrets cover, from bundled-places.json
+     * (the server's `bundledOsmIds`, which a server test keeps it matching). These
+     * places never ask the server for secrets.
+     */
+    val bundledOsmIds: Set<Long> by lazy {
+        runCatching {
+            reader("bundled-places")?.let { json ->
+                Json.parseToJsonElement(json).jsonObject["places"]!!.jsonArray
+                    .mapTo(HashSet()) { it.jsonObject["osmId"]!!.jsonPrimitive.long }
+            }
+        }.getOrNull().orEmpty()
     }
 
     private val byId: Map<String, LoreEntry> by lazy {
         val out = LinkedHashMap<String, LoreEntry>()
-        for (entry in all) out.putIfAbsent(entry.id, entry)
+        for (entry in bundled) out.putIfAbsent(entry.id, entry)
         out
     }
 
-    fun entry(id: String): LoreEntry? = byId[id]
+    /** The server's secrets, as last handed over. Swapped whole, as the views and the notifier read it from other threads. */
+    private class Server(
+        val all: List<LoreEntry> = emptyList(),
+        val byId: Map<String, LoreEntry> = emptyMap(),
+        val stickers: File? = null,
+        val revision: Int = 0,
+    )
+
+    @Volatile
+    private var server = Server()
+
+    /** Every secret: the bundled ones, then the server's. */
+    val all: List<LoreEntry> get() = bundled + server.all
+
+    fun entry(id: String): LoreEntry? = byId[id] ?: server.byId[id]
+
+    fun bundledEntry(id: String): LoreEntry? = byId[id]
+
+    /** Goes up whenever the server's secrets or their art change, so cached images go too. */
+    val serverRevision: Int get() = server.revision
+
+    /** Takes the server's secrets for the views and notifications, with the folder their sticker art is saved in. */
+    @Synchronized
+    fun useServer(lore: ServerLore, stickers: File) {
+        val entries = lore.all.filter { it.id !in byId }
+        server = Server(entries, entries.associateBy { it.id }, stickers, server.revision + 1)
+    }
+
+    /** A server secret's sticker art, if it's been downloaded. Bundled ones are assets. */
+    fun serverSticker(id: String): File? {
+        val folder = server.stickers ?: return null
+        return ServerLore.stickerFile(id, folder).takeIf(File::exists)
+    }
 
     /**
      * Which secrets each place gets. A story about a spot belongs to the place that
      * spot is in, so it's found where it happened, and waits there until you add
      * that place. One about a whole suburb goes to that suburb, scattered over its
      * streets. The few from the first batch that aren't about anywhere in particular
-     * go to the first Busselton-area place you added.
+     * go to the first Busselton-area place you added. The server's secrets ([server],
+     * by OpenStreetMap relation) go to the place with that relation, pins and all.
      */
-    fun assign(entries: List<LoreEntry>, cities: List<City>, contains: (City, Coordinate) -> Boolean): Map<UUID, List<LoreEntry>> {
+    fun assign(
+        entries: List<LoreEntry>,
+        cities: List<City>,
+        server: Map<Long, List<LoreEntry>> = emptyMap(),
+        contains: (City, Coordinate) -> Boolean,
+    ): Map<UUID, List<LoreEntry>> {
         val home = cities.firstOrNull { "${it.name}, ${it.detail}".contains("Busselton") }
         val out = LinkedHashMap<UUID, MutableList<LoreEntry>>()
         for (entry in entries) {
@@ -131,6 +218,12 @@ object LoreLibrary {
                 else -> home
             } ?: continue
             out.getOrPut(owner.id) { ArrayList() }.add(entry)
+        }
+        // By relation, not by name: two suburbs can share a name, and the server's
+        // pins have already been moved inside the one it researched.
+        for ((osmId, list) in server.toSortedMap()) {
+            val owner = cities.firstOrNull { it.osmId == osmId } ?: continue
+            out.getOrPut(owner.id) { ArrayList() }.addAll(list)
         }
         return out
     }

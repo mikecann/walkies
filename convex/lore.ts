@@ -6,7 +6,7 @@ import { ConvexError, v } from "convex/values";
 import { restart, vResultValidator, vWorkflowId, WorkflowManager } from "@convex-dev/workflow";
 import { components, internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
-import { env, internalAction, internalMutation, internalQuery, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { env, internalAction, internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { bundledOsmIds, caps, failedRetry, maxAttempts, maxRunning, minWalkedTiles, suburbsPerUserPerDay } from "./loreConfig";
 import { bumpVersion, dayKey, overBudget, placeRow, spentBetween } from "./loreRun";
 import { vLoreReview } from "./schema";
@@ -325,7 +325,7 @@ export const credits = internalAction({
 // wait as "pending" until Mike approves them; anything can be hidden later.
 
 const vReviewEntry = v.object({
-  entryId: v.string(), osmId: v.number(), title: v.string(), body: v.string(), category: v.string(),
+  entryId: v.string(), osmId: v.number(), suburb: v.string(), title: v.string(), body: v.string(), category: v.string(),
   place: v.optional(vPlace), sources: v.array(v.string()), sensitive: v.array(v.string()),
   review: vLoreReview, droppedBy: v.optional(v.string()), checkNotes: v.array(v.string()),
   claims: v.array(v.object({ text: v.string(), url: v.string(), quote: v.string(), found: v.optional(v.boolean()) })),
@@ -334,7 +334,7 @@ const vReviewEntry = v.object({
 
 async function forReview(ctx: QueryCtx, entry: Doc<"loreEntries">) {
   return {
-    entryId: entry.entryId, osmId: entry.osmId, title: entry.title, body: entry.body, category: entry.category,
+    entryId: entry.entryId, osmId: entry.osmId, suburb: entry.suburb, title: entry.title, body: entry.body, category: entry.category,
     ...(entry.place ? { place: entry.place } : {}), sources: entry.sources, sensitive: entry.sensitive,
     review: entry.review, ...(entry.droppedBy ? { droppedBy: entry.droppedBy } : {}), checkNotes: entry.checkNotes,
     claims: entry.claims.map(({ text, url, quote, found }) => ({ text, url, quote, ...(found === undefined ? {} : { found }) })),
@@ -382,6 +382,51 @@ export const approve = internalMutation({
 export const hide = internalMutation({
   args: { entryId: v.string() }, returns: v.null(),
   handler: async (ctx, { entryId }) => await setReview(ctx, entryId, "hidden"),
+});
+
+// The same review from the iPhone's Settings, for Chef's admin (Mike) only.
+
+/** Whoever's signed in is Chef's admin, by the same role its own admin panel checks
+ * (chef.ts, `amAdmin`). Asks the component directly, so this file (which sync.ts
+ * loads) doesn't pull in the rest of the package. */
+async function isAdmin(ctx: QueryCtx) {
+  const userId = await currentUserId(ctx);
+  if (userId === null) return false;
+  const user = await ctx.runQuery(components.feedback.users.get, { userId });
+  return user?.role === "admin";
+}
+
+async function requireAdmin(ctx: QueryCtx) {
+  if (!await isAdmin(ctx)) throw new ConvexError("Only the admin can review secrets");
+}
+
+/** Secrets waiting for the admin, in the order they were written. Null for anyone
+ * else, so the app knows not to show the list at all. */
+export const adminPending = query({
+  args: {}, returns: v.union(v.null(), v.array(vReviewEntry)),
+  handler: async (ctx) => {
+    if (!await isAdmin(ctx)) return null;
+    const rows = await ctx.db.query("loreEntries").withIndex("by_review", (q) => q.eq("review", "pending")).collect();
+    return await Promise.all(rows.map((entry) => forReview(ctx, entry)));
+  },
+});
+
+/** lore:approve, for the admin from the app. */
+export const adminApprove = mutation({
+  args: { entryId: v.string() }, returns: v.null(),
+  handler: async (ctx, { entryId }) => {
+    await requireAdmin(ctx);
+    return await setReview(ctx, entryId, "approved");
+  },
+});
+
+/** lore:hide, for the admin from the app. */
+export const adminHide = mutation({
+  args: { entryId: v.string() }, returns: v.null(),
+  handler: async (ctx, { entryId }) => {
+    await requireAdmin(ctx);
+    return await setReview(ctx, entryId, "hidden");
+  },
 });
 
 /** Every researched place with its spend, and the totals the caps look at.

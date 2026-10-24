@@ -136,6 +136,8 @@ final class SyncEngine {
             status = .idle
             // After the pull, so any place another phone already updated arrives first.
             model.refreshStreets()
+            // A walk that's just gone up can start research for its place.
+            model.refreshLore()
         } catch is CancellationError {
             status = .idle
         } catch {

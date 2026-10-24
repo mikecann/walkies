@@ -109,7 +109,7 @@ struct LoreTests {
     }
 
     @Test func shippedLoreLoadsWithUniqueIdsAndArt() {
-        let all = LoreLibrary.all
+        let all = LoreLibrary.bundled
         #expect(all.count > 100)
         #expect(Set(all.map(\.id)).count == all.count)
         for entry in all {

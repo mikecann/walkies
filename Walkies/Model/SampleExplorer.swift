@@ -44,7 +44,7 @@ nonisolated enum SampleExplorer {
     /// A stroll, not a hike: about 1.35 m/s.
     static let pace = 1.35
 
-    static func make(_ trips: [Trip], lore: [LoreEntry] = LoreLibrary.all, now: Date = .now, seed: UInt64 = 7) -> Sample {
+    static func make(_ trips: [Trip], lore: [LoreEntry] = LoreLibrary.bundled, now: Date = .now, seed: UInt64 = 7) -> Sample {
         var rng = Random(seed: seed)
         var cities: [City] = []
         var walks: [Walk] = []

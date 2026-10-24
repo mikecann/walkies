@@ -222,6 +222,9 @@ final class AppModel {
 
         if servicesEnabled { fetchMissingRoads() }
         foundStickers = worldGridResetPending ? [:] : store.loadStickers()
+        // Before placing stickers, so the server's secrets are still wanted.
+        serverLore = store.loadServerLore() ?? ServerLore()
+        LoreLibrary.useServer(serverLore, stickers: store.serverStickers)
         placeStickers()
         refreshNeighbours()
         rebuildCountingTiles()
@@ -991,8 +994,23 @@ final class AppModel {
     var stickersHere: [(entry: LoreEntry, hex: Hex)] {
         guard let placed = selectedCity?.stickers else { return [] }
         return placed
-            .compactMap { id, hex in LoreLibrary.entry(id: id).map { ($0, hex) } }
+            .compactMap { id, hex in loreEntry(id).map { ($0, hex) } }
             .sorted { $0.entry.title < $1.entry.title }
+    }
+
+    /// A pin another phone put down for one of the server's secrets, before this phone
+    /// has heard from the server about that place. It stays, so the secret keeps the
+    /// same tile on every phone.
+    private func waitingForServer(_ id: String, in city: City) -> Bool {
+        guard let osmId = city.osmId else { return false }
+        return id.hasPrefix("osm\(osmId)-") && !serverLore.hasAnswered(osmId)
+    }
+
+    /// A secret by id, bundled or from the server. This model's own server secrets,
+    /// rather than what LoreLibrary was last handed, so tests' models side by side
+    /// don't mix theirs up.
+    private func loreEntry(_ id: String) -> LoreEntry? {
+        LoreLibrary.bundledEntry(id: id) ?? serverLore.entry(id: id)
     }
 
     /// Hides each place's secrets under its tiles. A secret that now belongs to a
@@ -1000,14 +1018,14 @@ final class AppModel {
     /// already found it, when it stays where you found it. Secrets under tiles you've
     /// already walked are yours straight away.
     private func placeStickers() {
-        let assigned = LoreLibrary.assign(to: cities) { city, point in
+        let assigned = LoreLibrary.assign(server: serverLore.byPlace, to: cities) { city, point in
             shape(for: city).contains(city.grid.projection.project(point))
         }
         var changed = false
         for i in cities.indices {
             let wanted = Set((assigned[cities[i].id] ?? []).map(\.id))
             guard var placed = cities[i].stickers else { continue }
-            let leaving = placed.keys.filter { !wanted.contains($0) && foundStickers[$0] == nil }
+            let leaving = placed.keys.filter { !wanted.contains($0) && foundStickers[$0] == nil && !waitingForServer($0, in: cities[i]) }
             guard !leaving.isEmpty else { continue }
             for id in leaving { placed[id] = nil }
             cities[i].stickers = placed
@@ -1036,7 +1054,7 @@ final class AppModel {
         guard let placed = city.stickers else { return 0 }
         let ids = placed.filter { hexes.contains($0.value) && foundStickers[$0.key] == nil }.map(\.key)
         guard !ids.isEmpty else { return 0 }
-        let entries = ids.sorted().compactMap(LoreLibrary.entry(id:))
+        let entries = ids.sorted().compactMap(loreEntry)
         for entry in entries { foundStickers[entry.id] = notify ? .now : Progression.exploredSecretDate }
         store.save(stickers: foundStickers)
         if popUp { stickerQueue.append(contentsOf: entries) }
@@ -1044,6 +1062,121 @@ final class AppModel {
         refreshProgressPicks()
         requestSync?()
         return entries.count
+    }
+
+    // MARK: Secrets from the server
+
+    /// What the server's said about your places that have no bundled secrets, saved in
+    /// server-lore.json (ServerLore, shared/lore-api.md).
+    private(set) var serverLore = ServerLore()
+    /// Secrets that have just come from the server, or a place that's turned out
+    /// quiet, for a note on the map.
+    var loreNotice: LoreNotice?
+
+    struct LoreNotice: Equatable {
+        /// The place they're in.
+        var id: UUID
+        var name: String
+        /// How many arrived. None means there wasn't much to find there.
+        var count: Int
+    }
+
+    @ObservationIgnored private var refreshingLore = false
+    /// Places to ask about straight after the ask that's going.
+    @ObservationIgnored private var loreAgain: Set<Int> = []
+    /// Tests stand in for lore:forPlace and the sticker download.
+    @ObservationIgnored var askForLore: ((Int) async throws -> ServerLore.Answer)?
+    @ObservationIgnored var downloadSticker: ((URL) async throws -> Data)?
+
+    /// One of your places the server's still looking for secrets in, the selected one
+    /// first, for a line on the map.
+    var lookingForSecrets: City? {
+        let looking = cities.filter { city in city.osmId.flatMap(serverLore.place)?.status.isLooking == true }
+        return looking.first { $0.id == selectedCityID } ?? looking.first
+    }
+
+    /// Asks the server about your places without bundled secrets that are due a look
+    /// (ServerLore.due), and `now` straight away. Called when the app opens, after each
+    /// sync and every couple of minutes while it's open. With none of those places, or
+    /// none due, it makes no calls at all.
+    func refreshLore(now osmId: Int? = nil) {
+        Task { await updateLore(now: osmId) }
+    }
+
+    func updateLore(now forced: Int? = nil) async {
+        guard !locked, !worldGridResetPending else { return }
+        if let forced { loreAgain.insert(forced) }
+        guard !refreshingLore else { return }
+        // On a copy, so the map isn't told of a change every time when there's none.
+        var trimmed = serverLore
+        let unused = trimmed.keepOnly(Set(cities.compactMap(\.osmId)), found: foundStickers)
+        if trimmed != serverLore { serverLore = trimmed }
+        if !unused.isEmpty {
+            for id in unused { store.deleteServerSticker(for: id) }
+            loreChanged(arrived: [])
+        }
+        let askable = serverLore.askable(cities)
+        var due = serverLore.due(askable, now: .now)
+        due += loreAgain.filter { askable.contains($0) && !due.contains($0) }.sorted()
+        loreAgain = []
+        guard !due.isEmpty else { return }
+        refreshingLore = true
+        defer { refreshingLore = false }
+        let generation = dataGeneration
+        let ask: (Int) async throws -> ServerLore.Answer
+        if let askForLore {
+            ask = askForLore
+        } else if servicesEnabled, let client = await makePlaceClient?() {
+            ask = { osmId in try await client.query("lore:forPlace", ["osmId": osmId]) }
+        } else {
+            return
+        }
+        // Storage URLs need no sign-in.
+        let download = downloadSticker ?? { url in try await ConvexClient().download(url) }
+        var arrived: [(osmId: Int, change: ServerLore.Change)] = []
+        var changed = false
+        for osmId in due {
+            guard generation == dataGeneration else { return }
+            let answer: ServerLore.Answer
+            do {
+                answer = try await ask(osmId)
+            } catch {
+                guard generation == dataGeneration else { return }
+                Self.log.info("Couldn't ask about secrets for \(osmId): \(error)")
+                serverLore.noteAsked(osmId, at: .now)
+                continue
+            }
+            guard generation == dataGeneration else { return }
+            let version = serverLore.place(osmId)?.version
+            let change = serverLore.take(answer, for: osmId, at: .now, found: foundStickers)
+            if serverLore.place(osmId)?.version != version { changed = true }
+            for (id, url) in change.stickers.sorted(by: { $0.key < $1.key }) {
+                // One that won't download is tried again on the next ask.
+                guard let png = try? await download(url), ServerLore.isPNG(png) else { continue }
+                guard generation == dataGeneration else { return }
+                store.save(serverSticker: png, for: id)
+                serverLore.savedStickers[id] = url
+                changed = true
+            }
+            if !change.arrived.isEmpty || change.quiet { arrived.append((osmId, change)) }
+        }
+        store.save(serverLore: serverLore)
+        // Most asks just say it's the same as before, and change nothing on the map.
+        if changed || !arrived.isEmpty { loreChanged(arrived: arrived) }
+        if !loreAgain.isEmpty { refreshLore() }
+    }
+
+    /// The server's secrets have changed: hand them to the views, hide the new ones
+    /// under their place's tiles (leaving every sticker already placed where it is, and
+    /// dropping any taken down that you hadn't found), and say what's arrived.
+    private func loreChanged(arrived: [(osmId: Int, change: ServerLore.Change)]) {
+        LoreLibrary.useServer(serverLore, stickers: store.serverStickers)
+        placeStickers()
+        for (osmId, change) in arrived {
+            guard let city = cities.first(where: { $0.osmId == osmId }) else { continue }
+            loreNotice = LoreNotice(id: city.id, name: city.name, count: change.arrived.count)
+            break
+        }
     }
 
     private func authorizationChanged() {
@@ -1802,6 +1935,10 @@ final class AppModel {
         autoAddAgain = false
         findingFirstPlace = false
         addedPlaceNotice = nil
+        serverLore = ServerLore()
+        loreNotice = nil
+        loreAgain = []
+        LoreLibrary.useServer(serverLore, stickers: store.serverStickers)
         tilesRevision += 1
         clouds = nil
         store.wipe()

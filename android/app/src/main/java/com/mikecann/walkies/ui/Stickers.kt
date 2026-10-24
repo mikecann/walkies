@@ -1,6 +1,7 @@
 package com.mikecann.walkies.ui
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.graphics.Paint
 import android.util.LruCache
 import androidx.activity.compose.BackHandler
@@ -60,6 +61,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
@@ -81,6 +83,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.mikecann.walkies.lore.LoreEntry
+import com.mikecann.walkies.lore.LoreLibrary
 import com.mikecann.walkies.model.SwiftDate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -110,19 +113,32 @@ class StickerStyle(category: String) {
     }
 }
 
-/** Sticker art and photos, kept in memory while there's room. Small ones load at half size. */
+/**
+ * Sticker art and photos, kept in memory while there's room. Small ones load at half
+ * size. A server secret's sticker is the PNG it downloaded (ServerLore), kept by
+ * [LoreLibrary.serverRevision] so art that's been drawn again doesn't show the old copy.
+ */
 object StickerImages {
     private val cache = object : LruCache<String, ImageBitmap>(48 * 1024) {
         override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4 / 1024
     }
 
-    fun cached(name: String, sample: Int): ImageBitmap? = cache.get("$name@$sample")
+    private fun key(name: String, sample: Int) = "$name@$sample#${LoreLibrary.serverRevision}"
+
+    fun cached(name: String, sample: Int): ImageBitmap? = cache.get(key(name, sample))
 
     fun load(context: Context, name: String, sample: Int): ImageBitmap? {
         cached(name, sample)?.let { return it }
-        val image = loadAssetImage(context, name, sample) ?: return null
-        cache.put("$name@$sample", image)
+        val image = loadAssetImage(context, name, sample) ?: serverSticker(name, sample) ?: return null
+        cache.put(key(name, sample), image)
         return image
+    }
+
+    private fun serverSticker(name: String, sample: Int): ImageBitmap? {
+        if (!name.startsWith("sticker-")) return null
+        val file = LoreLibrary.serverSticker(name.removePrefix("sticker-")) ?: return null
+        val options = BitmapFactory.Options().apply { inSampleSize = sample }
+        return runCatching { BitmapFactory.decodeFile(file.path, options)?.asImageBitmap() }.getOrNull()
     }
 }
 
@@ -131,7 +147,8 @@ object StickerImages {
 fun rememberAssetImage(name: String, small: Boolean): ImageBitmap? {
     val context = LocalContext.current
     val sample = if (small) 2 else 1
-    val image by produceState(StickerImages.cached(name, sample), name, sample) {
+    // The revision too, so a server sticker that's just downloaded shows.
+    val image by produceState(StickerImages.cached(name, sample), name, sample, LoreLibrary.serverRevision) {
         if (value == null) value = withContext(Dispatchers.IO) { StickerImages.load(context.applicationContext, name, sample) }
     }
     return image

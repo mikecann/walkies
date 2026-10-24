@@ -1,6 +1,7 @@
 package com.mikecann.walkies.store
 
 import com.mikecann.walkies.grid.HexGrid
+import com.mikecann.walkies.lore.ServerLore
 import com.mikecann.walkies.model.Codec
 import com.mikecann.walkies.model.Ledger
 import com.mikecann.walkies.model.SwiftDate
@@ -24,7 +25,8 @@ import java.util.logging.Logger
 /**
  * Plain JSON files, laid out exactly like the iPhone's Store.swift: cities.json with
  * their streets in roads.json, one file per walk in walks/, stickers.json, progress.json,
- * sync.json, owner.json, nearby.json, auto-places.json and data-version.json.
+ * sync.json, owner.json, nearby.json, auto-places.json, server-lore.json with its art
+ * in server-stickers/, and data-version.json.
  */
 class Store(private val root: File) {
     private val citiesFile = File(root, "cities.json")
@@ -37,6 +39,10 @@ class Store(private val root: File) {
     private val ownerFile = File(root, "owner.json")
     private val nearbyFile = File(root, "nearby.json")
     private val autoPlacesFile = File(root, "auto-places.json")
+    private val serverLoreFile = File(root, "server-lore.json")
+
+    /** The server's sticker art, one PNG per secret (ServerLore.stickerFile). */
+    val serverStickers = File(root, "server-stickers")
     private val cityFiles = CityFiles.at(citiesFile, roadsFile)
 
     init {
@@ -106,6 +112,22 @@ class Store(private val root: File) {
     /** What places that add themselves have looked up so far. Null the first time, before there's been anything to look up. */
     fun loadAutoPlaces(): AutoPlaces? = read(autoPlacesFile, AutoPlaces::from)
     fun saveAutoPlaces(auto: AutoPlaces) = write(auto.toJson(), autoPlacesFile)
+
+    /** What the server's said about your places without bundled secrets (ServerLore). */
+    fun loadServerLore(): ServerLore? = read(serverLoreFile, ServerLore::from)
+    fun saveServerLore(lore: ServerLore) = write(lore.toJson(), serverLoreFile)
+
+    fun saveServerSticker(png: ByteArray, id: String) {
+        try {
+            writeAtomically(ServerLore.stickerFile(id, serverStickers), png)
+        } catch (e: Exception) {
+            log.severe("Couldn't save the sticker for $id: $e")
+        }
+    }
+
+    fun deleteServerSticker(id: String) {
+        ServerLore.stickerFile(id, serverStickers).delete()
+    }
 
     /** Deletes everything the app has saved, for signing out. */
     fun wipe() {

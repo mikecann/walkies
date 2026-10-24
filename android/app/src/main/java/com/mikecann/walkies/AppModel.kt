@@ -6,6 +6,7 @@ import com.mikecann.walkies.grid.Hex
 import com.mikecann.walkies.grid.HexGrid
 import com.mikecann.walkies.lore.LoreEntry
 import com.mikecann.walkies.lore.LoreLibrary
+import com.mikecann.walkies.lore.ServerLore
 import com.mikecann.walkies.lore.placeStickers
 import com.mikecann.walkies.model.CoverageTracer
 import com.mikecann.walkies.model.Ledger
@@ -246,6 +247,13 @@ class AppModel(
     var autoPlaces = AutoPlaces()
         private set
 
+    /**
+     * What the server's said about your places that have no bundled secrets, saved in
+     * server-lore.json (ServerLore, shared/lore-api.md). Up here for the same reason.
+     */
+    var serverLore = ServerLore()
+        private set
+
     /** The saved walks' tile counts have been worked out, so rewards can be trusted. */
     var historyReady = false
         private set
@@ -341,6 +349,9 @@ class AppModel(
         val saved = settings.selectedCity
         selectedCityId = cities.firstOrNull { it.id.uuidString == saved }?.id ?: cities.firstOrNull()?.id
         foundStickers = store.loadStickers()
+        // Before placing stickers, so the server's secrets are still wanted.
+        serverLore = store.loadServerLore() ?: ServerLore()
+        LoreLibrary.useServer(serverLore, store.serverStickers)
         placeStickers()
         rebuildCountingTiles()
         // Never trace saved routes while opening the app or handling a location fix.
@@ -842,8 +853,24 @@ class AppModel(
     /** Every sticker hidden in the selected city, found or not. */
     val stickersHere: List<Pair<LoreEntry, Hex>>
         get() = selectedCity?.stickers.orEmpty()
-            .mapNotNull { (id, hex) -> LoreLibrary.entry(id)?.let { it to hex } }
+            .mapNotNull { (id, hex) -> loreEntry(id)?.let { it to hex } }
             .sortedBy { it.first.title }
+
+    /**
+     * A pin another phone put down for one of the server's secrets, before this phone
+     * has heard from the server about that place. It stays, so the secret keeps the
+     * same tile on every phone.
+     */
+    private fun waitingForServer(id: String, city: City): Boolean {
+        val osmId = city.osmId ?: return false
+        return id.startsWith("osm$osmId-") && !serverLore.hasAnswered(osmId)
+    }
+
+    /**
+     * A secret by id, bundled or from the server. This model's own server secrets,
+     * rather than what LoreLibrary was last handed (loreEntry in AppModel.swift).
+     */
+    private fun loreEntry(id: String): LoreEntry? = LoreLibrary.bundledEntry(id) ?: serverLore.entry(id)
 
     /** The first sticker in the queue has been seen; on to the next. */
     fun popSticker() {
@@ -866,7 +893,7 @@ class AppModel(
      * already walked are yours straight away.
      */
     private fun placeStickers() {
-        val assigned = LoreLibrary.assign(LoreLibrary.all, cities) { city, point ->
+        val assigned = LoreLibrary.assign(LoreLibrary.bundled, cities, serverLore.byPlace) { city, point ->
             shape(city).contains(city.grid.projection.project(point))
         }
         var changed = false
@@ -874,7 +901,7 @@ class AppModel(
         for (i in updated.indices) {
             val wanted = assigned[updated[i].id].orEmpty().mapTo(HashSet()) { it.id }
             val placed = updated[i].stickers ?: continue
-            val leaving = placed.keys.filter { it !in wanted && foundStickers[it] == null }
+            val leaving = placed.keys.filter { it !in wanted && foundStickers[it] == null && !waitingForServer(it, updated[i]) }
             if (leaving.isEmpty()) continue
             updated[i] = updated[i].copy(stickers = placed - leaving.toSet(), updatedAt = now())
             changed = true
@@ -908,7 +935,7 @@ class AppModel(
         val placed = city.stickers ?: return 0
         val ids = placed.filter { it.value in hexes && foundStickers[it.key] == null }.keys.sorted()
         if (ids.isEmpty()) return 0
-        val entries = ids.mapNotNull(LoreLibrary::entry)
+        val entries = ids.mapNotNull(::loreEntry)
         val at = if (notify) now() else SwiftDate.distantFuture
         foundStickers = foundStickers + entries.associate { it.id to at }
         store.saveStickers(foundStickers)
@@ -917,6 +944,129 @@ class AppModel(
         refreshProgressPicks()
         requestSync?.invoke()
         return entries.size
+    }
+
+    // Secrets from the server
+
+    /** Secrets that have just come from the server, or a place that's turned out quiet, for a note on the map. */
+    var loreNotice: LoreNotice? = null
+        private set
+
+    /** [count] is how many arrived; none means there wasn't much to find there. */
+    data class LoreNotice(val id: UUID, val name: String, val count: Int)
+
+    private var refreshingLore = false
+    /** Places to ask about straight after the ask that's going. */
+    private val loreAgain = HashSet<Long>()
+    /** Tests stand in for lore:forPlace and the sticker download. */
+    var askForLore: (suspend (Long) -> ServerLore.Answer)? = null
+    var downloadSticker: (suspend (String) -> ByteArray)? = null
+
+    /** One of your places the server's still looking for secrets in, the selected one first, for a line on the map. */
+    val lookingForSecrets: City?
+        get() {
+            val looking = cities.filter { city -> city.osmId?.let { serverLore.place(it)?.status?.isLooking } == true }
+            return looking.firstOrNull { it.id == selectedCityId } ?: looking.firstOrNull()
+        }
+
+    /** The note's been seen or tapped. */
+    fun dismissLoreNotice() {
+        if (loreNotice == null) return
+        loreNotice = null
+        onChange()
+    }
+
+    /**
+     * Asks the server about your places without bundled secrets that are due a look
+     * ([ServerLore.due]), and [now] straight away. Called when the app opens, after
+     * each sync and every couple of minutes while it's open. With none of those places,
+     * or none due, it makes no calls at all.
+     */
+    fun refreshLore(now: Long? = null) {
+        val scope = services ?: return
+        scope.launch { updateLore(now) }
+    }
+
+    suspend fun updateLore(now: Long? = null) {
+        now?.let { loreAgain.add(it) }
+        if (refreshingLore) return
+        val (trimmed, unused) = serverLore.keepingOnly(cities.mapNotNullTo(HashSet()) { it.osmId }, foundStickers)
+        serverLore = trimmed
+        if (unused.isNotEmpty()) {
+            for (id in unused) store.deleteServerSticker(id)
+            loreChanged(emptyList())
+        }
+        val askable = serverLore.askable(cities)
+        val due = serverLore.due(askable, now()) + loreAgain.filter { it in askable }.sorted()
+        loreAgain.clear()
+        if (due.isEmpty()) return
+        refreshingLore = true
+        try {
+            val generation = dataGeneration
+            val client = if (askForLore == null || downloadSticker == null) makePlaceClient?.invoke() ?: return else null
+            val ask: suspend (Long) -> ServerLore.Answer = askForLore ?: { osmId ->
+                ServerLore.Answer.from(client!!.query("lore:forPlace", buildJsonObject { put("osmId", osmId) }))
+            }
+            val download: suspend (String) -> ByteArray = downloadSticker ?: { url -> client!!.download(url) }
+            val arrived = ArrayList<Pair<Long, ServerLore.Change>>()
+            var changed = false
+            for (osmId in due.distinct()) {
+                if (generation != dataGeneration) return
+                val answer = try {
+                    ask(osmId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (generation != dataGeneration) return
+                    log.info("Couldn't ask about secrets for $osmId: $e")
+                    serverLore = serverLore.asked(osmId, now())
+                    continue
+                }
+                if (generation != dataGeneration) return
+                val version = serverLore.place(osmId)?.version
+                val (taken, change) = serverLore.taking(answer, osmId, now(), foundStickers)
+                serverLore = taken
+                if (serverLore.place(osmId)?.version != version) changed = true
+                for ((id, url) in change.stickers.toSortedMap()) {
+                    // One that won't download is tried again on the next ask.
+                    val png = try {
+                        download(url)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        null
+                    }
+                    if (png == null || !ServerLore.isPng(png)) continue
+                    if (generation != dataGeneration) return
+                    store.saveServerSticker(png, id)
+                    serverLore = serverLore.copy(savedStickers = serverLore.savedStickers + (id to url))
+                    changed = true
+                }
+                if (change.arrived.isNotEmpty() || change.quiet) arrived += osmId to change
+            }
+            store.saveServerLore(serverLore)
+            // Most asks just say it's the same as before, and change nothing on the map.
+            if (changed || arrived.isNotEmpty()) loreChanged(arrived)
+            onChange()
+        } finally {
+            refreshingLore = false
+        }
+        if (loreAgain.isNotEmpty()) refreshLore()
+    }
+
+    /**
+     * The server's secrets have changed: hand them to the views, hide the new ones
+     * under their place's tiles (leaving every sticker already placed where it is, and
+     * dropping any taken down that you hadn't found), and say what's arrived.
+     */
+    private fun loreChanged(arrived: List<Pair<Long, ServerLore.Change>>) {
+        LoreLibrary.useServer(serverLore, store.serverStickers)
+        placeStickers()
+        for ((osmId, change) in arrived) {
+            val city = cities.firstOrNull { it.osmId == osmId } ?: continue
+            loreNotice = LoreNotice(city.id, city.name, change.arrived.size)
+            break
+        }
     }
 
     // Places
@@ -1842,6 +1992,10 @@ class AppModel(
         autoAddAgain = false
         findingFirstPlace = false
         addedPlaceNotice = null
+        serverLore = ServerLore()
+        loreNotice = null
+        loreAgain.clear()
+        LoreLibrary.useServer(serverLore, store.serverStickers)
         tilesRevision++
         store.wipe()
         onChange()

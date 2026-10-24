@@ -111,6 +111,14 @@ struct ContentView: View {
                 await sync.sync()
             }
         }
+        .task(id: scenePhase) {
+            // While a place's secrets are being written. Asks nothing unless one's due.
+            guard scenePhase == .active else { return }
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(120)) } catch { return }
+                await model.updateLore()
+            }
+        }
         .sensoryFeedback(.success, trigger: model.revealCount)
         .onChange(of: scenePhase, initial: true) { _, phase in
             model.stepsForeground(phase == .active)
@@ -123,6 +131,7 @@ struct ContentView: View {
                 model.refreshNeighbours()
                 // Catches up on walks that ended with the app closed.
                 model.addPlacesYouveBeen()
+                model.refreshLore()
                 sync.schedule()
             }
         }
@@ -243,8 +252,20 @@ struct MapScreen: View {
                         }
                         .transition(.scale(scale: 0.8, anchor: .topLeading).combined(with: .opacity))
                     }
+                    if let notice = model.loreNotice {
+                        SecretsArrivedNote(notice: notice) {
+                            model.select(notice.id)
+                            withAnimation(.snappy) { model.loreNotice = nil }
+                        }
+                        .transition(.scale(scale: 0.8, anchor: .topLeading).combined(with: .opacity))
+                    } else if let city = model.lookingForSecrets {
+                        LookingForSecretsNote(name: city.name)
+                            .transition(.opacity)
+                    }
                 }
                 .animation(.snappy, value: model.addedPlaceNotice)
+                .animation(.snappy, value: model.loreNotice)
+                .animation(.snappy, value: model.lookingForSecrets?.id)
                 .mapButton("top leading", in: $buttonFrames)
                 Spacer(minLength: 12)
                 // Long-press: a screenshot of the map and a voice note, straight away.
@@ -337,6 +358,13 @@ struct MapScreen: View {
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled else { return }
             withAnimation(.snappy) { model.addedPlaceNotice = nil }
+        }
+        .task(id: "\(model.loreNotice.map { "\($0.id)-\($0.count)" } ?? "")-\(mapInView)") {
+            // The same for secrets that have just arrived.
+            guard model.loreNotice != nil, mapInView else { return }
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            withAnimation(.snappy) { model.loreNotice = nil }
         }
     }
 
@@ -556,6 +584,57 @@ private struct AddedPlaceNote: View {
     var body: some View {
         Button(action: onOpen) {
             Text("Added \(name) to your places")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.ink)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .stickerCard(in: .rect(cornerRadius: 20))
+        }
+        .buttonStyle(PressScale())
+        .accessibilityHint("Shows it on the map")
+    }
+}
+
+/// While the server's writing secrets for one of your places: what's happening, in one line.
+private struct LookingForSecretsNote: View {
+    let name: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image("icon-book").resizable().scaledToFit().frame(width: 24, height: 24)
+            Text("Looking for secrets in \(name)…")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.ink)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 12)
+        .padding(.vertical, 6)
+        .stickerCard(in: .rect(cornerRadius: 20))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Secrets the server's just written for a place, or that it turned out quiet. Tap it
+/// to go and look.
+private struct SecretsArrivedNote: View {
+    let notice: AppModel.LoreNotice
+    let onOpen: () -> Void
+
+    private var text: String {
+        switch notice.count {
+        case 0: "Not many stories in \(notice.name) yet"
+        case 1: "A secret hidden in \(notice.name)"
+        default: "\(notice.count) secrets hidden in \(notice.name)"
+        }
+    }
+
+    var body: some View {
+        Button(action: onOpen) {
+            Text(text)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Color.ink)
                 .lineLimit(2)

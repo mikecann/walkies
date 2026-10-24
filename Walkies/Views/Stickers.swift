@@ -19,13 +19,30 @@ struct StickerStyle {
     }
 }
 
+/// A secret's sticker art: its asset if it shipped with the app, otherwise the PNG
+/// downloaded for one of the server's (ServerLore). Nil while it hasn't got any.
+enum StickerImage {
+    private static let cache = NSCache<NSString, UIImage>()
+
+    static func of(_ entry: LoreEntry) -> UIImage? {
+        if let image = UIImage(named: "sticker-\(entry.id)") { return image }
+        guard let file = LoreLibrary.serverSticker(id: entry.id) else { return nil }
+        // By revision, so art that's been drawn again doesn't show the old copy.
+        let key = "\(entry.id)#\(LoreLibrary.serverRevision)" as NSString
+        if let image = cache.object(forKey: key) { return image }
+        guard let image = UIImage(contentsOfFile: file.path) else { return nil }
+        cache.setObject(image, forKey: key)
+        return image
+    }
+}
+
 /// The sticker itself: its art if it has some, otherwise a badge for its kind.
 struct StickerArt: View {
     let entry: LoreEntry
     var size: CGFloat = 96
 
     var body: some View {
-        if let image = UIImage(named: "sticker-\(entry.id)") {
+        if let image = StickerImage.of(entry) {
             Image(uiImage: image)
                 .resizable()
                 .scaledToFit()
@@ -225,7 +242,7 @@ private struct StickerTile: View {
         VStack(spacing: 8) {
             if found {
                 StickerArt(entry: entry, size: 88)
-            } else if let image = UIImage(named: "sticker-\(entry.id)") {
+            } else if let image = StickerImage.of(entry) {
                 // A grey silhouette, like the empty spaces in a sticker album.
                 Image(uiImage: image)
                     .renderingMode(.template)

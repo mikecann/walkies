@@ -2,11 +2,13 @@
 // @ts-expect-error Convex's tsconfig has no Node types; the tests run in Node, which has zlib.
 import zlibModule from "node:zlib";
 import { convexTest } from "convex-test";
+import feedbackTest from "@convex-dev/feedback/test";
 import workflowTest from "@convex-dev/workflow/test";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { api, internal } from "./_generated/api";
+import { api, components, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { findQuote, placePin, sensitiveWords } from "./loreChecks";
+import { bundledOsmIds } from "./loreConfig";
 import { cutOut, decodePng, encodePng } from "./loreCutout";
 import schema from "./schema";
 
@@ -432,5 +434,54 @@ describe("what the phones get", () => {
     expect(await alice.query(api.lore.forPlace, { osmId: somewhere })).toEqual({ status: "none", version: 0, entries: [] });
     expect(await alice.query(api.lore.forPlace, { osmId: geographe })).toEqual({ status: "bundled", version: 0, entries: [] });
     await expect(t.query(api.lore.forPlace, { osmId: somewhere })).rejects.toThrow(/Not signed in/);
+  });
+});
+
+describe("Mike's review from the app", () => {
+  test("only Chef's admin sees what's waiting, and only they can approve or hide it", async () => {
+    const { t, alice, bob, aliceId, bobId } = await setup();
+    feedbackTest.register(t);
+    await t.run(async (ctx) => {
+      await ctx.runMutation(components.feedback.users.setRole, { userId: aliceId, role: "admin" });
+      await ctx.runMutation(components.feedback.users.setRole, { userId: bobId, role: "member" });
+    });
+    await addPlace(t, { status: "ready", version: 1 });
+    await addEntry(t, { slug: "the-jetty", review: "auto" });
+    await addEntry(t, { slug: "the-mayor", review: "pending", sensitive: ["living person"] });
+    await addEntry(t, { slug: "the-wreck", review: "pending", sensitive: ["drowned"] });
+    const [jetty, mayor, wreck] = ["the-jetty", "the-mayor", "the-wreck"].map((slug) => `osm${somewhere}-${slug}`);
+
+    // Anyone else gets nothing, not even an empty list, so the app hides it.
+    expect(await bob.query(api.lore.adminPending, {})).toBeNull();
+    expect(await t.query(api.lore.adminPending, {})).toBeNull();
+    const waiting = await alice.query(api.lore.adminPending, {});
+    expect(waiting?.map((e) => e.entryId)).toEqual([mayor, wreck]);
+    expect(waiting?.[1]).toMatchObject({
+      osmId: somewhere, suburb: "Somewhere", title: "the-wreck", category: "history",
+      sources: ["https://example.org/jetty"], sensitive: ["drowned"], stickerUrl: null,
+    });
+
+    for (const caller of [bob, t]) {
+      await expect(caller.mutation(api.lore.adminApprove, { entryId: mayor })).rejects.toThrow(/Only the admin/);
+      await expect(caller.mutation(api.lore.adminHide, { entryId: wreck })).rejects.toThrow(/Only the admin/);
+    }
+    expect((await alice.query(api.lore.adminPending, {}))?.length).toBe(2);
+
+    await alice.mutation(api.lore.adminApprove, { entryId: mayor });
+    await alice.mutation(api.lore.adminHide, { entryId: wreck });
+    expect(await alice.query(api.lore.adminPending, {})).toEqual([]);
+    const live = await bob.query(api.lore.forPlace, { osmId: somewhere });
+    expect(live.entries.map((e) => e.id)).toEqual([jetty, mayor]);
+    // Each review bumps it, so the phones look again.
+    expect(live.version).toBe(3);
+    await expect(alice.mutation(api.lore.adminApprove, { entryId: "osm1-nothing" })).rejects.toThrow(/No secret/);
+  });
+
+  test("the apps' list of bundled places is the server's", () => {
+    // Walkies/Lore/bundled-places.json is how both phones know not to ask about these.
+    const files = import.meta.glob<{ places: { osmId: number; name: string }[] }>("../Walkies/Lore/bundled-places.json", { eager: true, import: "default" });
+    const file = Object.values(files)[0]!;
+    expect(new Set(file.places.map((p) => p.osmId))).toEqual(bundledOsmIds);
+    expect(file.places.length).toBe(bundledOsmIds.size);
   });
 });

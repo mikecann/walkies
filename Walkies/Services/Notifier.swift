@@ -31,7 +31,7 @@ enum Notifier {
 
     /// The sticker art, copied to a temporary file because notifications need one.
     private static func attachment(for entry: LoreEntry) -> UNNotificationAttachment? {
-        guard let image = UIImage(named: "sticker-\(entry.id)"), let png = image.pngData() else { return nil }
+        guard let image = StickerImage.of(entry), let png = image.pngData() else { return nil }
         let url = URL.temporaryDirectory.appending(path: "sticker-\(entry.id).png")
         guard (try? png.write(to: url)) != nil else { return nil }
         return try? UNNotificationAttachment(identifier: entry.id, url: url)
