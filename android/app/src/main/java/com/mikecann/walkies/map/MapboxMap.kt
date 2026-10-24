@@ -129,10 +129,10 @@ fun MapboxMap(
     modifier: Modifier = Modifier,
     /** Draw into a TextureView, so it can be clipped to rounded corners (the small map in walk history). */
     textureView: Boolean = false,
-    /** Lift the logo and attribution clear of the phone's navigation bar. Off when the tab bar handles that inset. */
+    /** Lift the logo and attribution clear of the phone's navigation bar. Off when bottomClearance already includes that inset. */
     systemBarInset: Boolean = true,
-    /** Keep the logo and attribution above a sheet overlapping the bottom of the map. */
-    bottomOverlay: Dp = 0.dp,
+    /** Keep the logo and attribution above the floating dock and its raised hex. */
+    bottomClearance: Dp = 0.dp,
 ) {
     val subscriptions = remember { ArrayList<Cancelable>() }
     val tap by rememberUpdatedState(onTap)
@@ -146,6 +146,14 @@ fun MapboxMap(
     }
     AndroidView(
         modifier = modifier,
+        update = { view ->
+            val margin = (4.dp + bottomClearance).value * view.resources.displayMetrics.density
+            val inset = if (systemBarInset) {
+                ViewCompat.getRootWindowInsets(view)?.getInsets(WindowInsetsCompat.Type.systemBars())?.bottom?.toFloat() ?: 0f
+            } else 0f
+            view.logo.marginBottom = margin + inset
+            view.attribution.marginBottom = margin + inset
+        },
         factory = { context ->
             MapboxOptions.accessToken = com.mikecann.walkies.BuildConfig.MAPBOX_ACCESS_TOKEN
             val view = MapView(context, MapInitOptions(context, textureView = textureView))
@@ -158,7 +166,7 @@ fun MapboxMap(
             }
             view.scalebar.enabled = false
             view.compass.enabled = false
-            val margin = (4.dp + bottomOverlay).value * view.resources.displayMetrics.density
+            val margin = (4.dp + bottomClearance).value * view.resources.displayMetrics.density
             view.logo.marginBottom = margin
             view.attribution.marginBottom = margin
             if (systemBarInset) ViewCompat.setOnApplyWindowInsetsListener(view) { _, insets ->

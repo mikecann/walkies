@@ -59,10 +59,6 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 struct WalkiesApp: App {
     @UIApplicationDelegateAdaptor private var delegate: AppDelegate
 
-    init() {
-        TabArt.styleTabBar()
-    }
-
     /// `-skipSignIn` on a simulator debug build goes straight in, for checking screens
     /// without an Apple or Google account. Nothing syncs.
     private static var skipSignIn: Bool {

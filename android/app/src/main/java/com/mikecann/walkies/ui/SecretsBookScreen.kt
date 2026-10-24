@@ -17,7 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -92,7 +92,7 @@ fun SecretsBookScreen(model: AppModel, onOpen: (LoreEntry) -> Unit) {
         modifier = Modifier
             .fillMaxSize()
             .background(Walkies.cream)
-            .systemBarsPadding(),
+            .statusBarsPadding(),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
             Spacer(Modifier.weight(1f))
@@ -129,7 +129,7 @@ fun SecretsBookScreen(model: AppModel, onOpen: (LoreEntry) -> Unit) {
             val shown = areas.take(visibleCount)
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(24.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp + LocalTabBarClearance.current),
                 modifier = Modifier.fillMaxSize(),
             ) {
                 item(key = "cover") {
