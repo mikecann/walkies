@@ -505,6 +505,9 @@ struct ProgressionIntegrationTests {
         let client = mockClient(server)
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
+        // The last-walked backfill runs on its own and fills in an empty LastWalked,
+        // so let it land before taking the copy to compare against.
+        await model.waitForLastWalked()
         model.makePlaceClient = { client }
         let before = model.cities
         await model.updateStreets()
