@@ -10,7 +10,7 @@ import type { Id } from "./_generated/dataModel";
 const vApple = v.object({ name: v.literal("apple"), accountId: v.string(), profile: vAppleProfile });
 const vGoogle = v.object({ name: v.literal("google"), accountId: v.string(), profile: vGoogleProfile });
 
-type Details = { name?: string; email?: string; emailVerified: boolean };
+type Details = { name?: string; email?: string; emailVerified: boolean; picture?: string };
 
 export const createUserAnonymous = internalMutation({
   args: { provider: v.object({ name: v.literal("anonymous"), accountId: v.string(), profile: v.object({}) }) },
@@ -59,15 +59,20 @@ async function existingUser(ctx: MutationCtx, details: Details): Promise<Id<"use
  * Keeps the user's name and email up to date from what Apple or Google sent. The
  * email is how Walkies will reach people later, so it's refreshed on every sign-in.
  * Apple only sends the name the first time, so an empty one never wipes a saved one.
+ * Google's photo is kept current, and given to an account first made with Apple.
  */
 async function saveDetails(ctx: MutationCtx, userId: Id<"users">, details: Details) {
   await reviveIfDeleted(ctx, userId);
+  // A user merged into another signs in as that one (currentUserId), so the details
+  // go there. Otherwise users:me shows the other row, still empty if it was deleted.
   const user = await ctx.db.get("users", userId);
-  if (user === null) return;
-  await ctx.db.patch("users", userId, {
-    name: user.name ?? details.name,
-    email: details.email ?? user.email,
-    emailVerified: details.email === undefined ? user.emailVerified : details.emailVerified,
+  const owner = user?.mergedInto ? await ctx.db.get("users", user.mergedInto) : user;
+  if (!owner) return;
+  await ctx.db.patch("users", owner._id, {
+    name: owner.name ?? details.name,
+    email: details.email ?? owner.email,
+    emailVerified: details.email === undefined ? owner.emailVerified : details.emailVerified,
+    picture: details.picture || owner.picture,
   });
 }
 
@@ -133,8 +138,6 @@ export const onSignInGoogle = internalMutation({
   returns: v.null(),
   handler: async (ctx, { provider: { profile }, userId }) => {
     await saveDetails(ctx, userId, profile);
-    // Keeps the photo current, and gives one to an account first made with Apple.
-    if (profile.picture) await ctx.db.patch("users", userId, { picture: profile.picture });
     return null;
   },
 });

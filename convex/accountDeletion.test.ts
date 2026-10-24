@@ -140,6 +140,68 @@ describe("account deletion", { timeout: 60_000 }, () => {
     expect(left).toEqual(allZero(left));
   });
 
+  test("a file that won't delete keeps its walk for the next try", async () => {
+    const { t, alice, aliceId } = await setup();
+    const [walkFile] = await seed(t, aliceId, 1);
+    await alice.mutation(api.users.deleteAccount, {});
+    const deletionId = (await t.run((ctx) => ctx.db.query("accountDeletions").first()))!._id;
+    // File storage failing: convex-test sends ctx.storage.delete through the global
+    // Convex.asyncSyscall getter, so swapping that out fails every delete.
+    type Syscall = (op: string, args: string) => Promise<string>;
+    const convex = (globalThis as unknown as { Convex: object }).Convex;
+    const real = Object.getOwnPropertyDescriptor(convex, "asyncSyscall")!;
+    Object.defineProperty(convex, "asyncSyscall", {
+      configurable: true,
+      get: () => {
+        const syscall = real.get!.call(convex) as Syscall;
+        return (op: string, args: string) => (op === "1.0/storageDelete" ? Promise.reject(new Error("Storage is down")) : syscall(op, args));
+      },
+    });
+    try {
+      await expect(t.mutation(internal.accountDeletion.step, { deletionId })).rejects.toThrow("Storage is down");
+    } finally {
+      Object.defineProperty(convex, "asyncSyscall", real);
+    }
+    // The step rolled back: the walk and its file are both still there, and it isn't done.
+    expect((await counts(t, aliceId)).walks).toBe(1);
+    await t.run(async (ctx) => {
+      expect(await ctx.storage.getUrl(walkFile!)).not.toBeNull();
+      expect((await ctx.db.get(deletionId))?.finishedAt).toBeUndefined();
+    });
+    await drain(t);
+    const left = await counts(t, aliceId);
+    expect(left).toEqual(allZero(left));
+    expect(await t.run((ctx) => ctx.storage.getUrl(walkFile!))).toBeNull();
+  });
+
+  test("a file that's already gone doesn't hold the deletion up", async () => {
+    const { t, alice, aliceId } = await setup();
+    const files = await seed(t, aliceId);
+    await t.run(async (ctx) => { for (const file of files) await ctx.storage.delete(file); });
+    await alice.mutation(api.users.deleteAccount, {});
+    await drain(t);
+    const left = await counts(t, aliceId);
+    expect(left).toEqual(allZero(left));
+    expect(await t.run((ctx) => ctx.db.query("accountDeletions").first())).toMatchObject({ stage: "done", finishedAt: expect.any(Number) });
+  });
+
+  test("signing in again through an account merged into theirs puts their details back where they sign in", async () => {
+    const { t, alice, aliceId } = await setup();
+    // Their Google sign-in still points at the older row that was folded into Alice.
+    const oldId = await t.run((ctx) => ctx.db.insert("users", { email: "alice@example.com", emailVerified: true, mergedInto: aliceId }));
+    await alice.mutation(api.users.deleteAccount, {});
+    await drain(t);
+    const provider = {
+      name: "google" as const,
+      accountId: "google-alice",
+      profile: { id: "google-alice", name: "Alice", email: "alice@example.com", emailVerified: true, picture: "https://example.com/new.png" },
+    };
+    await t.mutation(internal.users.onSignInGoogle, { provider, userId: oldId });
+    const profile = { name: "Alice", email: "alice@example.com", picture: "https://example.com/new.png" };
+    expect(await t.withIdentity({ subject: oldId }).query(api.users.me)).toEqual(profile);
+    expect(await alice.query(api.users.me)).toEqual(profile);
+  });
+
   test("signing in again with the same Apple account starts fresh, once the old data has gone", async () => {
     const { t, alice, aliceId } = await setup();
     await seed(t, aliceId);

@@ -62,7 +62,9 @@ const withFiles = (table: "walks" | "places"): Sweep => async (ctx, userId, budg
   for (const row of rows) {
     await ctx.db.delete(row._id);
     // Already gone is fine: a step that ran twice, or a file that never finished uploading.
-    await ctx.storage.delete(row.file).catch(() => {});
+    // Any other failure throws, so the step rolls back and the row is still here for the
+    // retry, instead of the file being left behind with nothing pointing at it.
+    if (await ctx.db.system.get("_storage", row.file)) await ctx.storage.delete(row.file);
   }
   return rows.length;
 };
