@@ -6,12 +6,12 @@
 //
 // Pages can use {{phone <name>}} for a screenshot in a phone (add "hero" for one that
 // loads straight away, "first" for the one to fetch first), {{gallery}} for the row of
-// every screenshot, and {{appStoreBadge}}. The screenshots are web/public/screens/*.webp,
-// made by scripts/make-web-screens.mjs.
+// every screenshot, {{appStoreBadge}} and {{promoVideo}}. The screenshots are
+// web/public/screens/*.webp, made by scripts/make-web-screens.mjs.
 import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { APP_STORE_LIVE, APP_STORE_URL, GITHUB_URL, PRIVACY_UPDATED, SITE_URL, SUPPORT_EMAIL } from "../web/site.mjs";
+import { APP_STORE_LIVE, APP_STORE_URL, GITHUB_URL, PRIVACY_UPDATED, PROMO_VIDEO, SITE_URL, SUPPORT_EMAIL } from "../web/site.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = join(root, "web/src");
@@ -71,6 +71,41 @@ function gallery() {
   return `<ul class="strip">\n${items.join("\n")}\n      </ul>`;
 }
 
+const WATCH_URL = `https://www.youtube.com/watch?v=${PROMO_VIDEO.id}`;
+
+/**
+ * The promo video, after Poddle's: the poster with a play button, which swaps in YouTube's
+ * player when it's pressed, so nothing loads from YouTube (and it sets no cookies) until
+ * then. Without JavaScript the poster's a link to the video on YouTube instead.
+ */
+function promoVideo() {
+  const title = escape(PROMO_VIDEO.title);
+  const embed = `https://www.youtube-nocookie.com/embed/${PROMO_VIDEO.id}?autoplay=1&rel=0`;
+  return `<section class="promo" aria-label="Walkies in a ${PROMO_VIDEO.seconds} second video">
+      <div class="promo-frame">
+        <button class="promo-play" type="button" aria-label="Play the video: ${title}" data-embed="${escape(embed)}" data-title="${title}">
+          <img src="/img/promo-poster.webp" alt="" width="1600" height="900" loading="lazy" decoding="async">
+          <span class="promo-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></span>
+        </button>
+        <noscript><a class="promo-play" href="${WATCH_URL}" aria-label="Watch the video on YouTube: ${title}"></a></noscript>
+      </div>
+      <script>
+        document.querySelector(".promo-play").addEventListener("click", (event) => {
+          const button = event.currentTarget;
+          const player = document.createElement("iframe");
+          player.src = button.dataset.embed;
+          player.title = button.dataset.title;
+          player.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+          player.referrerPolicy = "strict-origin-when-cross-origin";
+          player.allowFullscreen = true;
+          button.replaceWith(player);
+          // The button's gone, so keyboard focus would drop back to the top of the page.
+          player.focus();
+        });
+      </script>
+    </section>`;
+}
+
 /** schema.org data for the home page, so search engines know what Walkies is. */
 function structuredData() {
   const app = {
@@ -87,7 +122,18 @@ function structuredData() {
     author: { "@type": "Person", name: "Mike Cann" },
     ...(APP_STORE_LIVE ? { downloadUrl: APP_STORE_URL, installUrl: APP_STORE_URL } : {}),
   };
-  return `<script type="application/ld+json">${JSON.stringify(app).replace(/</g, "\\u003c")}</script>`;
+  const video = {
+    "@context": "https://schema.org",
+    "@type": "VideoObject",
+    name: PROMO_VIDEO.title,
+    description: "Sammy, Mike's chocolate lab, shows you round Walkies: the clouds clearing off your suburb as you walk, the secrets hidden under some of the tiles and watching your walks back.",
+    thumbnailUrl: `${SITE_URL}/img/promo-poster.webp`,
+    uploadDate: PROMO_VIDEO.uploaded,
+    duration: `PT${PROMO_VIDEO.seconds}S`,
+    embedUrl: `https://www.youtube.com/embed/${PROMO_VIDEO.id}`,
+    contentUrl: WATCH_URL,
+  };
+  return `<script type="application/ld+json">${JSON.stringify([app, video]).replace(/</g, "\\u003c")}</script>`;
 }
 
 const escape = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -109,7 +155,7 @@ const version = Date.now().toString(36);
 const appId = APP_STORE_URL.match(/id(\d+)/)?.[1];
 const shared = {
   site: SITE_URL, email: SUPPORT_EMAIL, github: GITHUB_URL, privacyUpdated: PRIVACY_UPDATED, version,
-  appStoreBadge: appStoreBadge(), gallery: gallery(),
+  appStoreBadge: appStoreBadge(), gallery: gallery(), promoVideo: promoVideo(),
   // Safari's Smart App Banner. It shows "View" until the app's out, then "Open" or "Get".
   appStoreMeta: appId ? `<meta name="apple-itunes-app" content="app-id=${appId}">` : "",
 };

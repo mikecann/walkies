@@ -140,6 +140,28 @@ a.appstore:active { transform: translateY(1px); }
 .hero-media .back { transform: rotate(-7deg) translate(8%, 6%); margin-right: calc(var(--w) * -.32); }
 .hero-media .front { transform: rotate(4deg); z-index: 1; }
 
+/* The promo video: the poster with a play button until it's pressed (build-web.mjs promoVideo).
+   A card with the stickers' white rim, and a play button in the app's burnt orange. */
+.promo { max-width: 1080px; margin: clamp(20px, 5vw, 56px) auto 0; padding: 0 20px; }
+/* content-box so it's the video inside the white rim that's 16:9, or YouTube adds black bars. */
+.promo-frame {
+  position: relative; box-sizing: content-box; aspect-ratio: 16 / 9; overflow: hidden;
+  background: var(--well); border: var(--rim); border-radius: 32px; box-shadow: var(--lift);
+}
+.promo-frame iframe, .promo-play, .promo-play img { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+.promo-play { padding: 0; background: none; cursor: pointer; }
+.promo-play img { object-fit: cover; }
+/* The frame clips anything outside it, so the focus ring goes round the frame instead. */
+.promo-play:focus-visible { outline: none; }
+.promo-frame:has(.promo-play:focus-visible) { outline: 2.5px solid var(--orange); outline-offset: 3px; }
+.promo-icon {
+  position: absolute; left: 50%; top: 50%; width: 92px; height: 92px; transform: translate(-50%, -50%);
+  display: grid; place-items: center; border-radius: 50%; background: var(--burnt); border: 4px solid #fff;
+  box-shadow: 0 10px 28px rgba(120, 50, 25, .35); transition: transform .2s, background-color .2s;
+}
+.promo-icon svg { width: 40px; height: 40px; fill: #fff; margin-left: 5px; }
+.promo-play:hover .promo-icon, .promo-play:focus-visible .promo-icon { transform: translate(-50%, -50%) scale(1.08); background: var(--burnt-d); }
+
 /* features */
 .features, .closing { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
 .section-title { display: block; font-size: clamp(30px, 4.4vw, 42px); line-height: 1.1; text-align: center; margin: clamp(48px, 8vw, 96px) 0 28px; }
@@ -216,6 +238,9 @@ a.appstore:active { transform: translateY(1px); }
   .strip .phone { --w: min(52vw, 210px); }
 }
 @media (max-width: 640px) {
+  .promo-frame { border-radius: 22px; }
+  .promo-icon { width: 66px; height: 66px; border-width: 3px; }
+  .promo-icon svg { width: 30px; height: 30px; margin-left: 4px; }
   .bits { grid-template-columns: 1fr; }
   .bit { padding: 24px; }
   .bit.story { flex-direction: column; align-items: flex-start; gap: 12px; }

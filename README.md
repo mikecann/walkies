@@ -119,7 +119,7 @@ Settings has "Suggest a feature", which opens Chef, Seth Raphael's feedback boar
 
 ## Website
 
-`web/` is the website, [walkies.mikecann.app](https://walkies.mikecann.app): the home page, `/privacy` and `/support`, which the App Store listing and Google's sign-in screen link to. It's plain HTML with no bundler: `scripts/build-web.mjs` wraps each page in `web/src/layout.html` and copies `web/public` alongside into `web/dist`. The few things that change (the App Store link and `APP_STORE_LIVE`, the support email, the GitHub link, the privacy policy's date) are in `web/site.mjs`. It's served by Convex static hosting on the same deployment as the backend, so `convex/http.ts` keeps the app's own routes (sign-in, the association file, `/join/<code>`) and has built-in `/privacy` and `/support` pages for until the site's uploaded.
+`web/` is the website, [walkies.mikecann.app](https://walkies.mikecann.app): the home page, `/privacy` and `/support`, which the App Store listing and Google's sign-in screen link to. It's plain HTML with no bundler: `scripts/build-web.mjs` wraps each page in `web/src/layout.html` and copies `web/public` alongside into `web/dist`. The few things that change (the App Store link and `APP_STORE_LIVE`, the support email, the GitHub link, the privacy policy's date, the promo video on YouTube) are in `web/site.mjs`. It's served by Convex static hosting on the same deployment as the backend, so `convex/http.ts` keeps the app's own routes (sign-in, the association file, `/join/<code>`) and has built-in `/privacy` and `/support` pages for until the site's uploaded.
 
 | Script | What it does |
 |---|---|

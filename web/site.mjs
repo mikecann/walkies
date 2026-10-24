@@ -21,3 +21,15 @@ export const SUPPORT_EMAIL = "walkies@mikecann.app";
 
 /** The privacy policy's date. Change it whenever the policy changes. */
 export const PRIVACY_UPDATED = "23 October 2026";
+
+/**
+ * The promo video, unlisted on Mike's YouTube channel. It sits under the home page's hero
+ * and goes into the page's structured data, so change it all here when the video changes.
+ * The still shown before it plays is web/public/img/promo-poster.webp.
+ */
+export const PROMO_VIDEO = {
+  id: "7R7aL-WP6lk",
+  title: "Walkies, an app that turns dog walks into exploring",
+  seconds: 26,
+  uploaded: "2026-10-24",
+};
