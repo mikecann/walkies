@@ -1,9 +1,10 @@
 import Foundation
 
-/// The Convex deployment the app talks to. Both are in Sydney. The simulator uses
-/// dev, so testing never touches the real walks on your and your dad's phones.
+/// The Convex deployment the app talks to. Both are in Sydney. Debug builds on the
+/// simulator use dev, so testing never touches anyone's real walks. Release builds
+/// (the App Store ones) only ever know about prod.
 nonisolated enum Backend {
-    #if targetEnvironment(simulator)
+    #if DEBUG && targetEnvironment(simulator)
     static let name = "resolute-pig-177"
     #else
     static let name = "savory-bee-296"
@@ -12,6 +13,8 @@ nonisolated enum Backend {
     static let cloud = URL(string: "https://\(name).ap-southeast-2.convex.cloud")!
     /// Also where Apple and Google sign-in hands back to the app (see Account.swift).
     static let site = URL(string: "https://\(name).ap-southeast-2.convex.site")!
+    /// The website, with the privacy policy and help pages. Prod's site, on its own domain.
+    static let website = URL(string: "https://walkies.mikecann.app")!
 }
 
 nonisolated enum ConvexError: LocalizedError {

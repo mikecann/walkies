@@ -15,6 +15,15 @@ final class AppNavigation {
     }
 
     var tab: Tab = .map
+
+    /// Where the app opens: the map, or in screenshot mode the screen being taken.
+    static func atLaunch() -> AppNavigation {
+        let navigation = AppNavigation()
+        #if DEBUG
+        ScreenshotMode.configure(navigation)
+        #endif
+        return navigation
+    }
     var progressSection: ProgressSection = .level
     /// A secret's card, over whichever tab is showing: from a pin, the book or a past walk.
     var openSecret: LoreEntry?

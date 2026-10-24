@@ -9,7 +9,7 @@ struct ContentView: View {
     @Environment(SyncEngine.self) private var sync
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var navigation = AppNavigation()
+    @State private var navigation = AppNavigation.atLaunch()
     /// The recap on screen. Every recap plays from here, once any sheet is out of the way.
     @State private var shownRecap: WalkRecap?
     @State private var stickerDismissed = false

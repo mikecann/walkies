@@ -53,10 +53,13 @@ final class AppModel {
     }
 
     /// In always-on mode, a walk ends after this long without moving on foot.
-    /// Overridable with `-autoWalkGap <seconds>` for testing in the simulator.
+    /// Overridable with `-autoWalkGap <seconds>` for testing in the simulator (Debug only).
     static var autoWalkGap: TimeInterval {
+        #if DEBUG
         let override = UserDefaults.standard.double(forKey: "autoWalkGap")
-        return override > 0 ? override : 10 * 60
+        if override > 0 { return override }
+        #endif
+        return 10 * 60
     }
 
     /// Shorter than this and it wasn't really a walk: pottering round the house, or
@@ -589,6 +592,21 @@ final class AppModel {
             if generation == dataGeneration, request == recapRequest { recap = result }
         }
     }
+
+    #if DEBUG
+    /// Screenshot mode (ScreenshotMode.swift): you're at `location`, and with `recap` the
+    /// latest walk has just finished, so its celebration plays as if it were new.
+    func showSample(at location: CLLocation, recap showRecap: Bool) {
+        lastLocation = location
+        guard showRecap, let walk = walks.last(where: { $0.endedAt != nil }) else { return }
+        let fresh = Dictionary(uniqueKeysWithValues: (walk.newTileHexesByPlace ?? [:]).compactMap { key, hexes in
+            UUID(uuidString: key).map { ($0, hexes) }
+        })
+        let history = walks.filter { $0.id != walk.id && $0.startedAt < walk.startedAt }
+        recapRequest += 1
+        recap = WalkRecap.make(walk: walk, cities: cities, fresh: fresh, found: foundStickers, history: history)
+    }
+    #endif
 
     /// The End walk button on an always-on walk: ends it now and plays the celebration.
     func endAutoWalk() {

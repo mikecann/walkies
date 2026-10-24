@@ -394,8 +394,13 @@ struct FogMapView: UIViewRepresentable {
             }
             guard let location = map.userLocation.location, location.timestamp.timeIntervalSinceNow > -120 else { return }
             arriving = false
+            var distance: CLLocationDistance = 1500
+            #if DEBUG
+            // App Store screenshots: far enough out to see the clouds round what's been walked.
+            if ScreenshotMode.isOn { distance = ScreenshotMode.mapDistance }
+            #endif
             map.setCamera(
-                MKMapCamera(lookingAtCenter: location.coordinate, fromDistance: 1500, pitch: pitch, heading: 0),
+                MKMapCamera(lookingAtCenter: location.coordinate, fromDistance: distance, pitch: pitch, heading: 0),
                 animated: map.window != nil && hasShownUser
             )
             hasShownUser = true

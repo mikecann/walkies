@@ -8,7 +8,13 @@ import UIKit
 /// so they wait for it.
 final class AppDelegate: NSObject, UIApplicationDelegate {
     private lazy var locked = !UIApplication.shared.isProtectedDataAvailable
-    lazy var model = AppModel(waitForUnlock: locked)
+    lazy var model: AppModel = {
+        #if DEBUG
+        // App Store screenshots: a made-up explorer, never the saved data.
+        if ScreenshotMode.isOn { return AppModel(store: ScreenshotMode.makeStore(), servicesEnabled: false, alwaysOn: false) }
+        #endif
+        return AppModel(waitForUnlock: locked)
+    }()
     lazy var account = Account(waitForUnlock: locked)
     lazy var sync = SyncEngine(model: model, account: account)
     private var unlockObserver: NSObjectProtocol?
@@ -52,6 +58,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         model.refreshNeighbours()
         model.resumeAlwaysOn()
         sync.schedule()
+        #if DEBUG
+        if ScreenshotMode.isOn {
+            Task {
+                await model.waitForHistory()
+                model.showSample(at: ScreenshotMode.location, recap: ScreenshotMode.screen == .recap)
+            }
+        }
+        #endif
     }
 }
 
@@ -60,10 +74,10 @@ struct WalkiesApp: App {
     @UIApplicationDelegateAdaptor private var delegate: AppDelegate
 
     /// `-skipSignIn` on a simulator debug build goes straight in, for checking screens
-    /// without an Apple or Google account. Nothing syncs.
+    /// without an Apple or Google account. Nothing syncs. Screenshot mode does too.
     private static var skipSignIn: Bool {
         #if DEBUG && targetEnvironment(simulator)
-        ProcessInfo.processInfo.arguments.contains("-skipSignIn")
+        ProcessInfo.processInfo.arguments.contains("-skipSignIn") || ScreenshotMode.isOn
         #else
         false
         #endif

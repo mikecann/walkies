@@ -88,14 +88,25 @@ final class Account {
     ///   unlock, so leave the session for `loadSession()`.
     init(waitForUnlock: Bool = false) {
         session = waitForUnlock ? nil : Keychain.load()
+        #if DEBUG
+        // Screenshots never show, or sync with, whoever's signed in.
+        if ScreenshotMode.isOn { session = nil }
+        #endif
         // didSet doesn't run in init.
         profile = Profile(session)
+        #if DEBUG
+        // The made-up explorer gets a name, so their head on the map isn't a "?".
+        if ScreenshotMode.isOn { profile.name = ScreenshotMode.explorerName }
+        #endif
         #if DEBUG && targetEnvironment(simulator)
         automaticTestSignInRequested = session == nil && ProcessInfo.processInfo.arguments.contains("-testSignIn")
         #endif
     }
 
     func loadSession() {
+        #if DEBUG
+        if ScreenshotMode.isOn { return }
+        #endif
         session = Keychain.load()
     }
 
@@ -221,6 +232,18 @@ final class Account {
         return refreshed
     }
 
+    /// Deletes the account and everything in it on the server (users:deleteAccount). The
+    /// server signs every session out at once; wiping this phone and `signOut()` are up
+    /// to the caller, once this has worked.
+    func deleteAccount() async throws {
+        guard let client = await client() else { throw AccountError.offline }
+        do {
+            let _: Nothing = try await client.mutation("users:deleteAccount")
+        } catch is URLError {
+            throw AccountError.offline
+        }
+    }
+
     /// Signed out here straight away, so nothing can sync while the server's told.
     func signOut() async {
         let refreshToken = session?.refreshToken
@@ -238,6 +261,14 @@ final class Account {
     private func clear() {
         session = nil
         Keychain.delete()
+    }
+}
+
+nonisolated enum AccountError: LocalizedError {
+    case offline
+
+    var errorDescription: String? {
+        "Couldn't reach Walkies. Check you're online and try again."
     }
 }
 

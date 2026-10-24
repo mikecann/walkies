@@ -135,6 +135,20 @@ Deploy the backend first (it adds the static hosting component), then upload. On
 
 Pointing `walkies.mikecann.app` at prod takes two things. In the Convex dashboard, open the prod deployment (`savory-bee-296`), go to Settings > Custom Domains and add `walkies.mikecann.app` for HTTP actions. Then in Cloudflare, add the two records the dashboard asks for on `mikecann.app`: a CNAME `walkies` to `convex.domains`, proxied (the orange cloud, the same as `poddle`), and a TXT `_convex_domains.walkies` set to `savory-bee-296`. Both were added on 23 Oct 2026. If the dashboard offers to make it the deployment's `CONVEX_SITE_URL`, leave that off for now: Convex Auth builds the Apple and Google return URLs from it, and those are registered on the `convex.site` address.
 
+## App Store
+
+Walkies is "Walkies: Explore Your Suburb" in App Store Connect (Apple ID `6826001880`): free, iPhone only, worldwide, released by hand. Every step from deploying to submitting is in [the release runbook](docs/runbooks/appstore-release.md), and the App Privacy answers are in [app-privacy-answers.md](docs/runbooks/app-privacy-answers.md). The listing copy, categories, age rating and review notes are in `appstore/metadata.json`, which `node scripts/appstore-metadata.mjs` sets (`--dry-run` first).
+
+| Script | What it does |
+|---|---|
+| `scripts/screenshots.sh` | The 6.9" screenshots into `appstore/screenshots/`, from sample data only |
+| `node scripts/appstore-metadata.mjs --dry-run` | What the listing script would change |
+| `node scripts/appstore-screenshots.mjs <pngs>` | Upload screenshots to the version being prepared |
+| `scripts/appstore-upload.sh` | Archive, export and validate a build; `UPLOAD=1` uploads it |
+| `node scripts/appstore-submit.mjs <build>` | Attach a processed build; `--submit` sends it to App Review |
+
+The screenshots come from a Debug-only screenshot mode (`-WalkiesScreen <screen>`, in `Walkies/Services/ScreenshotMode.swift`): a made-up explorer a few weeks into Fremantle, with a long weekend in Busselton for the secrets, built from the OpenStreetMap streets in `appstore/sample/` by `Walkies/Model/SampleExplorer.swift`. Release builds have none of it, and only know about the prod deployment.
+
 ## Code map
 
 - `Walkies/Model/` is the maths: world and local projections (`Geo`), the world hex grid, boundaries and point-in-polygon, cities, walks, and the GPS filter (`CoverageTracer`).

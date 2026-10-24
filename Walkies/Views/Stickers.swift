@@ -143,6 +143,9 @@ struct StickerBookView: View {
             .onChange(of: filter) { visibleCount = 6 }
             .onChange(of: currentAreaName, initial: true) {
                 if let currentAreaName { expandedAreas.insert(currentAreaName) }
+                #if DEBUG
+                if ScreenshotMode.isOn { expandedAreas.insert(ScreenshotMode.secretsArea) }
+                #endif
             }
         }
     }

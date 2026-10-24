@@ -9,6 +9,10 @@
             <key>CFBundleURLSchemes</key><array><string>walkies</string></array>
         </dict>
     </array>
+	<!-- Walkies only uses HTTPS (Convex, OpenStreetMap, Apple's maps), which is exempt. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!-- Location only: recording a walk with the phone locked in your pocket. -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>

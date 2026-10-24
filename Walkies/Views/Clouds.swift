@@ -218,7 +218,9 @@ final class MapHandle {
     /// How much of the honeycomb to show: fades in as you drag and out after.
     func honeycomb(at date: Date) -> Double {
         // `-alwaysHoneycomb YES` keeps it showing, for checking it in the simulator.
+        #if DEBUG
         if UserDefaults.standard.bool(forKey: "alwaysHoneycomb") { return 1 }
+        #endif
         let since = date.timeIntervalSince(draggingChangedAt)
         return isDragging ? min(1, since / 0.15) : max(0, 1 - since / 0.6)
     }
