@@ -28,6 +28,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -107,6 +108,29 @@ class SyncSafetyTest {
         // Pull brings it back.
         assertEquals(listOf(place.id), relaunched.cities.map { it.id })
         assertEquals(listOf(place.id), store.loadCities().map { it.id })
+    }
+
+    @Test
+    fun aWalkCreditedWhileItsGoingUpIsSentAgain() = runBlocking {
+        val (store, _) = tempStore()
+        val place = city()
+        store.save(listOf(place))
+        val walk = walk(0, place)
+        store.save(walk)
+        val server = FakeServer()
+        val model = model(store)
+        val engine = engine(model, store, server)
+        // A place adds itself and credits the walk just as the older copy is going up.
+        server.answers["sync:saveWalk"] = {
+            server.answers.remove("sync:saveWalk")
+            model.walksChanged?.invoke(listOf(walk.id))
+            JsonNull
+        }
+        engine.sync()
+        assertFalse(walk.id in store.loadSyncState().uploadedWalks)
+        engine.sync()
+        assertEquals(2, server.paths.count { it == "sync:saveWalk" })
+        assertTrue(walk.id in store.loadSyncState().uploadedWalks)
     }
 
     @Test

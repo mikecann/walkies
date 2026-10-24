@@ -161,6 +161,27 @@ struct SyncSafetyTests {
         #expect(!fresh.accountPulled)
     }
 
+    @Test func aWalkCreditedWhileItsGoingUpIsSentAgain() async throws {
+        let store = Store(root: root())
+        defer { store.wipe() }
+        let place = city()
+        store.save([place])
+        let walk = walk(0, in: place)
+        store.save(walk)
+        let server = SafetyServer()
+        let client = client(server)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, makeClient: { client })
+        // A place adds itself and credits the walk just as the older copy is going up.
+        await server.duringNextSaveWalk { await MainActor.run { model.walksChanged?([walk.id]) } }
+        await engine.sync()
+        #expect(!store.loadSyncState().uploadedWalks.contains(walk.id))
+        await engine.sync()
+        #expect(await server.calls.filter { $0 == "sync:saveWalk" }.count == 2)
+        #expect(store.loadSyncState().uploadedWalks.contains(walk.id))
+    }
+
     @Test func signingOutDuringAPullLeavesNothingBehind() async throws {
         let store = Store(root: root())
         defer { store.wipe() }
@@ -244,6 +265,10 @@ actor SafetyServer {
         walks[walk.id.uuidString] = walk.id.uuidString
     }
 
+    /// Runs once, while the next walk is being saved to the account.
+    private var duringSaveWalk: (@Sendable () async -> Void)?
+    func duringNextSaveWalk(_ hook: @escaping @Sendable () async -> Void) { duringSaveWalk = hook }
+
     func fail(_ id: UUID?) { failing = id?.uuidString }
     func garble(_ id: UUID) { garbled.insert(id.uuidString) }
     func pauseDownloads() { paused = true }
@@ -283,7 +308,12 @@ actor SafetyServer {
         case "teams:myTeams": value = [] as [String]
         case "sync:generateUploadUrl": value = "https://sync.walkies.test/upload"
         case "sync:savePlace": places[args["clientId"] as! String] = (args["updatedAt"] as! Double, args["file"] as! String)
-        case "sync:saveWalk": walks[args["clientId"] as! String] = args["file"] as? String
+        case "sync:saveWalk":
+            walks[args["clientId"] as! String] = args["file"] as? String
+            if let hook = duringSaveWalk {
+                duringSaveWalk = nil
+                await hook()
+            }
         case "sync:deletePlace":
             let id = args["clientId"] as! String
             deleted.append(id)

@@ -217,10 +217,17 @@ class SyncEngine(
     }
 
     /**
+     * How many times each walk has changed since the app started, so an upload that was
+     * already on its way with the older copy isn't taken as the latest.
+     */
+    private val walkEdits = HashMap<UUID, Int>()
+
+    /**
      * Walks that changed after they went up (a place that added itself since counted
      * their tiles), so they go up again. Saving a walk replaces its copy in the account.
      */
     private fun changed(ids: List<UUID>) {
+        for (id in ids) walkEdits[id] = (walkEdits[id] ?: 0) + 1
         state = state.copy(uploadedWalks = state.uploadedWalks - ids.toSet())
         save()
         countWaiting()
@@ -284,6 +291,7 @@ class SyncEngine(
         for (walk in model.walks.toList()) {
             if (walk.id in state.uploadedWalks) continue
             val endedAt = walk.endedAt ?: continue
+            val edit = walkEdits[walk.id]
             val file = upload(Codec.walk(walk), client)
             check(revision)
             client.mutation("sync:saveWalk", args {
@@ -295,6 +303,8 @@ class SyncEngine(
                 put("file", file)
             })
             check(revision)
+            // Credited again while this copy was on its way up: the next push sends the new one.
+            if (walkEdits[walk.id] != edit) continue
             state = state.copy(uploadedWalks = state.uploadedWalks + walk.id)
             save()
         }

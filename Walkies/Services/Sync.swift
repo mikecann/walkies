@@ -181,9 +181,14 @@ final class SyncEngine {
         countWaiting()
     }
 
+    /// How many times each walk has changed since the app opened, so an upload that was
+    /// already on its way with the older copy isn't taken as the latest.
+    private var walkEdits: [UUID: Int] = [:]
+
     /// Walks that changed after they went up (a place that added itself since counted
     /// their tiles), so they go up again. Saving a walk replaces its copy in the account.
     private func changed(walks ids: [UUID]) {
+        for id in ids { walkEdits[id, default: 0] += 1 }
         state.uploadedWalks.subtract(ids)
         save()
         countWaiting()
@@ -239,6 +244,7 @@ final class SyncEngine {
 
         for walk in model.walks where !state.uploadedWalks.contains(walk.id) {
             guard let endedAt = walk.endedAt else { continue }
+            let edit = walkEdits[walk.id]
             let file = try await upload(JSONEncoder().encode(walk), client)
             try check(revision)
             let _: Nothing = try await client.mutation("sync:saveWalk", WalkArgs(
@@ -246,6 +252,8 @@ final class SyncEngine {
                 distance: walk.distance, newTiles: Double(walk.newTiles), file: file
             ))
             try check(revision)
+            // Credited again while this copy was on its way up: the next push sends the new one.
+            guard walkEdits[walk.id] == edit else { continue }
             state.uploadedWalks.insert(walk.id)
             save()
         }
