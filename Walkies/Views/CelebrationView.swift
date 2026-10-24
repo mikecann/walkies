@@ -542,20 +542,11 @@ private struct ReplayEffects: View {
 /// A found secret, held up big with a slow sunburst behind it.
 private struct SecretPop: View {
     let entry: LoreEntry
-    @State private var spin = false
 
     var body: some View {
         VStack(spacing: 12) {
             ZStack {
-                Circle()
-                    .fill(AngularGradient(
-                        colors: (0..<16).map { $0 % 2 == 0 ? Color(red: 1, green: 0.85, blue: 0.4).opacity(0.55) : .clear },
-                        center: .center
-                    ))
-                    .frame(width: 300, height: 300)
-                    .mask(RadialGradient(colors: [.black, .clear], center: .center, startRadius: 40, endRadius: 150))
-                    .rotationEffect(.degrees(spin ? 360 : 0))
-                    .animation(.linear(duration: 12).repeatForever(autoreverses: false), value: spin)
+                SunburstView()
                 StickerArt(entry: entry, size: 170)
             }
             VStack(spacing: 4) {
@@ -571,7 +562,6 @@ private struct SecretPop: View {
             .stickerCard(in: .rect(cornerRadius: 20))
         }
         .padding(30)
-        .onAppear { spin = true }
     }
 }
 
