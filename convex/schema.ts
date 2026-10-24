@@ -1,6 +1,13 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+export const vLoreStatus = v.union(
+  v.literal("queued"), v.literal("researching"), v.literal("ready"), v.literal("quiet"), v.literal("failed"),
+);
+export const vLoreReview = v.union(
+  v.literal("checking"), v.literal("dropped"), v.literal("auto"), v.literal("pending"), v.literal("approved"), v.literal("hidden"),
+);
+
 // The server keeps a copy of what each phone has. The phone is the source of truth
 // and works offline; it pushes what it has whenever it can. Nothing here is ever
 // edited in a way that can conflict: walks never change once finished, tiles only
@@ -61,6 +68,8 @@ export default defineSchema({
     updatedAt: v.number(),
     /** The city as the app saves it: boundary, tiles, streets and secret spots. */
     file: v.id("_storage"),
+    /** Its OSM relation, read from the file by lore.readPlace. Unset until then. */
+    osmId: v.optional(v.number()),
   }).index("by_user_client", ["userId", "clientId"]),
 
   progress: defineTable({
@@ -120,4 +129,90 @@ export default defineSchema({
     /** Failed warm attempts so far, for backing off. */
     attempts: v.optional(v.number()),
   }).index("by_osm", ["osmId"]).index("by_queued", ["queuedAt"]),
+
+  // Secrets for new suburbs (lore.ts). One row per suburb that's been researched or is
+  // waiting to be, shared by everyone, keyed by OSM relation like placeData.
+  lorePlaces: defineTable({
+    osmId: v.number(),
+    name: v.string(),
+    status: vLoreStatus,
+    /** Bumped whenever the live secrets change, so the phones know to fetch them again. */
+    version: v.number(),
+    /** Asked for with lore:research rather than by someone's walk, so it runs with LORE_AUTO off. */
+    manual: v.optional(v.boolean()),
+    /** From Nominatim when the run starts: "Porlock, Somerset, England, United Kingdom",
+     * "England" and "gb". */
+    displayName: v.optional(v.string()),
+    region: v.optional(v.string()),
+    country: v.optional(v.string()),
+    /** Runs so far. Each run's entries and notes carry its number. */
+    attempts: v.number(),
+    queuedAt: v.number(),
+    /** Why a queued place hasn't started: "daily cap" or "monthly cap". */
+    held: v.optional(v.string()),
+    startedAt: v.optional(v.number()),
+    finishedAt: v.optional(v.number()),
+    /** When a quiet or failed place goes back on the queue. */
+    retryAt: v.optional(v.number()),
+    workflowId: v.optional(v.string()),
+    /** US dollars from OpenRouter, for every run and for this one. */
+    cost: v.number(),
+    runCost: v.number(),
+    /** Why the last run failed. */
+    error: v.optional(v.string()),
+  }).index("by_osm", ["osmId"]).index("by_status", ["status", "queuedAt"]).index("by_retry", ["retryAt"]),
+
+  // What the research agents found, one fact per row with the page and the exact words.
+  loreNotes: defineTable({
+    osmId: v.number(),
+    run: v.number(),
+    angle: v.string(),
+    fact: v.string(),
+    url: v.string(),
+    quote: v.string(),
+    spot: v.optional(v.object({ name: v.string(), lat: v.optional(v.number()), lon: v.optional(v.number()) })),
+  }).index("by_osm_run", ["osmId", "run"]),
+
+  // Every secret a run wrote, including the ones the checks dropped, with why.
+  loreEntries: defineTable({
+    osmId: v.number(),
+    run: v.number(),
+    /** `osm<relation>-<slug>`, so it can never clash with a bundled secret's id. */
+    entryId: v.string(),
+    title: v.string(),
+    body: v.string(),
+    category: v.string(),
+    place: v.optional(v.object({ name: v.string(), lat: v.number(), lon: v.number() })),
+    /** What the sticker shows. */
+    sticker: v.string(),
+    sources: v.array(v.string()),
+    suburb: v.string(),
+    claims: v.array(v.object({
+      text: v.string(),
+      url: v.string(),
+      quote: v.string(),
+      /** Set by the quote check: the words are on the page. */
+      found: v.optional(v.boolean()),
+      /** The page text around the quote, for the fact-checker. */
+      context: v.optional(v.string()),
+    })),
+    /** Why it waits for Mike: "first-nations", "death-or-crime", "living-people". */
+    sensitive: v.array(v.string()),
+    /** checking (in the pipeline), dropped, then auto (live), pending, approved or hidden. */
+    review: vLoreReview,
+    /** The check that dropped it. */
+    droppedBy: v.optional(v.string()),
+    /** What each check found or changed, in plain words. */
+    checkNotes: v.array(v.string()),
+    stickerFile: v.optional(v.id("_storage")),
+  }).index("by_osm_review", ["osmId", "review"]).index("by_review", ["review"]).index("by_entry", ["entryId"])
+    .index("by_osm_run", ["osmId", "run"]),
+
+  // OpenRouter spend in US dollars, by UTC day, place and step, for the caps.
+  loreSpend: defineTable({ day: v.string(), osmId: v.number(), step: v.string(), cost: v.number(), calls: v.number() })
+    .index("by_day", ["day", "osmId", "step"]),
+
+  // New suburbs each person's walks started today, for suburbsPerUserPerDay.
+  loreCalls: defineTable({ userId: v.id("users"), windowStart: v.number(), count: v.number() })
+    .index("by_user", ["userId"]),
 });

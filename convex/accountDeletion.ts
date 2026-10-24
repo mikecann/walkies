@@ -35,6 +35,7 @@ export const PERSONAL_INDEX = {
   teamRemovals: "by_user",
   teamInviteAttempts: "by_user",
   placeCalls: "by_user",
+  loreCalls: "by_user",
 } as const;
 type PersonalTable = keyof typeof PERSONAL_INDEX;
 
@@ -109,6 +110,7 @@ const SWEEPS: Record<PersonalTable | "chefRequests", Sweep> = {
   teamRemovals: plain("teamRemovals"),
   teamInviteAttempts: plain("teamInviteAttempts"),
   placeCalls: plain("placeCalls"),
+  loreCalls: plain("loreCalls"),
   // Chef: their feature requests, with screenshots, voice notes, votes on them and
   // notifications (the feedback component's items.remove). Counts requests, not rows.
   // Their votes on other people's requests and Chef's own row for them stay, since the

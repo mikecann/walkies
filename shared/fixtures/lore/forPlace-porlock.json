@@ -1,0 +1,132 @@
+{
+  "entries": [
+    {
+      "body": "Some stones in the north porch here, along with the arch over the north doorway and the northwest wall, show signs of burning. They are supposedly from buildings destroyed when Harold sailed up the Bristol Channel in 1052. The church also has a most unusual timekeeper: a clock with neither face nor hands, which struck the hours on the tenor bell instead.",
+      "category": "odd-records",
+      "id": "osm2676434-a-clock-without-a-face",
+      "place": {
+        "lat": 51.207688,
+        "lon": -3.594946,
+        "name": "Church of St Dubricius"
+      },
+      "sources": [
+        "https://www.exmoorher.co.uk/Monument/MSO7874"
+      ],
+      "sticker": "A stone church tower with a big bronze bell wearing a blank, faceless clock like a shy mask.",
+      "stickerUrl": "https://resolute-pig-177.ap-southeast-2.convex.cloud/api/storage/00000000-0000-0000-0000-000000000000",
+      "suburb": "Porlock",
+      "title": "A Clock Without a Face"
+    },
+    {
+      "body": "The eastern part of the village was once the separate manor of Doverhay, recorded in Domesday as Doveri. The oldest part of this manor house, built around 1485, was a hall open from ground level to the roof, and the floor forming the solar was added in the 1580s. In 1893 Edmund Buckle carried out extensive work to restore it for use as a reading room and billiard and snooker club. The upper room houses a display celebrating the Culbone potter Waistel Cooper.",
+      "category": "history",
+      "id": "osm2676434-billiards-at-dovery-manor",
+      "place": {
+        "lat": 51.209189,
+        "lon": -3.593324,
+        "name": "Dovery Manor Museum"
+      },
+      "sources": [
+        "https://hbsmrweb-exmoor.esdm.co.uk/Monument/MSO10681",
+        "https://doverymanormuseum.org.uk/about/"
+      ],
+      "sticker": "A crooked old stone manor house with a billiard cue leaning by the door and a little clay pot on the step.",
+      "stickerUrl": null,
+      "suburb": "Porlock",
+      "title": "Billiards in the Old Hall"
+    },
+    {
+      "body": "The present harbour here is thought to date from the early to mid 19th century, and it is believed that only one trading vessel was ever built here, in 1858. At one time vessels of up to 100 tons came in, and there was a flourishing trade with South Wales, bringing in coal, limestone and cement. Some of the beach itself crossed the water too: pebbles from here went to pave streets in Cardiff and Newport in the 1850s.",
+      "category": "the-sea",
+      "id": "osm2676434-pebbles-for-cardiff-streets",
+      "place": {
+        "lat": 51.219174,
+        "lon": -3.628137,
+        "name": "Porlock Weir"
+      },
+      "sources": [
+        "https://www.exmoorher.co.uk/Designation/DEM5506",
+        "https://hbsmrweb-exmoor.esdm.co.uk/Monument/MSO7927",
+        "https://www.swmaritime.org.uk/ports/porlock/"
+      ],
+      "sticker": "A chubby little cargo boat in a stone harbour with a neat stack of round pebbles on its deck.",
+      "stickerUrl": null,
+      "suburb": "Porlock",
+      "title": "Pebbles for Cardiff Streets"
+    },
+    {
+      "body": "As the inn tells it, Robert Southey, who later became poet laureate, wrote his sonnet Porlock while enjoying a drink in the bar here in 1798, after the British weather had confined him to the pub. The rain kept him inside by the fire, and that fireside is now known as Southey's Corner. Not a bad result for an afternoon of being stuck indoors.",
+      "category": "history",
+      "id": "osm2676434-southeys-rainy-day-sonnet",
+      "place": {
+        "lat": 51.209057,
+        "lon": -3.598425,
+        "name": "The Ship Inn, West End"
+      },
+      "sources": [
+        "https://www.shipinnporlock.co.uk/history/",
+        "https://www.exmoorher.co.uk/Monument/MSO10692"
+      ],
+      "sticker": "A crackling pub fireplace with a little armchair beside it and a raindrop wearing a poet's scarf.",
+      "stickerUrl": null,
+      "suburb": "Porlock",
+      "title": "A Sonnet for a Rainy Day"
+    },
+    {
+      "body": "This farm is generally believed to be where Samuel Taylor Coleridge was living when his composition of Kubla Khan was interrupted by a visit from the man from Porlock. In Coleridge's own telling, he was interrupted by a Person on Business from Porlock, and as a result the rest of the poem was not recorded. So whatever business brought that visitor out here, it cost readers the rest of Kubla Khan.",
+      "category": "history",
+      "id": "osm2676434-the-man-from-porlock",
+      "place": {
+        "lat": 51.217805,
+        "lon": -3.659221,
+        "name": "Ash Farm"
+      },
+      "sources": [
+        "https://hbsmrweb-exmoor.esdm.co.uk/Monument/MEM22692",
+        "https://www.exmoorher.co.uk/theme/TEM31"
+      ],
+      "sticker": "A cosy stone farmhouse with a quill pen poking out of the chimney and a tiny visitor knocking at the door.",
+      "stickerUrl": null,
+      "suburb": "Porlock",
+      "title": "The Caller Who Stopped Kubla"
+    },
+    {
+      "body": "The pebble ridge at Porlock is the longest continuous coastal gravel barrier system on the western coast of Britain. When the ridge was breached, saltwater flooded the beach, and the striking copse of primaeval-looking trees along here is the result of that poisoning. Geomorphologists treat Porlock as a key open air laboratory, a place that will help them better predict the outcome of managing gravel barriers.",
+      "category": "nature",
+      "id": "osm2676434-the-pebble-ridge-laboratory",
+      "place": {
+        "lat": 51.219312,
+        "lon": -3.609629,
+        "name": "Porlock Marsh dead trees"
+      },
+      "sources": [
+        "https://geoguide.scottishgeologytrust.org/p/gcr28/gcr28_porlock",
+        "https://www.southwestcoastpath.org.uk/walksdb/229/printable/"
+      ],
+      "sticker": "A bare silvery tree on a heap of round pebbles, with a tiny magnifying glass propped against its trunk.",
+      "stickerUrl": null,
+      "suburb": "Porlock",
+      "title": "The Pebble Ridge Laboratory"
+    },
+    {
+      "body": "In about 1840 Mr Blathwayt, the Lord of the Manor, built a new road out of Porlock. Accounts differ on why: the Ship Inn says it was meant to bypass steep Porlock Hill, while the Exmoor heritage record calls it a scenic drive. It begins above the Ship Inn and follows an easier gradient for 4.5 miles to Pitt Combe Head. It was dug out by hand, with a French engineer employed, and pine trees planted along it still mark its line. Since it was a toll road, many chose not to use it.",
+      "category": "history",
+      "id": "osm2676434-the-road-round-the-hill",
+      "place": {
+        "lat": 51.20865,
+        "lon": -3.595765,
+        "name": "Porlock Toll Road"
+      },
+      "sources": [
+        "https://www.shipinnporlock.co.uk/history/",
+        "https://www.exmoorher.co.uk/Monument/MSO7974"
+      ],
+      "sticker": "A wiggly country road climbing past a tall pine tree that is holding out a tiny toll bucket.",
+      "stickerUrl": null,
+      "suburb": "Porlock",
+      "title": "The Road Round the Hill"
+    }
+  ],
+  "status": "ready",
+  "version": 1
+}

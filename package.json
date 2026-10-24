@@ -16,10 +16,19 @@
     "web:images": "xcrun swiftc -O scripts/make-web-images.swift -o /tmp/make-web-images && /tmp/make-web-images"
   },
   "dependencies": {
+    "@ai-sdk/provider": "^4.0.33",
+    "@ai-sdk/provider-utils": "^5.0.67",
+    "@convex-dev/agent": "^0.7.8",
     "@convex-dev/auth": "2.0.0-beta.0",
     "@convex-dev/feedback": "file:vendor/convex-dev-feedback-0.0.1.tgz",
     "@convex-dev/static-hosting": "^0.2.1",
-    "convex": "1.47.0"
+    "@convex-dev/workflow": "^0.4.10",
+    "@convex-dev/workpool": "^0.4.14",
+    "@openrouter/ai-sdk-provider": "^3.1.0",
+    "ai": "^7.0.152",
+    "convex": "1.47.0",
+    "convex-helpers": "^0.1.129",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@edge-runtime/vm": "^5.0.0",
