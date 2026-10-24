@@ -89,7 +89,30 @@ class BoundaryShape(boundary: Boundary, projection: GeoProjection) {
     val area: Double
         get() = parts.sumOf { part -> abs(signedArea(part.outer)) - part.holes.sumOf { abs(signedArea(it)) } }
 
+    /** Whether [p] is within [distance] of the outline (a hole's edge too), inside or out, in the same projected units. */
+    fun isNear(p: Vec2, distance: Double): Boolean {
+        if (p.x < lo.x - distance || p.x > hi.x + distance || p.y < lo.y - distance || p.y > hi.y + distance) return false
+        return parts.any { part -> ringIsWithin(part.outer, distance, p) || part.holes.any { ringIsWithin(it, distance, p) } }
+    }
+
     private companion object {
+        fun ringIsWithin(ring: List<Vec2>, distance: Double, p: Vec2): Boolean {
+            var a = ring.lastOrNull() ?: return false
+            val limit = distance * distance
+            for (b in ring) {
+                // The nearest point to p on the edge from a to b.
+                val abx = b.x - a.x
+                val aby = b.y - a.y
+                val length = abx * abx + aby * aby
+                val t = if (length > 0) (((p.x - a.x) * abx + (p.y - a.y) * aby) / length).coerceIn(0.0, 1.0) else 0.0
+                val dx = a.x + abx * t - p.x
+                val dy = a.y + aby * t - p.y
+                if (dx * dx + dy * dy <= limit) return true
+                a = b
+            }
+            return false
+        }
+
         fun ring(ring: List<Vec2>, p: Vec2): Boolean {
             if (ring.size <= 2) return false
             var inside = false

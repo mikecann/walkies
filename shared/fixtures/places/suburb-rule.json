@@ -1,0 +1,83 @@
+{
+  "about": "Which boundary a place that adds itself uses (AutoPlaces.suburbCandidates). `relations` is what Overpass's is_in query says the spot is in, with the country's ISO3166-1 tag; `expected` is the candidates, smallest first, before the size check (0.1 to 400 km²) picks one. Geographe, Porlock, central Bristol and Camden are real answers from Overpass (2026-10-24); the other ids are made up.",
+  "cases": [
+    {
+      "name": "Geographe, Western Australia: the locality at admin_level 9, not the city council",
+      "relations": [
+        { "id": 80500, "admin_level": "2", "ISO3166-1": "AU", "name": "Australia" },
+        { "id": 2316598, "admin_level": "4", "name": "Western Australia" },
+        { "id": 11688682, "admin_level": "6", "name": "City of Busselton" },
+        { "id": 11688696, "admin_level": "9", "name": "Geographe" }
+      ],
+      "expected": [11688696]
+    },
+    {
+      "name": "Brunswick, Victoria: localities are admin_level 10 outside WA",
+      "relations": [
+        { "id": 80500, "admin_level": "2", "ISO3166-1": "AU", "name": "Australia" },
+        { "id": 2316741, "admin_level": "4", "name": "Victoria" },
+        { "id": 3002, "admin_level": "6", "name": "City of Merri-bek" },
+        { "id": 3003, "admin_level": "10", "name": "Brunswick" }
+      ],
+      "expected": [3003]
+    },
+    {
+      "name": "Out in the bay in Australia, inside only the council: nothing to add",
+      "relations": [
+        { "id": 80500, "admin_level": "2", "ISO3166-1": "AU", "name": "Australia" },
+        { "id": 2316598, "admin_level": "4", "name": "Western Australia" },
+        { "id": 7001, "admin_level": "6", "name": "City of Cockburn" }
+      ],
+      "expected": []
+    },
+    {
+      "name": "Porlock, Somerset: the parish, then the county (which is too big)",
+      "relations": [
+        { "id": 62149, "admin_level": "2", "ISO3166-1": "GB", "name": "United Kingdom" },
+        { "id": 58447, "admin_level": "4", "name": "England" },
+        { "id": 72894, "admin_level": "6", "name": "Somerset" },
+        { "id": 2676434, "admin_level": "10", "name": "Porlock" }
+      ],
+      "expected": [2676434, 72894]
+    },
+    {
+      "name": "Central Bristol, which has no parishes: the city",
+      "relations": [
+        { "id": 62149, "admin_level": "2", "ISO3166-1": "GB", "name": "United Kingdom" },
+        { "id": 58447, "admin_level": "4", "name": "England" },
+        { "id": 14207403, "admin_level": "5", "name": "West of England" },
+        { "id": 57539, "admin_level": "6", "name": "City of Bristol" }
+      ],
+      "expected": [57539]
+    },
+    {
+      "name": "Camden: the London borough, not Greater London",
+      "relations": [
+        { "id": 62149, "admin_level": "2", "ISO3166-1": "GB", "name": "United Kingdom" },
+        { "id": 58447, "admin_level": "4", "name": "England" },
+        { "id": 175342, "admin_level": "5", "name": "Greater London" },
+        { "id": 51827, "admin_level": "8", "name": "London Borough of Camden" }
+      ],
+      "expected": [51827]
+    },
+    {
+      "name": "Neighbourhoods at 11, regions at 5 and boundaries without a level are left out; ties go by id",
+      "relations": [
+        { "id": 8005, "admin_level": "11", "name": "Buurt" },
+        { "id": 8004, "admin_level": null, "name": "No level" },
+        { "id": 8003, "admin_level": "nine", "name": "Not a number" },
+        { "id": 8002, "admin_level": "9", "name": "Second" },
+        { "id": 8001, "admin_level": "9", "name": "First" },
+        { "id": 8001, "admin_level": "9", "name": "First again" },
+        { "id": 8000, "admin_level": "7", "name": "Bigger" },
+        { "id": 7999, "admin_level": "6", "name": "Biggest" },
+        { "id": 7998, "admin_level": "5", "name": "Region" }
+      ],
+      "expected": [8001, 8002, 8000, 7999]
+    }
+  ],
+  "placeIds": [
+    { "osmId": 11688696, "id": "4727A801-7F55-3773-A9A7-0CFD2A835A4C" },
+    { "osmId": 123, "id": "B57E647F-BA14-30F9-82D7-B1F6F899A740" }
+  ]
+}

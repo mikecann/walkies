@@ -179,6 +179,18 @@ nonisolated struct Store {
 
     private var nearbyURL: URL { root.appending(path: "nearby.json") }
 
+    /// What places that add themselves have looked up so far (AutoPlaces). Nil the
+    /// first time, before there's been anything to look up.
+    func loadAutoPlaces() -> AutoPlaces? {
+        read(AutoPlaces.self, from: autoPlacesURL)
+    }
+
+    func save(autoPlaces: AutoPlaces) {
+        write(autoPlaces, to: autoPlacesURL)
+    }
+
+    private var autoPlacesURL: URL { root.appending(path: "auto-places.json") }
+
     /// Deletes everything the app has saved, for signing out.
     func wipe() {
         cityFiles.replace {

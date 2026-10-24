@@ -183,6 +183,36 @@ class SyncSafetyTest {
     }
 
     @Test
+    fun placesOnlyAddThemselvesOnceEveryPlaceHasComeDown() = runBlocking {
+        val (store, _) = tempStore()
+        val place = city()
+        val server = FakeServer()
+        server.seed(place)
+        server.fail(place.id)
+        val model = model(store)
+        val engine = engine(model, store, server)
+        engine.sync()
+        // The place didn't download, so one adding itself could be a second copy of it.
+        assertFalse(model.accountPulled)
+        server.fail(null)
+        engine.sync()
+        assertEquals(listOf(place.id), model.cities.map { it.id })
+        assertTrue(model.accountPulled)
+
+        // One that won't read on this version keeps them waiting too.
+        val (otherStore, _) = tempStore()
+        val other = FakeServer()
+        other.seed(place)
+        other.garble(place.id)
+        val fresh = model(otherStore)
+        val otherEngine = engine(fresh, otherStore, other)
+        otherEngine.sync()
+        assertEquals(SyncEngine.Status.Idle, otherEngine.status)
+        assertTrue(fresh.cities.isEmpty())
+        assertFalse(fresh.accountPulled)
+    }
+
+    @Test
     fun signingOutDuringAPullLeavesNothingBehind() = runBlocking {
         val (store, _) = tempStore()
         val place = city()

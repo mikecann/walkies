@@ -7,6 +7,7 @@ import com.mikecann.walkies.model.SwiftDate
 import com.mikecann.walkies.model.SyncState
 import com.mikecann.walkies.model.Walk
 import com.mikecann.walkies.model.uuidString
+import com.mikecann.walkies.place.AutoPlaces
 import com.mikecann.walkies.place.City
 import com.mikecann.walkies.place.NearbyPlaces
 import com.mikecann.walkies.place.RoadLine
@@ -23,7 +24,7 @@ import java.util.logging.Logger
 /**
  * Plain JSON files, laid out exactly like the iPhone's Store.swift: cities.json with
  * their streets in roads.json, one file per walk in walks/, stickers.json, progress.json,
- * sync.json, owner.json, nearby.json and data-version.json.
+ * sync.json, owner.json, nearby.json, auto-places.json and data-version.json.
  */
 class Store(private val root: File) {
     private val citiesFile = File(root, "cities.json")
@@ -35,6 +36,7 @@ class Store(private val root: File) {
     private val syncFile = File(root, "sync.json")
     private val ownerFile = File(root, "owner.json")
     private val nearbyFile = File(root, "nearby.json")
+    private val autoPlacesFile = File(root, "auto-places.json")
     private val cityFiles = CityFiles.at(citiesFile, roadsFile)
 
     init {
@@ -100,6 +102,10 @@ class Store(private val root: File) {
     /** Suburbs around your places, so the map can offer them without asking OpenStreetMap every launch. */
     fun loadNearby(): NearbyPlaces? = read(nearbyFile, NearbyPlaces::from)
     fun saveNearby(nearby: NearbyPlaces) = write(nearby.toJson(), nearbyFile)
+
+    /** What places that add themselves have looked up so far. Null the first time, before there's been anything to look up. */
+    fun loadAutoPlaces(): AutoPlaces? = read(autoPlacesFile, AutoPlaces::from)
+    fun saveAutoPlaces(auto: AutoPlaces) = write(auto.toJson(), autoPlacesFile)
 
     /** Deletes everything the app has saved, for signing out. */
     fun wipe() {

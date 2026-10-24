@@ -120,6 +120,8 @@ struct FogMapView: UIViewRepresentable {
     var onSelectSticker: (String) -> Void = { _ in }
     var neighbours: [PlaceResult] = []
     var onPickNeighbour: (PlaceResult) -> Void = { _ in }
+    /// Each fix behind the blue dot, which comes in whether or not a walk's going.
+    var onUserLocation: (CLLocation) -> Void = { _ in }
     /// The app's buttons over the map, in window coordinates.
     var buttons: [CGRect] = []
     /// Room for the floating dock and its raised hex above the bottom safe area.
@@ -175,6 +177,7 @@ struct FogMapView: UIViewRepresentable {
         private var neighbourPins: [NeighbourAnnotation] = []
         private var showingNeighbours = false
         private var onPickNeighbour: (PlaceResult) -> Void = { _ in }
+        private var onUserLocation: (CLLocation) -> Void = { _ in }
         private var buttons: [CGRect] = []
 
         func update(_ map: MKMapView, with view: FogMapView) {
@@ -204,15 +207,17 @@ struct FogMapView: UIViewRepresentable {
                 drawUncovered(on: map)
             }
             selectedID = view.selectedID
-            if view.flyID != flyID, !cities.isEmpty {
+            if view.flyID != flyID {
                 let first = flyID == -1
                 flyID = view.flyID
                 // Opening the app goes to where you are (an `arrive` focus request), so
-                // the first time round there's no place to fly to.
-                if !first { zoomToCity(on: map) }
+                // the first time round there's no place to fly to. Your first place,
+                // added once the map's open, still gets flown to.
+                if !first, !cities.isEmpty { zoomToCity(on: map) }
             }
 
             onPickNeighbour = view.onPickNeighbour
+            onUserLocation = view.onUserLocation
             if view.buttons != buttons {
                 buttons = view.buttons
                 placeNeighbourLabels(on: map)
@@ -442,6 +447,7 @@ struct FogMapView: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView, didUpdate userLocation: MKUserLocation) {
             guard let location = userLocation.location else { return }
+            onUserLocation(location)
             if arriving {
                 arrive(on: mapView)
             } else if following {

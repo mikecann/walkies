@@ -86,6 +86,29 @@ nonisolated struct BoundaryShape: Sendable {
         }
     }
 
+    /// Whether `p` is within `distance` of the outline (a hole's edge too), inside or out,
+    /// in the same projected units.
+    func isNear(_ p: SIMD2<Double>, within distance: Double) -> Bool {
+        guard p.x >= lo.x - distance, p.x <= hi.x + distance, p.y >= lo.y - distance, p.y <= hi.y + distance else { return false }
+        return parts.contains { part in
+            Self.ring(part.outer, isWithin: distance, of: p) || part.holes.contains { Self.ring($0, isWithin: distance, of: p) }
+        }
+    }
+
+    private static func ring(_ ring: [SIMD2<Double>], isWithin distance: Double, of p: SIMD2<Double>) -> Bool {
+        guard var a = ring.last else { return false }
+        let limit = distance * distance
+        for b in ring {
+            // The nearest point to p on the edge from a to b.
+            let ab = b - a
+            let length = simd_length_squared(ab)
+            let t = length > 0 ? min(1, max(0, simd_dot(p - a, ab) / length)) : 0
+            if simd_distance_squared(a + ab * t, p) <= limit { return true }
+            a = b
+        }
+        return false
+    }
+
     private static func ring(_ ring: [SIMD2<Double>], contains p: SIMD2<Double>) -> Bool {
         guard ring.count > 2 else { return false }
         var inside = false

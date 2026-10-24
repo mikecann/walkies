@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import java.util.UUID
 import java.util.logging.Logger
 import kotlin.math.ceil
 import kotlin.math.max
@@ -72,7 +73,10 @@ object CityBuilder {
     /** Lays the world grid over the place and keeps the tiles with a street or path through them. */
     fun build(name: String, detail: String, osmId: Long?, boundary: Boundary, ways: List<OSMWay>): City {
         val inside = City.hexes(BoundaryShape(boundary, HexGrid.projection), HexGrid)
-        return City(name = name, detail = detail, osmId = osmId, boundary = boundary, tiles = streetTiles(ways, inside), visited = emptySet(), roads = roadLines(ways))
+        return City(
+            id = osmId?.let(City::idForOsm) ?: UUID.randomUUID(),
+            name = name, detail = detail, osmId = osmId, boundary = boundary, tiles = streetTiles(ways, inside), visited = emptySet(), roads = roadLines(ways),
+        )
     }
 
     /** The tiles in the place with a walkable street or path through them. */

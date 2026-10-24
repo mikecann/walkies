@@ -8,6 +8,8 @@ import com.mikecann.walkies.model.SwiftDate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -69,39 +71,43 @@ data class NearbyPlaces(
         put("north", Codec.number(north))
         put("east", Codec.number(east))
         put("fetchedAt", Codec.number(fetchedAt.sinceReference))
-        put("places", JsonArray(places.map { place ->
-            buildJsonObject {
-                put("id", place.id)
-                put("name", place.name)
-                put("detail", place.detail)
-                put("kind", place.kind)
-                put("boundary", Codec.boundary(place.boundary))
-                put("area", Codec.number(place.area))
-                place.osmId?.let { put("osmId", it) }
-            }
-        }))
+        put("places", JsonArray(places.map(::placeJson)))
     }
 
     companion object {
         fun from(e: JsonElement): NearbyPlaces {
             val o = e as JsonObject
             fun JsonObject.double(key: String) = (this[key] as JsonPrimitive).doubleOrNull ?: throw Codec.Invalid(key)
-            fun JsonObject.string(key: String) = (this[key] as JsonPrimitive).takeIf { it.isString }?.content ?: throw Codec.Invalid(key)
             return NearbyPlaces(
                 south = o.double("south"), west = o.double("west"), north = o.double("north"), east = o.double("east"),
                 fetchedAt = SwiftDate(o.double("fetchedAt")),
-                places = (o["places"] as JsonArray).map {
-                    val p = it as JsonObject
-                    PlaceResult(
-                        id = (p["id"] as JsonPrimitive).longOrNull ?: throw Codec.Invalid("id"),
-                        name = p.string("name"),
-                        detail = p.string("detail"),
-                        kind = p.string("kind"),
-                        boundary = Codec.boundary(p["boundary"] ?: throw Codec.Invalid("boundary")),
-                        area = p.double("area"),
-                        osmId = (p["osmId"] as? JsonPrimitive)?.longOrNull,
-                    )
-                },
+                places = (o["places"] as JsonArray).map(::placeResult),
+            )
+        }
+
+        /** A PlaceResult as the iPhone's Codable writes it, in nearby.json and auto-places.json. */
+        fun placeJson(place: PlaceResult) = buildJsonObject {
+            put("id", place.id)
+            put("name", place.name)
+            put("detail", place.detail)
+            put("kind", place.kind)
+            put("boundary", Codec.boundary(place.boundary))
+            put("area", Codec.number(place.area))
+            place.osmId?.let { put("osmId", it) }
+        }
+
+        fun placeResult(e: JsonElement): PlaceResult {
+            val p = e as JsonObject
+            fun JsonObject.double(key: String) = (this[key] as JsonPrimitive).doubleOrNull ?: throw Codec.Invalid(key)
+            fun JsonObject.string(key: String) = (this[key] as JsonPrimitive).takeIf { it.isString }?.content ?: throw Codec.Invalid(key)
+            return PlaceResult(
+                id = (p["id"] as JsonPrimitive).longOrNull ?: throw Codec.Invalid("id"),
+                name = p.string("name"),
+                detail = p.string("detail"),
+                kind = p.string("kind"),
+                boundary = Codec.boundary(p["boundary"] ?: throw Codec.Invalid("boundary")),
+                area = p.double("area"),
+                osmId = (p["osmId"] as? JsonPrimitive)?.longOrNull,
             )
         }
     }
@@ -110,10 +116,44 @@ data class NearbyPlaces(
 class OSMException(status: Int) : IOException("OpenStreetMap returned an error ($status).")
 
 /**
- * The public OpenStreetMap services (OSMClient.swift): Nominatim for place boundaries,
- * Overpass for the streets and paths inside them and the suburbs nearby.
+ * One request at a time to one of OpenStreetMap's services, each starting at least
+ * [spacingMillis] after the one before (OSMLane in OSMClient.swift). Everything the app
+ * asks Nominatim or Overpass goes through these, so the suburbs next door, places
+ * adding themselves and adding one by hand can't pile up on them at once.
  */
-class OSMClient(private val http: Http = Http.Default) {
+class OSMLane(private val spacingMillis: Long) {
+    // Fair, so requests take their turns in the order they asked.
+    private val mutex = Mutex()
+    private var lastStart: Long? = null
+
+    suspend fun <T> run(request: suspend () -> T): T = mutex.withLock {
+        val last = lastStart
+        if (last != null && spacingMillis > 0) {
+            val wait = spacingMillis - (System.nanoTime() - last) / 1_000_000
+            if (wait > 0) delay(wait)
+        }
+        lastStart = System.nanoTime()
+        request()
+    }
+
+    companion object {
+        /** Nominatim asks for no more than one request a second. */
+        val nominatim = OSMLane(1100)
+        /** Overpass asks apps not to run queries side by side, and the streets query is heavy. */
+        val overpass = OSMLane(0)
+    }
+}
+
+/**
+ * The public OpenStreetMap services (OSMClient.swift): Nominatim for place boundaries,
+ * Overpass for the streets and paths inside them and the suburbs nearby. Every
+ * OSMClient shares the same [OSMLane]s unless a test gives it its own.
+ */
+class OSMClient(
+    private val http: Http = Http.Default,
+    private val nominatim: OSMLane = OSMLane.nominatim,
+    private val overpassLane: OSMLane = OSMLane.overpass,
+) {
     /**
      * Places matching the query that have a proper boundary. Nominatim asks for
      * no search-as-you-type, so only call this when you search or pick a suggestion.
@@ -169,28 +209,86 @@ class OSMClient(private val http: Http = Http.Default) {
      */
     suspend fun placesAt(points: List<Coordinate>): List<PlaceResult> {
         val ids = ArrayList<Long>()
-        for ((n, point) in points.withIndex()) {
-            if (n > 0) delay(1100)
-            val url = "https://nominatim.openstreetmap.org/reverse?" + form(
-                "lat" to point.lat.toString(), "lon" to point.lon.toString(),
-                // Suburb level. Any closer and it can answer with the suburb's name pin rather than its boundary.
-                "zoom" to "12", "format" to "jsonv2",
-            )
-            val item = get(url, english = false) as? JsonObject ?: continue
+        for (point in points) {
+            val item = reverse(point) ?: continue
             if ((item["osm_type"] as? JsonPrimitive)?.contentOrNull != "relation") continue
             val id = (item["osm_id"] as? JsonPrimitive)?.longOrNull ?: continue
             if (id !in ids) ids.add(id)
         }
-        delay(1100)
         return lookup(ids)
+    }
+
+    /**
+     * The suburb a spot is in, for places that add themselves, or none if there isn't
+     * one to add (the sea, a national park, somewhere only a county covers). Overpass
+     * says which boundaries the spot is in and AutoPlaces picks the smallest that's a
+     * suburb, town or village; one Nominatim lookup brings their outlines. If Overpass
+     * is down, Nominatim's own idea of the suburb there will do, as for the neighbours,
+     * as long as it passes the same rule.
+     */
+    suspend fun suburb(point: Coordinate): AutoPlaces.Lookup {
+        val candidates = try {
+            val query = "[out:json][timeout:25];\n" +
+                "is_in(${point.lat},${point.lon})->.here;\n" +
+                "relation(pivot.here)[\"boundary\"=\"administrative\"][\"admin_level\"];\nout tags;"
+            val response = overpass(query, timeout = 45) as? JsonObject
+            // A timed-out query still comes back 200, with a remark and nothing in it,
+            // which mustn't count as there being no suburb here.
+            if (response == null || response["remark"] != null) throw OSMException(200)
+            val elements = response["elements"] as? JsonArray ?: JsonArray(emptyList())
+            AutoPlaces.suburbCandidates(elements.mapNotNull { element ->
+                val o = element as? JsonObject ?: return@mapNotNull null
+                val id = (o["id"] as? JsonPrimitive)?.longOrNull ?: return@mapNotNull null
+                val tags = o["tags"] as? JsonObject
+                fun tag(key: String) = (tags?.get(key) as? JsonPrimitive)?.contentOrNull
+                AutoPlaces.Relation(id, tag("admin_level"), tag("ISO3166-1") ?: tag("ISO3166-1:alpha2"))
+            })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return fallbackSuburb(point)
+        }
+        if (candidates.isEmpty()) return AutoPlaces.Lookup(null)
+        return AutoPlaces.Lookup(AutoPlaces.pick(lookup(candidates), candidates))
+    }
+
+    /**
+     * With Overpass down: the boundary Nominatim's reverse lookup gives at suburb level,
+     * if its admin_level and size would pass AutoPlaces' rule (so in Australia only a
+     * locality, never the council).
+     */
+    private suspend fun fallbackSuburb(point: Coordinate): AutoPlaces.Lookup {
+        val item = reverse(point, details = true)
+        val id = (item?.get("osm_id") as? JsonPrimitive)?.longOrNull
+        if (item == null || (item["osm_type"] as? JsonPrimitive)?.contentOrNull != "relation" || id == null) {
+            return AutoPlaces.Lookup(null, fallback = true)
+        }
+        val level = ((item["extratags"] as? JsonObject)?.get("admin_level") as? JsonPrimitive)?.contentOrNull
+        val country = ((item["address"] as? JsonObject)?.get("country_code") as? JsonPrimitive)?.contentOrNull
+        val candidates = AutoPlaces.suburbCandidates(listOf(AutoPlaces.Relation(id, level)), country)
+        if (candidates.isEmpty()) return AutoPlaces.Lookup(null, fallback = true)
+        return AutoPlaces.Lookup(AutoPlaces.pick(lookup(candidates), candidates), fallback = true)
+    }
+
+    /**
+     * Nominatim's reverse lookup at suburb level. [details] brings the boundary's tags
+     * (its admin_level) and the country it's in.
+     */
+    private suspend fun reverse(point: Coordinate, details: Boolean = false): JsonObject? {
+        val url = "https://nominatim.openstreetmap.org/reverse?" + form(
+            "lat" to point.lat.toString(), "lon" to point.lon.toString(),
+            // Suburb level. Any closer and it can answer with the suburb's name pin rather than its boundary.
+            "zoom" to "12", "format" to "jsonv2",
+            *(if (details) arrayOf("extratags" to "1", "addressdetails" to "1") else emptyArray<Pair<String, String>>()),
+        )
+        return get(url, english = false) as? JsonObject
     }
 
     /** Outlines for these OSM boundary relations, from Nominatim. */
     private suspend fun lookup(ids: List<Long>): List<PlaceResult> {
         val places = ArrayList<PlaceResult>()
-        // Nominatim looks up at most 50 at a time, and asks for one request a second.
-        for ((n, chunk) in ids.chunked(50).withIndex()) {
-            if (n > 0) delay(1000)
+        // Nominatim looks up at most 50 at a time.
+        for (chunk in ids.chunked(50)) {
             val url = "https://nominatim.openstreetmap.org/lookup?" + form(
                 "osm_ids" to chunk.joinToString(",") { "R$it" },
                 "format" to "jsonv2", "polygon_geojson" to "1", "polygon_threshold" to "0.0001",
@@ -201,17 +299,18 @@ class OSMClient(private val http: Http = Http.Default) {
         return places
     }
 
+    /** One Nominatim request, in turn with every other. */
     private suspend fun get(url: String, english: Boolean = true): JsonElement? {
         val headers = HashMap<String, String>()
         headers["User-Agent"] = USER_AGENT
         if (english) headers["Accept-Language"] = "en"
-        val response = withContext(Dispatchers.IO) { http.send(url, null, headers, 60) }
+        val response = nominatim.run { withContext(Dispatchers.IO) { http.send(url, null, headers, 60) } }
         if (response.status !in 200..299) throw OSMException(response.status)
         return withContext(Dispatchers.Default) { Json.parseToJsonElement(response.body.decodeToString()) }
     }
 
-    /** Runs an Overpass query, trying each server in turn. */
-    private suspend fun overpass(query: String, timeout: Int = 150): JsonElement? {
+    /** Runs an Overpass query, trying each server in turn, one query at a time. */
+    private suspend fun overpass(query: String, timeout: Int = 150): JsonElement? = overpassLane.run {
         val body = "data=" + URLEncoder.encode(query, "UTF-8")
         var lastError: Exception = OSMException(0)
         for (endpoint in OVERPASS) {
@@ -224,7 +323,7 @@ class OSMClient(private val http: Http = Http.Default) {
                     )
                 }
                 if (response.status !in 200..299) throw OSMException(response.status)
-                return withContext(Dispatchers.Default) { Json.parseToJsonElement(response.body.decodeToString()) }
+                return@run withContext(Dispatchers.Default) { Json.parseToJsonElement(response.body.decodeToString()) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -78,6 +80,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 /**
  * The map with the clouds over it and the buttons on top: MapScreen in ContentView.swift,
@@ -98,6 +102,8 @@ fun MapScreen(
     scope: CoroutineScope,
     /** The map's tab is showing. Under another tab the clouds stop drifting. */
     active: Boolean,
+    /** A secret's card is open over the map. */
+    covered: Boolean = false,
     onOpenSettings: () -> Unit,
     onShowPlaces: () -> Unit,
     onFixPermissions: () -> Unit,
@@ -243,6 +249,18 @@ fun MapScreen(
     LaunchedEffect(here) {
         if (following && here != null) state.controller?.lookAt(here.coordinate, null, animated = true)
     }
+    // A place that's added itself: a few seconds once you can see it, not behind the walk
+    // summary or a card, on another tab, or with the app in the background. Covering it
+    // starts the count again.
+    val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
+    val inView = active && !covered && lifecycle.isAtLeast(Lifecycle.State.RESUMED) && model.recap == null &&
+        model.stickerQueue.isEmpty() && pickedNeighbour == null && addingStatus == null && addingError == null
+    val noticeId = model.addedPlaceNotice?.id
+    LaunchedEffect(noticeId, inView) {
+        if (noticeId == null || !inView) return@LaunchedEffect
+        delay(5000)
+        if (model.addedPlaceNotice?.id == noticeId) model.dismissAddedPlaceNotice()
+    }
 
     /** Where am I: street level, where you can see the dotted roads to head for, and keep following. */
     fun focusOnYou() {
@@ -292,8 +310,24 @@ fun MapScreen(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.mapButton("top leading", buttonFrames)) {
                 val hidden = model.stickersHere
                 val secrets = if (hidden.isEmpty()) null else hidden.count { model.foundStickers[it.first.id] != null } to hidden.size
-                PlaceChip(model.selectedCity, name, picture, secrets, onChangePlace = onShowPlaces)
+                PlaceChip(model.selectedCity, name, picture, secrets, finding = model.findingFirstPlace, onChangePlace = onShowPlaces)
                 LiveShellsChip(model, onShowProgress)
+                val notice = model.addedPlaceNotice
+                AnimatedVisibility(
+                    notice != null,
+                    enter = fadeIn() + scaleIn(initialScale = 0.8f, transformOrigin = TransformOrigin(0f, 0f)),
+                    exit = fadeOut() + scaleOut(targetScale = 0.8f, transformOrigin = TransformOrigin(0f, 0f)),
+                ) {
+                    // Keeps showing the last one while it shrinks away.
+                    var shown by remember { mutableStateOf(notice) }
+                    if (notice != null) shown = notice
+                    shown?.let { added ->
+                        AddedPlaceNote(added.name) {
+                            model.select(added.id)
+                            model.dismissAddedPlaceNotice()
+                        }
+                    }
+                }
             }
         }
 
@@ -307,6 +341,9 @@ fun MapScreen(
                 .mapButton("bottom", buttonFrames),
         ) {
             if (!hasToken) MissingToken()
+            AnimatedVisibility(model.showWalkHint && model.activeWalk == null, enter = fadeIn(), exit = fadeOut()) {
+                WalkHint()
+            }
             AnimatedVisibility(
                 model.secretsAlreadyWalked > 0,
                 enter = fadeIn() + scaleIn(initialScale = 0.8f),
@@ -390,6 +427,37 @@ fun mapCosmetics(context: android.content.Context, trail: String, marker: String
         footprint = if (trail == "trail.footprints") loadAssetImage(context, "progress-footprint")?.asAndroidBitmap() else null,
         spyglass = ring?.let { loadAssetImage(context, "progress-spyglass")?.asAndroidBitmap() },
         ring = ring?.let { SpyglassRing(it.centre.lat, it.centre.lon, it.radius) },
+    )
+}
+
+/** Until your first tile clears: what to do, in one line (WalkHint in ContentView.swift). */
+@Composable
+private fun WalkHint() {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .stickerCard(RoundedCornerShape(20.dp))
+            .semantics(mergeDescendants = true) {}
+            .padding(start = 8.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+    ) {
+        AssetIcon("icon-walk", 24.dp)
+        BasicText("Go for a walk to clear the clouds", style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold))
+    }
+}
+
+/** A place that's just added itself, while you had others. Tap it to go and look (AddedPlaceNote in ContentView.swift). */
+@Composable
+private fun AddedPlaceNote(name: String, onOpen: () -> Unit) {
+    BasicText(
+        "Added $name to your places",
+        style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold),
+        maxLines = 2,
+        modifier = Modifier
+            .widthIn(max = 280.dp)
+            .stickerCard(RoundedCornerShape(20.dp))
+            .pressScale(onOpen)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
     )
 }
 

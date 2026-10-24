@@ -102,7 +102,8 @@ class AddPlaceTest {
         val (store, _) = tempStore()
         val data = PlaceData.parse(geographe.decodeToString())
         val a = CityBuilder.build(place(), data.ways, emptyList())
-        val b = CityBuilder.build(place().copy(name = "Other"), data.ways, emptyList())
+        // A different boundary, so it doesn't get the same id from its relation.
+        val b = CityBuilder.build(place(osmId = 2).copy(name = "Other"), data.ways, emptyList())
         store.save(listOf(a, b))
         store.save(walk())
         val model = AppModel(store, FakeSettings(selectedCity = null), FakeLocation())

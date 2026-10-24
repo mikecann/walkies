@@ -15,7 +15,7 @@ let package = Package(name: "WalkiesPlacesTests", platforms: [.macOS(.v15)], tar
     .testTarget(name: "WalkiesTests", dependencies: ["Walkies"])
 ])
 ''')
-for name in ['Geo', 'HexGrid', 'City', 'Walk', 'Boundary']:
+for name in ['Geo', 'HexGrid', 'City', 'Walk', 'Boundary', 'Mist', 'AutoPlaces']:
     shutil.copy(f'Walkies/Model/{name}.swift', root / 'Sources/Walkies')
 for name in ['OSMClient', 'Convex', 'CachedPlaceData', 'CityBuilder']:
     shutil.copy(f'Walkies/Services/{name}.swift', root / 'Sources/Walkies')

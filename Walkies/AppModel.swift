@@ -191,6 +191,12 @@ final class AppModel {
         if worldGridResetPending { UserDefaults.standard.removeObject(forKey: "lastSynced") }
         ledger = worldGridResetPending ? Ledger() : store.loadProgress()
         cities = worldGridResetPending ? [] : store.loadCities()
+        autoPlaces = store.loadAutoPlaces() ?? AutoPlaces()
+        if autoPlaces.walksSince == nil {
+            // Walks from before this version are left alone.
+            autoPlaces.walksSince = .now
+            store.save(autoPlaces: autoPlaces)
+        }
         teams = store.loadTeams()
         self.alwaysOn = alwaysOn ?? UserDefaults.standard.bool(forKey: "alwaysOn")
 
@@ -558,6 +564,7 @@ final class AppModel {
         }
         refreshProgressPicks()
         requestSync?()
+        addPlacesYouveBeen()
     }
 
     /// Plays an old walk's replay again, from walk history. Which tiles were new
@@ -653,6 +660,7 @@ final class AppModel {
             placeYouOnNextFix = false
             followIntoPlace(at: point.coordinate)
         }
+        noteWhereYouAre(location)
     }
 
     /// On a walk, whichever of your places you're in becomes the selected one, so the
@@ -858,6 +866,7 @@ final class AppModel {
         store.save(cities)
         refreshProgressPicks()
         requestSync?()
+        addPlacesYouveBeen()
     }
 
     // MARK: Always on
@@ -1045,14 +1054,35 @@ final class AppModel {
 
     // MARK: Cities
 
-    func add(_ city: City) {
+    /// - Parameters:
+    ///   - selecting: pick it and fly there. Places that add themselves while you've
+    ///     got others don't take you away from what you're looking at.
+    ///   - builtFrom: the walks it was built with. Any that have ended since are
+    ///     walked into it too, so their tiles count.
+    func add(_ city: City, selecting: Bool = true, builtFrom: [Walk]? = nil) {
+        // Already one of yours: the same suburb added by hand and found by itself, or
+        // added on another phone and synced meanwhile. Just go there.
+        if let have = cities.first(where: { $0.id == city.id || (city.osmId != nil && $0.osmId == city.osmId) }) {
+            if selecting { select(have.id) }
+            return
+        }
         var city = city
+        let shape = city.shape()
+        if let builtFrom {
+            let had = Set(builtFrom.map(\.id))
+            for walk in walks where !had.contains(walk.id) {
+                _ = city.visit(CoverageTracer.samples(for: walk.points), within: shape)
+            }
+        }
+        walkActiveWalk(into: &city, within: shape)
         city.updatedAt = .now
         cities.append(city)
         placesRevision += 1
         rebuildCountingTiles()
-        shapes[city.id] = city.shape()
-        select(city.id)
+        shapes[city.id] = shape
+        // Its dates for the mist come from your walks, even if the walk you're on gave it some.
+        lastWalkedPending.insert(city.id)
+        if selecting { select(city.id) }
         placeStickers()
         tilesRevision += 1
         store.save(cities)
@@ -1062,6 +1092,23 @@ final class AppModel {
         fillInLastWalked()
     }
 
+    /// A place added partway through a walk gets the walk so far, as if it had been
+    /// there all along: its tiles count, and are new on this walk.
+    private func walkActiveWalk(into city: inout City, within shape: BoundaryShape) {
+        // A walk that adds itself uncovers everything since it started once it's sure
+        // it's a walk, and this place will be among them then.
+        guard var walk = activeWalk, !autoWalkPending else { return }
+        let (samples, times) = CoverageTracer.timedSamples(for: walk.points)
+        let tiles = city.tiles
+        let fresh = city.visit(samples, within: shape)
+        if let last = times.last { city.noteWalked(samples, at: last, mistDays: Mist.days) }
+        guard !fresh.isEmpty else { return }
+        freshTiles[city.id, default: []].formUnion(fresh)
+        addedTiles[city.id, default: []].formUnion(fresh.subtracting(tiles))
+        walk.newTiles += fresh.count
+        activeWalk = walk
+    }
+
     func deleteCity(_ id: UUID) {
         guard let i = cities.firstIndex(where: { $0.id == id }) else { return }
         deleteCities(at: IndexSet(integer: i))
@@ -1069,6 +1116,9 @@ final class AppModel {
 
     func deleteCities(at offsets: IndexSet) {
         let removed = offsets.map { cities[$0].id }
+        // Deleted on purpose, so it doesn't add itself again next time you walk there.
+        for i in offsets { if let osmId = cities[i].osmId { autoPlaces.decline(osmId: osmId) } }
+        saveAutoPlaces()
         placesDeleted?(removed)
         cities.remove(atOffsets: offsets)
         placesRevision += 1
@@ -1107,9 +1157,12 @@ final class AppModel {
         }
     }
 
-    /// The box around all your places, grown by this many metres each way.
+    /// The box around your places, grown by this many metres each way. When they're
+    /// spread far apart (a holiday suburb that added itself, say), it's just the ones
+    /// near the selected place, so the suburbs nearby are looked up for one area at a
+    /// time rather than for everywhere in between.
     private func box(around metres: Double) -> (south: Double, west: Double, north: Double, east: Double)? {
-        let all = cities.map(\.boundary.bounds)
+        let all = neighbourhoodPlaces.map(\.boundary.bounds)
         guard let south = all.map(\.south).min(), let west = all.map(\.west).min(),
               let north = all.map(\.north).max(), let east = all.map(\.east).max()
         else { return nil }
@@ -1117,6 +1170,21 @@ final class AppModel {
         let dLon = dLat / max(0.1, cos((south + north) / 2 * .pi / 180))
         return (south - dLat, west - dLon, north + dLat, east + dLon)
     }
+
+    /// Your places close enough together to share one list of neighbours.
+    private var neighbourhoodPlaces: [City] {
+        let all = cities.map(\.boundary.bounds)
+        guard let south = all.map(\.south).min(), let west = all.map(\.west).min(),
+              let north = all.map(\.north).max(), let east = all.map(\.east).max(),
+              Coordinate(lat: south, lon: west).distance(to: Coordinate(lat: north, lon: east)) > Self.neighbourhoodSpan,
+              let centre = (selectedCity ?? cities.first)?.boundary.centre
+        else { return cities }
+        return cities.filter { $0.boundary.centre.distance(to: centre) <= Self.neighbourhoodSpan / 2 }
+    }
+
+    /// Metres corner to corner. Places spread wider than this get neighbours only
+    /// around the selected one.
+    static let neighbourhoodSpan = 60_000.0
 
     /// Uses the saved list if it still covers your places and is under a month old.
     /// Otherwise asks Overpass, which is quick when it's up, and falls back to asking
@@ -1203,6 +1271,209 @@ final class AppModel {
             }
         }
         return points
+    }
+
+    // MARK: Places that add themselves
+
+    /// What's been looked up so far, saved in auto-places.json.
+    @ObservationIgnored private(set) var autoPlaces = AutoPlaces()
+    /// Whether the app's on screen. Only a fix while it is can add where you are: one in
+    /// the background could be from a car.
+    @ObservationIgnored private(set) var inForeground = false
+    /// Set when the app comes to the front, so the next good fix is checked for a suburb
+    /// to add, and cleared when it goes. Never when iOS relaunches it in the background
+    /// for always-on: only walks add places then.
+    @ObservationIgnored var checkSpotOnNextFix = false
+    /// Where you were when the app opened, until it's been checked.
+    @ObservationIgnored private var spotToCheck: AutoPlaces.Spot?
+    /// Every place in the account has come down since the app opened or you signed in,
+    /// so a suburb that adds itself can't be a second copy of one the account has.
+    @ObservationIgnored private(set) var accountPulled = false
+    @ObservationIgnored private var autoAdding = false
+    @ObservationIgnored private var autoAddAgain = false
+    /// While your first place is being found and built, for the place chip.
+    private(set) var findingFirstPlace = false
+    /// A place that's just added itself while you had others, for a note on the map.
+    var addedPlaceNotice: AddedPlace?
+
+    struct AddedPlace: Equatable {
+        var id: UUID
+        var name: String
+    }
+
+    /// Tests stand in for OpenStreetMap and the street download (for adding by hand too).
+    @ObservationIgnored var lookUpSuburb: ((Coordinate) async throws -> AutoPlaces.Lookup)?
+    @ObservationIgnored var buildPlace: ((PlaceResult, [Walk]) async throws -> City)?
+
+    /// Until your first tile clears, the map says to go for a walk. Tiles only ever get
+    /// uncovered, so once one has this never shows again.
+    var showWalkHint: Bool { !cities.isEmpty && !cities.contains { !$0.visited.isEmpty } }
+
+    /// The app's come to the front, or gone from it. Coming back looks again at where
+    /// you are; going clears that, so a fix from later (in a car, say) can't count.
+    func foreground(_ active: Bool) {
+        inForeground = active
+        checkSpotOnNextFix = active
+        if !active { spotToCheck = nil }
+    }
+
+    /// The first good fix after the app comes to the front, from GPS or the map's blue
+    /// dot. If it's not in one of your places, or near one, its suburb adds itself.
+    /// Fixes moving faster than a walk, or that the motion chip says are on wheels,
+    /// are passed over for the next.
+    func noteWhereYouAre(_ location: CLLocation) {
+        guard checkSpotOnNextFix, inForeground, !locked, location.timestamp.timeIntervalSinceNow > -60,
+              location.horizontalAccuracy >= 0, location.horizontalAccuracy <= AutoPlaces.spotAccuracy,
+              !motion.onWheels, location.speed <= CoverageTracer.maxSpeed
+        else { return }
+        checkSpotOnNextFix = false
+        spotToCheck = AutoPlaces.Spot(point: Coordinate(location.coordinate), accuracy: location.horizontalAccuracy)
+        addPlacesYouveBeen()
+    }
+
+    /// The sync engine has pulled every place in the account, so a suburb that adds
+    /// itself now won't be one the account already had.
+    func pulledAccount() {
+        accountPulled = true
+        addPlacesYouveBeen()
+    }
+
+    /// Adds the suburbs you've been in that aren't one of your places yet: where you
+    /// were when the app opened, and wherever walks since the last check went on foot.
+    /// Called when the app opens, when a walk ends and after each sync, never from
+    /// moving the map about. One run at a time, and one lookup at a time within it.
+    func addPlacesYouveBeen() {
+        guard !locked, !worldGridResetPending, accountPulled, servicesEnabled || lookUpSuburb != nil else { return }
+        if autoAdding {
+            autoAddAgain = true
+            return
+        }
+        autoAdding = true
+        autoAddAgain = false
+        let generation = dataGeneration
+        Task {
+            await addPlacesYouveBeen(generation: generation)
+            // Signing out resets all this itself.
+            guard generation == dataGeneration else { return }
+            autoAdding = false
+            findingFirstPlace = false
+            if autoAddAgain { addPlacesYouveBeen() }
+        }
+    }
+
+    /// Waits for any run of `addPlacesYouveBeen`, for tests.
+    func waitForPlacesYouveBeen() async {
+        while autoAdding { try? await Task.sleep(for: .milliseconds(5)) }
+    }
+
+    private func addPlacesYouveBeen(generation: Int) async {
+        let due = autoPlaces.due(walks, now: .now)
+        let tracks = await Task.detached(priority: .utility) { due.map { CoverageTracer.samples(for: $0.points) } }.value
+        var lookups = 0
+        // Hexes asked about this time, so one whose answer was one of your own places
+        // isn't asked about again straight away.
+        var asked = Set<Hex>()
+        // Every round adds a place, asks about a spot or stops, so this is only a backstop.
+        for _ in 0..<100 {
+            guard generation == dataGeneration, !worldGridResetPending else { return }
+            let auto = autoPlaces, here = spotToCheck, known = nearby, skip = asked, now = Date.now
+            let places = cities.map { shape(for: $0) }
+            let isYours = Self.isYours(in: cities)
+            let next = await Task.detached(priority: .utility) {
+                auto.next(here: here, tracks: tracks, places: places, known: known, isYours: isYours, asked: skip, now: now)
+            }.value
+            guard generation == dataGeneration else { return }
+            switch next {
+            case .nothing:
+                if spotToCheck == here { spotToCheck = nil }
+                autoPlaces.checked(due)
+                saveAutoPlaces()
+                return
+            case .later:
+                return
+            case .add(let place):
+                findingFirstPlace = cities.isEmpty
+                // Whether it's added or its streets wouldn't download (and it waits its
+                // turn), round again for the rest.
+                await autoAdd(place, generation: generation)
+            case .lookUp(let spot):
+                guard lookups < AutoPlaces.lookupsPerRun else { return }
+                lookups += 1
+                asked.insert(HexGrid.world.hex(containing: spot))
+                findingFirstPlace = cities.isEmpty
+                do {
+                    let found: AutoPlaces.Lookup
+                    if let lookUpSuburb { found = try await lookUpSuburb(spot) } else { found = try await OSMClient.suburb(at: spot) }
+                    guard generation == dataGeneration else { return }
+                    autoPlaces.looked(at: spot, found: found, isYours: Self.isYours(in: cities), now: .now)
+                    saveAutoPlaces()
+                } catch {
+                    guard generation == dataGeneration else { return }
+                    Self.log.info("Couldn't find the suburb at a spot, trying again later: \(error)")
+                    autoPlaces.lookUpFailed(now: .now)
+                    saveAutoPlaces()
+                    return
+                }
+            }
+        }
+    }
+
+    /// Builds and adds a suburb that's added itself. Your first place is selected and
+    /// the map flies there. Otherwise it's only selected if you're standing in it, and
+    /// a note on the map says it's been added. If its streets won't download, it waits
+    /// longer each time before it's tried again.
+    private func autoAdd(_ place: PlaceResult, generation: Int) async {
+        let builtFrom = walks
+        do {
+            let city: City
+            if let buildPlace {
+                city = try await buildPlace(place, builtFrom)
+            } else {
+                city = try await CityBuilder.build(from: place, walks: builtFrom, client: await makePlaceClient?(), status: { _ in })
+            }
+            guard generation == dataGeneration, !worldGridResetPending else { return }
+            // Deleted while this one was downloading: it stays in `found`, so its spots
+            // aren't asked about again, and isn't added.
+            if place.osmId.map(autoPlaces.declined.contains) == true { return }
+            autoPlaces.added(place)
+            saveAutoPlaces()
+            // Added by hand, or pulled from the account, while this one was downloading.
+            guard !isYours(place) else { return }
+            let first = cities.isEmpty
+            add(city, selecting: first, builtFrom: builtFrom)
+            if !first {
+                if let spot = spotToCheck?.point, shape(for: city).contains(city.grid.projection.project(spot)) { selectedCityID = city.id }
+                addedPlaceNotice = AddedPlace(id: city.id, name: city.name)
+            }
+        } catch {
+            guard generation == dataGeneration else { return }
+            Self.log.info("Couldn't add \(place.name) by itself, trying again later: \(error)")
+            autoPlaces.failedToBuild(place, now: .now)
+            saveAutoPlaces()
+        }
+    }
+
+    /// One of your places already: the same OSM boundary, or for places saved before
+    /// those were kept, the same name.
+    private func isYours(_ place: PlaceResult) -> Bool {
+        Self.isYours(in: cities)(place)
+    }
+
+    /// `isYours` for these places, to take off the main thread.
+    private static func isYours(in cities: [City]) -> @Sendable (PlaceResult) -> Bool {
+        let mine = cities.map { (osmId: $0.osmId, name: $0.name) }
+        return { place in
+            mine.contains { city in
+                if let osmId = place.osmId, let have = city.osmId { return osmId == have }
+                return city.name.caseInsensitiveCompare(place.name) == .orderedSame
+            }
+        }
+    }
+
+    private func saveAutoPlaces() {
+        guard !locked else { return }
+        autoPlaces.tidy(now: .now)
+        store.save(autoPlaces: autoPlaces)
     }
 
     // MARK: Progression
@@ -1349,25 +1620,7 @@ final class AppModel {
             changedCities.insert(remote.id)
             if let i = cities.firstIndex(where: { $0.id == remote.id }) {
                 var city = cities[i]
-                let localCredits = Set((city.tileCredits ?? []).map(\.id))
-                let remoteCredits = Set((remote.tileCredits ?? []).map(\.id))
-                let localStreets = city.streetsVersion ?? 0, remoteStreets = remote.streetsVersion ?? 0
-                let hadMore = !city.visited.isSubset(of: remote.visited) || !localCredits.isSubset(of: remoteCredits)
-                    || localStreets > remoteStreets || city.lastWalked?.hasLater(than: remote.lastWalked) == true
-                city.mergeTileCredits(from: remote)
-                city.mergeLastWalked(remote.lastWalked)
-                city.visited.formUnion(remote.visited)
-                city.stickers = (city.stickers ?? [:]).merging(remote.stickers ?? [:]) { _, theirs in theirs }
-                // Street tiles come from the copy with the newer WalkableRule, so a phone
-                // that hasn't updated can't bring busy roads back. Tiles you've been to stay.
-                if remoteStreets > localStreets {
-                    city.replaceStreetTiles(remote.tiles, roads: remote.roads, version: remoteStreets)
-                } else if remoteStreets < localStreets {
-                    city.replaceStreetTiles(city.tiles, roads: nil, version: localStreets)
-                } else {
-                    city.tiles.formUnion(remote.tiles)
-                }
-                city.roads = city.roads ?? remote.roads
+                let hadMore = city.merge(remote)
                 city.updatedAt = hadMore ? .now : max(city.lastChanged, remote.lastChanged)
                 cities[i] = city
             } else {
@@ -1487,6 +1740,16 @@ final class AppModel {
         secretsAlreadyWalked = 0
         nearby = []
         selectedCityID = nil
+        autoPlaces = AutoPlaces(walksSince: .now)
+        spotToCheck = nil
+        // Ready for whoever signs in next, if you're looking. Not when a sync in the
+        // background has found someone else signed in: that fix could be from anywhere.
+        checkSpotOnNextFix = inForeground
+        accountPulled = false
+        autoAdding = false
+        autoAddAgain = false
+        findingFirstPlace = false
+        addedPlaceNotice = nil
         tilesRevision += 1
         clouds = nil
         store.wipe()
@@ -1558,10 +1821,23 @@ extension AppModel {
     /// Both the neighbour buttons and place search add to your own places.
     func addPlace(_ place: PlaceResult, status: @escaping @MainActor @Sendable (String) -> Void) async throws {
         guard !worldGridResetPending else { throw ConvexError.server("Connect to finish rebuilding your places first.") }
+        // Already one of yours, say it added itself: no need to fetch it again.
+        if let osmId = place.osmId, let have = cities.first(where: { $0.osmId == osmId }) {
+            select(have.id)
+            return
+        }
         let generation = dataGeneration
-        let city = try await CityBuilder.build(from: place, walks: walks, client: await makePlaceClient?(), status: status)
+        let builtFrom = walks
+        let city: City
+        if let buildPlace {
+            city = try await buildPlace(place, builtFrom)
+        } else {
+            city = try await CityBuilder.build(from: place, walks: builtFrom, client: await makePlaceClient?(), status: status)
+        }
         guard generation == dataGeneration else { throw CancellationError() }
-        add(city)
+        add(city, builtFrom: builtFrom)
+        autoPlaces.added(place)
+        saveAutoPlaces()
     }
 
     func openTeamURL(_ url: URL) {

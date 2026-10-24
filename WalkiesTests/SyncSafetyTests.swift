@@ -126,6 +126,41 @@ struct SyncSafetyTests {
         #expect(Set(model.walks.map(\.id)) == [walks[0].id, walks[2].id])
     }
 
+    @Test func placesOnlyAddThemselvesOnceEveryPlaceHasComeDown() async throws {
+        let store = Store(root: root())
+        defer { store.wipe() }
+        let place = city()
+        let server = SafetyServer()
+        await server.seed(place)
+        await server.fail(place.id)
+        let client = client(server)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, makeClient: { client })
+        await engine.sync()
+        // The place didn't download, so one adding itself could be a second copy of it.
+        #expect(!model.accountPulled)
+        await server.fail(nil)
+        await engine.sync()
+        #expect(model.cities.map(\.id) == [place.id])
+        #expect(model.accountPulled)
+
+        // One that won't read on this version keeps them waiting too.
+        let otherStore = Store(root: root())
+        defer { otherStore.wipe() }
+        let other = SafetyServer()
+        await other.seed(place)
+        await other.garble(place.id)
+        let otherClient = self.client(other)
+        let fresh = AppModel(store: otherStore, servicesEnabled: false, alwaysOn: false)
+        await fresh.waitForHistory()
+        let otherEngine = SyncEngine(model: fresh, store: otherStore, isSignedIn: { true }, makeClient: { otherClient })
+        await otherEngine.sync()
+        #expect(otherEngine.status == .idle)
+        #expect(fresh.cities.isEmpty)
+        #expect(!fresh.accountPulled)
+    }
+
     @Test func signingOutDuringAPullLeavesNothingBehind() async throws {
         let store = Store(root: root())
         defer { store.wipe() }
