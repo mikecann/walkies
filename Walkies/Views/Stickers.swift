@@ -398,8 +398,9 @@ private struct NewStickerReveal: View {
     }
 }
 
-/// Matches SecretPop's gold rays without changing the walk replay presentation.
-private struct SunburstView: View {
+/// The slow-spinning gold rays behind a sticker, on a new secret's discovery card and
+/// in the walk replay's secret pop-up. Still when Reduce Motion is on.
+struct SunburstView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var spin = false
 
