@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 nonisolated struct City: Codable, Equatable, Identifiable, Sendable {
@@ -53,6 +54,44 @@ nonisolated struct City: Codable, Equatable, Identifiable, Sendable {
     }
 
     var lastChanged: Date { updatedAt ?? createdAt }
+
+    /// The id a place gets from its OSM relation, the same on every phone, so a suburb
+    /// added on two phones before they've synced (say by adding itself on both) is one
+    /// place in the account rather than two. A name-based UUID (version 3), which is
+    /// what Java's UUID.nameUUIDFromBytes makes on Android.
+    static func id(forOSM osmId: Int) -> UUID {
+        var bytes = Array(Insecure.MD5.hash(data: Data("walkies:osm-relation:\(osmId)".utf8)))
+        bytes[6] = (bytes[6] & 0x0f) | 0x30
+        bytes[8] = (bytes[8] & 0x3f) | 0x80
+        return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                           bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
+    }
+
+    /// Takes in another copy of the same place, from the account or another phone:
+    /// every tile either has walked, credits, secrets and mist dates. Street tiles come
+    /// from the copy with the newer WalkableRule, so a phone that hasn't updated can't
+    /// bring busy roads back. Tiles you've been to stay. True if this copy had anything
+    /// the other didn't, so it should be sent back up.
+    mutating func merge(_ other: City) -> Bool {
+        let localCredits = Set((tileCredits ?? []).map(\.id))
+        let otherCredits = Set((other.tileCredits ?? []).map(\.id))
+        let localStreets = streetsVersion ?? 0, otherStreets = other.streetsVersion ?? 0
+        let hadMore = !visited.isSubset(of: other.visited) || !localCredits.isSubset(of: otherCredits)
+            || localStreets > otherStreets || lastWalked?.hasLater(than: other.lastWalked) == true
+        mergeTileCredits(from: other)
+        mergeLastWalked(other.lastWalked)
+        visited.formUnion(other.visited)
+        stickers = (stickers ?? [:]).merging(other.stickers ?? [:]) { _, theirs in theirs }
+        if otherStreets > localStreets {
+            replaceStreetTiles(other.tiles, roads: other.roads, version: otherStreets)
+        } else if otherStreets < localStreets {
+            replaceStreetTiles(tiles, roads: nil, version: localStreets)
+        } else {
+            tiles.formUnion(other.tiles)
+        }
+        roads = roads ?? other.roads
+        return hadMore
+    }
 
     var progress: Double {
         tiles.isEmpty ? 0 : Double(visited.count) / Double(tiles.count)

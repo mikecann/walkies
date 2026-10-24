@@ -40,6 +40,7 @@ nonisolated enum CityBuilder {
         let grid = HexGrid.world
         let shape = BoundaryShape(place.boundary, projection: grid.projection)
         var city = City(
+            id: place.osmId.map(City.id(forOSM:)) ?? UUID(),
             name: place.name, detail: place.detail, osmId: place.osmId, boundary: place.boundary,
             tiles: streetTiles(from: ways, inside: City.hexes(inside: shape, grid: grid)), visited: [], roads: roadLines(from: ways),
             streetsVersion: streetsVersion

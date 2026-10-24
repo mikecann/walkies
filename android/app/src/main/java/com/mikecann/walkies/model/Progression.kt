@@ -369,9 +369,7 @@ object Progression {
      * identities. Ordinary state/recap reads use the returned counts without replay.
      */
     fun backfill(walks: List<Walk>, cities: List<City>, onReplay: (UUID) -> Unit = {}): Backfill {
-        val ordered = tileRecords(walks, cities).filter { it.endedAt != null }.sortedWith { a, b ->
-            if (a.startedAt == b.startedAt) a.id.uuidString.compareTo(b.id.uuidString) else a.startedAt.compareTo(b.startedAt)
-        }
+        val ordered = tileRecords(walks, cities).filter { it.endedAt != null }.sortedWith(walkedFirst)
         val savedIds = walks.mapTo(HashSet()) { it.id }
         val seen = HashMap<UUID, MutableSet<Hex>>()
         val result = HashMap<UUID, Map<UUID, Int>>()
@@ -409,6 +407,28 @@ object Progression {
             if (walk.id in savedIds) repaired.add(walk)
         }
         return Backfill(repaired, result)
+    }
+
+    /** The order tiles are first found in: by when each walk started. */
+    val walkedFirst = Comparator<Walk> { a, b ->
+        if (a.startedAt == b.startedAt) a.id.uuidString.compareTo(b.id.uuidString) else a.startedAt.compareTo(b.startedAt)
+    }
+
+    /**
+     * Each walk's (and short outing's) first-discovery count in one place, worked out
+     * as [backfill] does, for when a place that's just been added credits its tiles to
+     * some walks.
+     */
+    fun placeCounts(placeId: UUID, walks: List<Walk>, cities: List<City>): Map<UUID, Int> {
+        val key = placeId.uuidString
+        val seen = HashSet<Hex>()
+        val counts = HashMap<UUID, Int>()
+        for (walk in tileRecords(walks, cities).filter { it.endedAt != null }.sortedWith(walkedFirst)) {
+            val tiles = walk.newTileHexesByPlace?.get(key) ?: continue
+            counts[walk.id] = tiles.count { it !in seen }
+            seen.addAll(tiles)
+        }
+        return counts
     }
 
     /**

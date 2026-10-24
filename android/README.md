@@ -33,7 +33,7 @@ The first build downloads Nunito (the rounded heading font) into `app/src/main/a
 
 ## Where things are
 
-- `AppModel.kt`: places, walks and turning GPS fixes into uncovered tiles (the walk side of `AppModel.swift`), adding and deleting places, the suburbs next door, and taking in what sync pulls down. Plain Kotlin, tested on the JVM.
+- `AppModel.kt`: places, walks and turning GPS fixes into uncovered tiles (the walk side of `AppModel.swift`), adding and deleting places, places that add themselves where you are and where you've walked (deciding in `place/AutoPlaces.kt`), the suburbs next door, and taking in what sync pulls down. Plain Kotlin, tested on the JVM.
 - `convex/`: `ConvexClient`, calling Convex functions over HTTP (`Convex.swift`). Debug builds use the dev deployment (resolute-pig-177), release builds prod (savory-bee-296), from `BuildConfig`.
 - `auth/`: `Account` (`Account.swift`): Google sign-in through Convex Auth in a Custom Tab, coming back on `walkies://signed-in`, the session sealed by the Android Keystore, and refreshing it only in its last five seconds. Test sign-in lives in `src/debug` and isn't in release builds.
 - `sync/`: `SyncEngine`, a port of `Sync.swift`: push, explicit place deletions, incremental pull, the owner check.
@@ -64,7 +64,7 @@ adb shell am start -n com.mikecann.walkies/.MainActivity --ez testSignIn true --
 
 There's also a "Test sign-in" link under the Google button on debug builds. Signing out (Settings) clears the phone, as on the iPhone; signing in as someone else wipes the last account's data first.
 
-With no places yet the map is empty: tap the place chip, Change place, Add a place, and search (say "Geographe"). Zoomed out, the suburbs next door show with a "+" to add them.
+With no places yet, the suburb you're in adds itself once the emulator has a location (Extended controls > Location) and the first sync has finished, with the place chip saying "Finding your suburb…" meanwhile. To add one by hand: tap the place chip, Change place, Add a place, and search (say "Geographe"). Zoomed out, the suburbs next door show with a "+" to add them.
 
 ## Walking on the emulator
 

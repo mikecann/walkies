@@ -175,6 +175,8 @@ fun PlaceChip(
     picture: String?,
     /** Found and total secrets here, when the place has any. */
     secrets: Pair<Int, Int>? = null,
+    /** Your first place is being found and built. */
+    finding: Boolean = false,
     onChangePlace: () -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -194,11 +196,14 @@ fun PlaceChip(
                 .clickable(role = Role.Button) { open = !open }
                 .padding(start = 8.dp, end = 16.dp, top = 7.dp, bottom = 7.dp)
                 .semantics {
-                    contentDescription = city?.let { "${it.name}, ${it.progress.percentText.replace("%", " percent")}" } ?: "Places"
+                    contentDescription = city?.let { "${it.name}, ${it.progress.percentText.replace("%", " percent")}" }
+                        ?: if (finding) "Finding your suburb" else "Places"
                 },
         ) {
             Avatar(initials = initials(name), colour = Walkies.orange, image = rememberHeadImage(picture))
-            BasicText(city?.name ?: "Places", style = Type.headline, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            val title = city?.name ?: if (finding) "Finding your suburb…" else "Places"
+            BasicText(title, style = Type.headline, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            if (city == null && finding) Spinner(size = 16.dp)
             if (city != null) {
                 BasicText(city.progress.percentText, style = Type.headline.copy(color = Walkies.orange, fontFeatureSettings = "tnum"))
             }
@@ -210,6 +215,9 @@ fun PlaceChip(
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 14.dp),
             ) {
                 val text = Type.subheadline.copy(color = Walkies.ink.copy(alpha = 0.75f))
+                if (city == null && finding) {
+                    BasicText("Getting the suburb you're in ready. It can take a minute.", style = text)
+                }
                 if (city != null) {
                     ProgressBar(city.progress, Modifier.fillMaxWidth())
                     BasicText("${city.visited.size} of ${city.tiles.size} tiles explored", style = text)

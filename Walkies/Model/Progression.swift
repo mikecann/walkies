@@ -338,9 +338,7 @@ nonisolated enum Progression {
     /// Run on a worker at load or after a batch download, then persist recovered
     /// identities. Ordinary state/recap reads use the returned counts without replay.
     static func backfill(walks: [Walk], cities: [City], onReplay: (UUID) -> Void = { _ in }) -> Backfill {
-        let ordered = tileRecords(walks: walks, cities: cities).filter { $0.endedAt != nil }.sorted {
-            $0.startedAt == $1.startedAt ? $0.id.uuidString < $1.id.uuidString : $0.startedAt < $1.startedAt
-        }
+        let ordered = tileRecords(walks: walks, cities: cities).filter { $0.endedAt != nil }.sorted(by: walkedFirst)
         let savedIDs = Set(walks.map(\.id))
         var seen: [UUID: Set<Hex>] = [:]
         var result: [UUID: [UUID: Int]] = [:]
@@ -378,6 +376,26 @@ nonisolated enum Progression {
             if savedIDs.contains(walk.id) { repaired.append(walk) }
         }
         return Backfill(walks: repaired, counts: result)
+    }
+
+    /// The order tiles are first found in: by when each walk started.
+    static func walkedFirst(_ a: Walk, _ b: Walk) -> Bool {
+        a.startedAt == b.startedAt ? a.id.uuidString < b.id.uuidString : a.startedAt < b.startedAt
+    }
+
+    /// Each walk's (and short outing's) first-discovery count in one place, worked out
+    /// as `backfill` does, for when a place that's just been added credits its tiles
+    /// to some walks.
+    static func placeCounts(_ placeID: UUID, walks: [Walk], cities: [City]) -> [UUID: Int] {
+        let key = placeID.uuidString
+        var seen = Set<Hex>()
+        var counts: [UUID: Int] = [:]
+        for walk in tileRecords(walks: walks, cities: cities).filter({ $0.endedAt != nil }).sorted(by: walkedFirst) {
+            guard let tiles = walk.newTileHexesByPlace?[key] else { continue }
+            counts[walk.id] = tiles.subtracting(seen).count
+            seen.formUnion(tiles)
+        }
+        return counts
     }
 
     /// Past weeks and streaks are independent of GPS tile revisions. AppModel

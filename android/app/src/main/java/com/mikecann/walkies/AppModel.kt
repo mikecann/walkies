@@ -15,6 +15,7 @@ import com.mikecann.walkies.model.TrackPoint
 import com.mikecann.walkies.model.Walk
 import com.mikecann.walkies.model.WalkRecap
 import com.mikecann.walkies.model.uuidString
+import com.mikecann.walkies.place.AutoPlaces
 import com.mikecann.walkies.place.Boundary
 import com.mikecann.walkies.place.BoundaryShape
 import com.mikecann.walkies.place.City
@@ -33,6 +34,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -237,6 +239,13 @@ class AppModel(
     var ledger = Ledger()
         private set
 
+    /**
+     * What places that add themselves have looked up so far, saved in auto-places.json.
+     * Up here with the rest of what [load] reads, so it's set before load runs.
+     */
+    var autoPlaces = AutoPlaces()
+        private set
+
     /** The saved walks' tile counts have been worked out, so rewards can be trusted. */
     var historyReady = false
         private set
@@ -248,7 +257,8 @@ class AppModel(
     private var placesRevision = 0
     private var secretsRevision = 0
     private var countingTilesByPlace: Map<UUID, Int> = emptyMap()
-    private var questTileCounts: Map<UUID, Map<UUID, Int>> = emptyMap()
+    var questTileCounts: Map<UUID, Map<UUID, Int>> = emptyMap()
+        private set
     private var cachedProgression: Pair<String, Progression.State>? = null
     private var cachedHistoricalRewards: Pair<String, Progression.HistoricalRewards>? = null
     /** How many times past weeks and streaks have been worked out, for tests. */
@@ -259,6 +269,8 @@ class AppModel(
     var requestSync: (() -> Unit)? = null
     /** Tells sync which places were deleted on purpose. Set by the sync engine. */
     var placesDeleted: ((List<UUID>) -> Unit)? = null
+    /** Tells sync which walks changed after they were saved, so they go up again. Set by the sync engine. */
+    var walksChanged: ((List<UUID>) -> Unit)? = null
     /** A client for the server's street cache, from Account.client(), like sync. Tests leave it null. */
     var makePlaceClient: (suspend () -> ConvexClient?)? = null
     /** Where background place work runs (the main thread on the phone). Null in tests, which turns it off. */
@@ -288,6 +300,12 @@ class AppModel(
     private fun load() {
         loading = true
         cities = store.loadCities()
+        autoPlaces = store.loadAutoPlaces() ?: AutoPlaces()
+        if (autoPlaces.walksSince == null) {
+            // Walks from before this version are left alone.
+            autoPlaces = autoPlaces.copy(walksSince = now())
+            store.saveAutoPlaces(autoPlaces)
+        }
         ledger = store.loadProgress()
         alwaysOn = settings.alwaysOn
         loading = false
@@ -461,6 +479,7 @@ class AppModel(
         if (!alwaysOn) recap = WalkRecap.make(walk, cities, fresh, foundStickers, history, clock(), counts)
         refreshProgressPicks()
         requestSync?.invoke()
+        addPlacesYouveBeen()
         onChange()
     }
 
@@ -549,6 +568,7 @@ class AppModel(
             placeYouOnNextFix = false
             followIntoPlace(point.coordinate)
         }
+        noteWhereYouAre(point)
         onChange()
     }
 
@@ -757,6 +777,7 @@ class AppModel(
         store.save(cities)
         refreshProgressPicks()
         requestSync?.invoke()
+        addPlacesYouveBeen()
         onChange()
     }
 
@@ -900,13 +921,42 @@ class AppModel(
 
     // Places
 
-    fun add(city: City) {
-        val added = city.copy(updatedAt = now())
+    /**
+     * [selecting]: pick it and fly there. Places that add themselves while you've got
+     * others don't take you away from what you're looking at. [builtFrom]: the walks it
+     * was built with ([walksToBuildWith]). The rest, ones that have ended since and ones
+     * the auto-add hadn't finished with, are walked into it here, and the tiles they
+     * uncover are new on them, so they count for those walks' quests too.
+     */
+    fun add(city: City, selecting: Boolean = true, builtFrom: List<Walk>? = null) {
+        // Already one of yours: the same suburb added by hand and found by itself, or
+        // added on another phone and synced meanwhile. Just go there.
+        val have = cities.firstOrNull { it.id == city.id || (city.osmId != null && it.osmId == city.osmId) }
+        if (have != null) {
+            if (selecting) select(have.id)
+            return
+        }
+        val shape = city.shape()
+        var walked = city
+        val uncovered = HashMap<UUID, Pair<Set<Hex>, Set<Hex>>>()
+        if (builtFrom != null) {
+            val had = builtFrom.mapTo(HashSet()) { it.id }
+            // In the order they were walked, so a tile two of them crossed is the first one's.
+            for (walk in walks.filter { it.id !in had }.sortedWith(Progression.walkedFirst)) {
+                val (visited, fresh) = walked.visit(CoverageTracer.samples(walk.points), shape)
+                if (fresh.isNotEmpty()) uncovered[walk.id] = fresh to (fresh - walked.tiles)
+                walked = visited
+            }
+        }
+        val added = walkActiveWalk(walked, shape).copy(updatedAt = now())
         cities = cities + added
         placesRevision++
         rebuildCountingTiles()
-        shapes[added.id] = added.shape()
-        select(added.id)
+        credit(uncovered, added.id)
+        shapes[added.id] = shape
+        // Its dates for the mist come from your walks, even if the walk you're on gave it some.
+        lastWalkedPending.add(added.id)
+        if (selecting) select(added.id)
         placeStickers()
         tilesRevision++
         store.save(cities)
@@ -917,12 +967,92 @@ class AppModel(
         onChange()
     }
 
+    /**
+     * The walks a place is built with: all but the ones the auto-add hasn't finished
+     * with yet, the walk that's just ended say, which [add] walks into it afterwards so
+     * the tiles they uncover there count for their quests. Older walks only uncover its
+     * tiles, as they always have for a place added by hand, rather than changing quests
+     * from weeks ago.
+     */
+    private fun walksToBuildWith(): List<Walk> {
+        val due = autoPlaces.due(walks, now()).mapTo(HashSet()) { it.id }
+        return walks.filter { it.id !in due }
+    }
+
+    /**
+     * Tiles a place that's just been added uncovered on finished walks it wasn't built
+     * with ([uncovered]: each walk's new tiles, and those it added to the place's tiles).
+     * They're new on those walks, as if it had been one of your places when you walked
+     * them, so they count for their quests. A tile a walk already had for this place (it
+     * was deleted and added again, say) isn't counted twice.
+     */
+    private fun credit(uncovered: Map<UUID, Pair<Set<Hex>, Set<Hex>>>, placeId: UUID) {
+        val key = placeId.uuidString
+        val changed = ArrayList<UUID>()
+        walks = walks.map { walk ->
+            val (tiles, added) = uncovered[walk.id] ?: return@map walk
+            val hexes = walk.newTileHexesByPlace ?: return@map walk
+            val had = hexes[key].orEmpty()
+            val all = had + tiles
+            if (all.size == had.size) return@map walk
+            val before = walk.addedTilesByPlace
+            val grew = if (added.isEmpty()) before else before.orEmpty() + (key to (before?.get(key).orEmpty() + added))
+            val credited = walk.copy(
+                newTileHexesByPlace = hexes + (key to all),
+                newTilesByPlace = walk.newTilesByPlace.orEmpty() + (key to all.size),
+                addedTilesByPlace = grew,
+                newTiles = walk.newTiles + all.size - had.size,
+            )
+            store.save(credited)
+            changed.add(walk.id)
+            credited
+        }
+        if (changed.isEmpty()) return
+        // Deduplicated against every other walk the way the next launch's backfill does,
+        // so the two always agree.
+        val counts = questTileCounts.toMutableMap()
+        for ((id, n) in Progression.placeCounts(placeId, walks, cities)) counts[id] = counts[id].orEmpty() + (placeId to n)
+        questTileCounts = counts
+        historyRevision++
+        // Already uploaded, most likely, so they go up again with the new tiles.
+        walksChanged?.invoke(changed)
+    }
+
+    /**
+     * A place added partway through a walk gets the walk so far, as if it had been
+     * there all along: its tiles count, and are new on this walk.
+     */
+    private fun walkActiveWalk(city: City, shape: BoundaryShape): City {
+        // A walk that adds itself uncovers everything since it started once it's sure
+        // it's a walk, and this place will be among them then.
+        val walk = activeWalk ?: return city
+        if (autoWalkPending) return city
+        val timed = CoverageTracer.timedSamples(walk.points)
+        val (visited, fresh) = city.visit(timed.samples, shape)
+        val dated = timed.times.lastOrNull()?.let { visited.noteWalked(timed.samples, it, mistDays).city } ?: visited
+        if (fresh.isEmpty()) return dated
+        freshTiles = freshTiles + (city.id to (freshTiles[city.id].orEmpty() + fresh))
+        addedTiles = addedTiles + (city.id to (addedTiles[city.id].orEmpty() + (fresh - city.tiles)))
+        activeWalk = walk.copy(newTiles = walk.newTiles + fresh.size)
+        return dated
+    }
+
     /** Both the neighbour buttons and place search add to your own places, with your walks so far replayed into it. */
     suspend fun addPlace(place: PlaceResult, status: (String) -> Unit) {
+        // Already one of yours, say it added itself: no need to fetch it again.
+        val have = place.osmId?.let { osmId -> cities.firstOrNull { it.osmId == osmId } }
+        if (have != null) {
+            select(have.id)
+            return
+        }
         val generation = dataGeneration
-        val city = CityBuilder.build(place, walks, makePlaceClient?.invoke(), osm, status)
+        val builtFrom = walksToBuildWith()
+        val build = buildPlace
+        val city = if (build != null) build(place, builtFrom) else CityBuilder.build(place, builtFrom, makePlaceClient?.invoke(), osm, status)
         if (generation != dataGeneration) throw CancellationException("Signed out while adding ${place.name}")
-        add(city)
+        add(city, builtFrom = builtFrom)
+        autoPlaces = autoPlaces.added(place)
+        saveAutoPlaces()
     }
 
     /**
@@ -931,7 +1061,10 @@ class AppModel(
      * is never deleted from the account.
      */
     fun deleteCity(id: UUID) {
-        if (cities.none { it.id == id }) return
+        val deleting = cities.firstOrNull { it.id == id } ?: return
+        // Deleted on purpose, so it doesn't add itself again next time you walk there.
+        autoPlaces = autoPlaces.decline(deleting)
+        saveAutoPlaces()
         placesDeleted?.invoke(listOf(id))
         cities = cities.filter { it.id != id }
         placesRevision++
@@ -976,9 +1109,14 @@ class AppModel(
             }
         }
 
-    /** The box around all your places, grown by this many metres each way. */
+    /**
+     * The box around your places, grown by this many metres each way. When they're
+     * spread far apart (a holiday suburb that added itself, say), it's just the ones
+     * near the selected place, so the suburbs nearby are looked up for one area at a
+     * time rather than for everywhere in between.
+     */
     private fun box(metres: Double): Boundary.Bounds? {
-        val all = cities.map { it.boundary.bounds }
+        val all = neighbourhoodPlaces().map { it.boundary.bounds }
         if (all.isEmpty()) return null
         val south = all.minOf { it.south }
         val west = all.minOf { it.west }
@@ -987,6 +1125,17 @@ class AppModel(
         val dLat = metres / 111_320
         val dLon = dLat / max(0.1, cos((south + north) / 2 * Math.PI / 180))
         return Boundary.Bounds(south - dLat, west - dLon, north + dLat, east + dLon)
+    }
+
+    /** Your places close enough together to share one list of neighbours. */
+    private fun neighbourhoodPlaces(): List<City> {
+        val all = cities.map { it.boundary.bounds }
+        if (all.isEmpty()) return cities
+        val corner = Coordinate(all.minOf { it.south }, all.minOf { it.west })
+        val across = corner.distance(Coordinate(all.maxOf { it.north }, all.maxOf { it.east }))
+        val centre = (selectedCity ?: cities.first()).boundary.centre
+        if (across <= NEIGHBOURHOOD_SPAN) return cities
+        return cities.filter { it.boundary.centre.distance(centre) <= NEIGHBOURHOOD_SPAN / 2 }
     }
 
     /**
@@ -1170,6 +1319,236 @@ class AppModel(
         return points
     }
 
+    // Places that add themselves
+
+    /**
+     * Whether the map's on screen. Only a fix while it is can add where you are: one in
+     * the background could be from a car.
+     */
+    var inForeground = false
+        private set
+    /**
+     * Set when the map comes on screen, so the next good fix is checked for a suburb to
+     * add, and cleared when it goes. Never when the process starts in the background
+     * for always-on: only walks add places then.
+     */
+    var checkSpotOnNextFix = false
+    /** Where you were when the app opened, until it's been checked. */
+    private var spotToCheck: AutoPlaces.Spot? = null
+    /**
+     * Every place in the account has come down since the app opened or you signed in,
+     * so a suburb that adds itself can't be a second copy of one the account has.
+     */
+    var accountPulled = false
+        private set
+    private var autoAdding = false
+    private var autoAddAgain = false
+    private var autoAddJob: Job? = null
+    /** While your first place is being found and built, for the place chip. */
+    var findingFirstPlace = false
+        private set
+    /** A place that's just added itself while you had others, for a note on the map. */
+    var addedPlaceNotice: AddedPlace? = null
+        private set
+
+    data class AddedPlace(val id: UUID, val name: String)
+
+    /** Tests stand in for OpenStreetMap and the street download (for adding by hand too). */
+    var lookUpSuburb: (suspend (Coordinate) -> AutoPlaces.Lookup)? = null
+    var buildPlace: (suspend (PlaceResult, List<Walk>) -> City)? = null
+
+    /**
+     * Until your first tile clears, the map says to go for a walk. Tiles only ever get
+     * uncovered, so once one has this never shows again.
+     */
+    val showWalkHint: Boolean get() = cities.isNotEmpty() && cities.none { it.visited.isNotEmpty() }
+
+    /** The note's been seen or tapped. */
+    fun dismissAddedPlaceNotice() {
+        if (addedPlaceNotice == null) return
+        addedPlaceNotice = null
+        onChange()
+    }
+
+    /**
+     * The map's come on screen, or gone from it. Coming back looks again at where you
+     * are; going clears that, so a fix from later (in a car, say) can't count.
+     */
+    fun foreground(active: Boolean) {
+        inForeground = active
+        checkSpotOnNextFix = active
+        if (!active) spotToCheck = null
+    }
+
+    /**
+     * The first good fix after the map comes on screen. If it's not in one of your
+     * places, or near one, its suburb adds itself. Fixes moving faster than a walk, or
+     * that the motion chip says are on wheels, are passed over for the next.
+     */
+    fun noteWhereYouAre(fix: TrackPoint) {
+        if (!checkSpotOnNextFix || !inForeground || clock() - fix.time > 60) return
+        if (fix.accuracy < 0 || fix.accuracy > AutoPlaces.SPOT_ACCURACY) return
+        if (fix.wheels == true || motion.onWheels || (fix.speed ?: 0.0) > CoverageTracer.MAX_SPEED) return
+        checkSpotOnNextFix = false
+        spotToCheck = AutoPlaces.Spot(fix.coordinate, fix.accuracy)
+        addPlacesYouveBeen()
+    }
+
+    /** Sync has pulled every place in the account, so a suburb that adds itself now won't be one the account already had. */
+    fun pulledAccount() {
+        accountPulled = true
+        addPlacesYouveBeen()
+    }
+
+    /**
+     * Adds the suburbs you've been in that aren't one of your places yet: where you
+     * were when the app opened, and wherever walks since the last check went on foot.
+     * Called when the app opens, when a walk ends and after each sync, never from
+     * moving the map about. One run at a time, and one lookup at a time within it.
+     */
+    fun addPlacesYouveBeen() {
+        val scope = services ?: return
+        if (!accountPulled) return
+        if (autoAdding) {
+            autoAddAgain = true
+            return
+        }
+        autoAdding = true
+        autoAddAgain = false
+        val generation = dataGeneration
+        autoAddJob = scope.launch {
+            try {
+                addPlacesYouveBeen(generation)
+            } finally {
+                // Signing out resets all this itself.
+                if (generation == dataGeneration) {
+                    autoAdding = false
+                    findingFirstPlace = false
+                    onChange()
+                    if (autoAddAgain) addPlacesYouveBeen()
+                }
+            }
+        }
+    }
+
+    /** Waits for any run of [addPlacesYouveBeen], for tests. */
+    suspend fun waitForPlacesYouveBeen() {
+        while (autoAdding) autoAddJob?.join() ?: return
+    }
+
+    private suspend fun addPlacesYouveBeen(generation: Int) {
+        val due = autoPlaces.due(walks, now())
+        val tracks = withContext(Dispatchers.Default) { due.map { CoverageTracer.samples(it.points) } }
+        var lookups = 0
+        // Hexes asked about this time, so one whose answer was one of your own places
+        // isn't asked about again straight away.
+        val asked = HashSet<Hex>()
+        // Every round adds a place, asks about a spot or stops, so this is only a backstop.
+        repeat(100) {
+            if (generation != dataGeneration) return
+            val auto = autoPlaces
+            val here = spotToCheck
+            val known = nearby
+            val skip = HashSet(asked)
+            val places = cities.map(::shape)
+            val isYours = isYours(cities)
+            val now = now()
+            val next = withContext(Dispatchers.Default) { auto.next(here, tracks, places, known, isYours, skip, now) }
+            if (generation != dataGeneration) return
+            when (next) {
+                AutoPlaces.Next.Nothing -> {
+                    if (spotToCheck == here) spotToCheck = null
+                    autoPlaces = autoPlaces.checked(due)
+                    saveAutoPlaces()
+                    return
+                }
+                AutoPlaces.Next.Later -> return
+                is AutoPlaces.Next.Add -> {
+                    finding(cities.isEmpty())
+                    // Whether it's added or its streets wouldn't download (and it waits its
+                    // turn), round again for the rest.
+                    autoAdd(next.place, generation)
+                }
+                is AutoPlaces.Next.LookUp -> {
+                    if (lookups >= AutoPlaces.LOOKUPS_PER_RUN) return
+                    lookups++
+                    asked.add(HexGrid.hex(containing = next.point))
+                    finding(cities.isEmpty())
+                    val found = try {
+                        val look = lookUpSuburb
+                        if (look != null) look(next.point) else osm.suburb(next.point)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        if (generation != dataGeneration) return
+                        log.info("Couldn't find the suburb at a spot, trying again later: $e")
+                        autoPlaces = autoPlaces.lookUpFailed(now())
+                        saveAutoPlaces()
+                        return
+                    }
+                    if (generation != dataGeneration) return
+                    autoPlaces = autoPlaces.looked(next.point, found, isYours(cities), now())
+                    saveAutoPlaces()
+                }
+            }
+        }
+    }
+
+    private fun finding(first: Boolean) {
+        if (findingFirstPlace == first) return
+        findingFirstPlace = first
+        onChange()
+    }
+
+    /**
+     * Builds and adds a suburb that's added itself. Your first place is selected and
+     * the map flies there. Otherwise it's only selected if you're standing in it, and
+     * a note on the map says it's been added. If its streets won't download, it waits
+     * longer each time before it's tried again.
+     */
+    private suspend fun autoAdd(place: PlaceResult, generation: Int) {
+        val builtFrom = walksToBuildWith()
+        val city = try {
+            val build = buildPlace
+            if (build != null) build(place, builtFrom) else CityBuilder.build(place, builtFrom, makePlaceClient?.invoke(), osm) {}
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (generation != dataGeneration) return
+            log.info("Couldn't add ${place.name} by itself, trying again later: $e")
+            autoPlaces = autoPlaces.failedToBuild(place, now())
+            saveAutoPlaces()
+            return
+        }
+        if (generation != dataGeneration) return
+        // Deleted while this one was downloading: it stays in `found`, so its spots
+        // aren't asked about again, and isn't added.
+        if (autoPlaces.isDeclined(place)) return
+        autoPlaces = autoPlaces.added(place)
+        saveAutoPlaces()
+        // Added by hand, or pulled from the account, while this one was downloading.
+        if (isYours(place)) return
+        val first = cities.isEmpty()
+        add(city, selecting = first, builtFrom = builtFrom)
+        if (!first) {
+            val spot = spotToCheck?.point
+            if (spot != null && shape(city).contains(city.grid.projection.project(spot))) {
+                selectedCityId = city.id
+                settings.selectedCity = city.id.uuidString
+            }
+            addedPlaceNotice = AddedPlace(city.id, city.name)
+            onChange()
+        }
+    }
+
+    /** One of your places already: the same OSM boundary, or for places saved before those were kept, the same name. */
+    private fun isYours(place: PlaceResult): Boolean = isYours(cities)(place)
+
+    private fun saveAutoPlaces() {
+        autoPlaces = autoPlaces.tidied(now())
+        store.saveAutoPlaces(autoPlaces)
+    }
+
     // Progression
 
     /** Shells, XP and this week's quests, worked out again only when something they depend on changes. */
@@ -1314,28 +1693,8 @@ class AppModel(
             val i = merged.indexOfFirst { it.id == remote.id }
             if (i >= 0) {
                 val city = merged[i]
-                val localCredits = city.tileCredits.orEmpty().mapTo(HashSet()) { it.id }
-                val remoteCredits = remote.tileCredits.orEmpty().mapTo(HashSet()) { it.id }
-                val localStreets = city.streetsVersion ?: 0
-                val remoteStreets = remote.streetsVersion ?: 0
-                val hadMore = !remote.visited.containsAll(city.visited) || !remoteCredits.containsAll(localCredits) ||
-                    localStreets > remoteStreets || Mist.hasLater(city.lastWalked, remote.lastWalked)
-                val credited = city.mergeTileCredits(remote).mergingLastWalked(remote.lastWalked).copy(
-                    visited = city.visited + remote.visited,
-                    // Theirs win, as in Swift's merging(_:uniquingKeysWith:).
-                    stickers = city.stickers.orEmpty() + remote.stickers.orEmpty(),
-                )
-                // Street tiles come from the copy with the newer WalkableRule, so a phone
-                // that hasn't updated can't bring busy roads back. Tiles you've been to stay.
-                val streets = when {
-                    remoteStreets > localStreets -> credited.replacingStreetTiles(remote.tiles, remote.roads, remoteStreets)
-                    remoteStreets < localStreets -> credited.replacingStreetTiles(credited.tiles, null, localStreets)
-                    else -> credited.copy(tiles = credited.tiles + remote.tiles)
-                }
-                merged[i] = streets.copy(
-                    roads = streets.roads ?: remote.roads,
-                    updatedAt = if (hadMore) now() else maxOf(city.lastChanged, remote.lastChanged),
-                )
+                val (streets, hadMore) = city.merged(remote)
+                merged[i] = streets.copy(updatedAt = if (hadMore) now() else maxOf(city.lastChanged, remote.lastChanged))
             } else {
                 merged.add(remote)
                 if (remote.lastWalked == null) lastWalkedPending.add(remote.id)
@@ -1473,6 +1832,16 @@ class AppModel(
         selectedCityId = null
         settings.selectedCity = null
         placeYouOnNextFix = true
+        autoPlaces = AutoPlaces(walksSince = now())
+        spotToCheck = null
+        // Ready for whoever signs in next, if you're looking. Not when a sync in the
+        // background has found someone else signed in: that fix could be from anywhere.
+        checkSpotOnNextFix = inForeground
+        accountPulled = false
+        autoAdding = false
+        autoAddAgain = false
+        findingFirstPlace = false
+        addedPlaceNotice = null
         tilesRevision++
         store.wipe()
         onChange()
@@ -1539,7 +1908,20 @@ class AppModel(
          */
         const val NEIGHBOURHOOD = 5000.0
 
+        /** Metres corner to corner. Places spread wider than this get neighbours only around the selected one. */
+        const val NEIGHBOURHOOD_SPAN = 60_000.0
+
         private val log: Logger = Logger.getLogger("walkies.places")
+
+        /** [isYours] for these places, to take off the main thread. */
+        private fun isYours(cities: List<City>): (PlaceResult) -> Boolean {
+            val mine = cities.map { it.osmId to it.name }
+            return { place ->
+                mine.any { (osmId, name) ->
+                    if (place.osmId != null && osmId != null) place.osmId == osmId else name.equals(place.name, ignoreCase = true)
+                }
+            }
+        }
 
         /** How far the furthest point gets from the first, in metres. */
         fun displacement(points: List<TrackPoint>): Double {

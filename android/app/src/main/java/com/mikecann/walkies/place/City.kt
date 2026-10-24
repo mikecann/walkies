@@ -127,9 +127,45 @@ data class City(
         return copy(visited = visited + fresh, tiles = tiles + fresh) to fresh
     }
 
+    /**
+     * Takes in another copy of the same place, from the account or another phone:
+     * every tile either has walked, credits, secrets and mist dates (the merge in
+     * City.swift). Street tiles come from the copy with the newer WalkableRule, so a
+     * phone that hasn't updated can't bring busy roads back. Tiles you've been to stay.
+     * Also says whether this copy had anything the other didn't, so it should be sent
+     * back up. Keeps this one's id and updatedAt.
+     */
+    fun merged(other: City): Pair<City, Boolean> {
+        val localCredits = tileCredits.orEmpty().mapTo(HashSet()) { it.id }
+        val otherCredits = other.tileCredits.orEmpty().mapTo(HashSet()) { it.id }
+        val localStreets = streetsVersion ?: 0
+        val otherStreets = other.streetsVersion ?: 0
+        val hadMore = !other.visited.containsAll(visited) || !otherCredits.containsAll(localCredits) ||
+            localStreets > otherStreets || Mist.hasLater(lastWalked, other.lastWalked)
+        val credited = mergeTileCredits(other).mergingLastWalked(other.lastWalked).copy(
+            visited = visited + other.visited,
+            // Theirs win, as in Swift's merging(_:uniquingKeysWith:).
+            stickers = stickers.orEmpty() + other.stickers.orEmpty(),
+        )
+        val streets = when {
+            otherStreets > localStreets -> credited.replacingStreetTiles(other.tiles, other.roads, otherStreets)
+            otherStreets < localStreets -> credited.replacingStreetTiles(credited.tiles, null, localStreets)
+            else -> credited.copy(tiles = credited.tiles + other.tiles)
+        }
+        return streets.copy(roads = streets.roads ?: other.roads) to hadMore
+    }
+
     companion object {
         fun hexes(inside: BoundaryShape, grid: HexGrid = HexGrid): Set<Hex> =
             grid.hexes(inside.lo, inside.hi).filterTo(HashSet()) { inside.contains(grid.centre(it)) }
+
+        /**
+         * The id a place gets from its OSM relation, the same on every phone, so a
+         * suburb added on two phones before they've synced (say by adding itself on
+         * both) is one place in the account rather than two. City.id(forOSM:) on the
+         * iPhone makes the same name-based UUID.
+         */
+        fun idForOsm(osmId: Long): UUID = UUID.nameUUIDFromBytes("walkies:osm-relation:$osmId".toByteArray())
     }
 }
 

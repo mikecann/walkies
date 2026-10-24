@@ -226,6 +226,7 @@ class MainActivity : ComponentActivity() {
                     picture = app.account.picture,
                     scope = app.scope,
                     active = tab == AppTab.Map,
+                    covered = openSecret != null,
                     onOpenSettings = ::openSettings,
                     onShowPlaces = { screen = Screen.Places },
                     onFixPermissions = { screen = Screen.FixPermissions },
@@ -402,7 +403,11 @@ class MainActivity : ComponentActivity() {
         app.tracker.request()
         app.onScreen = true
         app.model.placeYouOnNextFix = true
+        // Looks at where you are now you're here, and stops once you've gone.
+        app.model.foreground(true)
         app.model.refreshNeighbours()
+        // Catches up on walks that ended with the app closed.
+        app.model.addPlacesYouveBeen()
         app.sync.schedule()
         // While you're looking, a sync every few minutes picks up the other phone's walks.
         periodicSync?.cancel()
@@ -436,6 +441,7 @@ class MainActivity : ComponentActivity() {
         periodicSync?.cancel()
         periodicSync = null
         app.onScreen = false
+        app.model.foreground(false)
         app.model.saveNow(waiting = true)
         super.onStop()
     }

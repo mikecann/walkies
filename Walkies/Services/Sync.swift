@@ -61,6 +61,7 @@ final class SyncEngine {
         state = store.loadSyncState()
         lastSynced = UserDefaults.standard.object(forKey: "lastSynced") as? Date
         model.placesDeleted = { [weak self] in self?.deleted(places: $0) }
+        model.walksChanged = { [weak self] in self?.changed(walks: $0) }
         countWaiting()
     }
 
@@ -180,6 +181,19 @@ final class SyncEngine {
         countWaiting()
     }
 
+    /// How many times each walk has changed since the app opened, so an upload that was
+    /// already on its way with the older copy isn't taken as the latest.
+    private var walkEdits: [UUID: Int] = [:]
+
+    /// Walks that changed after they went up (a place that added itself since counted
+    /// their tiles), so they go up again. Saving a walk replaces its copy in the account.
+    private func changed(walks ids: [UUID]) {
+        for id in ids { walkEdits[id, default: 0] += 1 }
+        state.uploadedWalks.subtract(ids)
+        save()
+        countWaiting()
+    }
+
     /// This phone's data belongs to whoever it first synced for. Someone else signing in,
     /// say after a session ran out, starts from their own account instead. Anything the
     /// last account hadn't uploaded yet is lost here, but that's rare: their session
@@ -230,6 +244,7 @@ final class SyncEngine {
 
         for walk in model.walks where !state.uploadedWalks.contains(walk.id) {
             guard let endedAt = walk.endedAt else { continue }
+            let edit = walkEdits[walk.id]
             let file = try await upload(JSONEncoder().encode(walk), client)
             try check(revision)
             let _: Nothing = try await client.mutation("sync:saveWalk", WalkArgs(
@@ -237,6 +252,8 @@ final class SyncEngine {
                 distance: walk.distance, newTiles: Double(walk.newTiles), file: file
             ))
             try check(revision)
+            // Credited again while this copy was on its way up: the next push sends the new one.
+            guard walkEdits[walk.id] == edit else { continue }
             state.uploadedWalks.insert(walk.id)
             save()
         }
@@ -279,6 +296,9 @@ final class SyncEngine {
         var secrets = Dictionary(snapshot.secrets.map { ($0.secretId, Date(ms: $0.foundAt)) }, uniquingKeysWith: min)
         var batch = Batch()
         var failure: Error?
+        // A place in the account that isn't here after all: it didn't download, or it
+        // won't read on this version.
+        var placesMissing = false
 
         func flush() async throws {
             try await apply(batch, progress: progress, secrets: secrets, revision: revision)
@@ -288,14 +308,18 @@ final class SyncEngine {
         }
 
         for place in snapshot.places {
-            guard let id = UUID(uuidString: place.clientId), let url = place.url.flatMap(URL.init(string:)) else { continue }
+            guard let id = UUID(uuidString: place.clientId) else { continue }
             let remoteChanged = Date(ms: place.updatedAt)
             if let local = model.cities.first(where: { $0.id == id }) {
                 if local.lastChanged >= remoteChanged { continue }
             } else if state.deletedPlaces?.contains(id) == true {
                 continue
             }
-            guard let city = try await fetch(City.self, from: url, client, revision: revision, failure: &failure) else { continue }
+            guard let url = place.url.flatMap(URL.init(string:)),
+                  let city = try await fetch(City.self, from: url, client, revision: revision, failure: &failure) else {
+                placesMissing = true
+                continue
+            }
             guard city.gridVersion == HexGrid.version else {
                 failure = failure ?? ConvexError.server("The server still has places from the old grid.")
                 continue
@@ -326,6 +350,11 @@ final class SyncEngine {
         try await flush()
         // Anything that didn't download is tried again next sync.
         if let failure { throw failure }
+        // Places add themselves only once every place in the account is here, so one
+        // can't be a second copy of a place that just didn't come down this time. One
+        // that won't read keeps them waiting too, until a later sync can read it.
+        guard !placesMissing else { return }
+        model.pulledAccount()
     }
 
     private struct Batch {

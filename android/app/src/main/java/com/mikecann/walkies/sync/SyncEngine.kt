@@ -106,6 +106,7 @@ class SyncEngine(
 
     init {
         model.placesDeleted = ::deleted
+        model.walksChanged = ::changed
         countWaiting()
     }
 
@@ -216,6 +217,23 @@ class SyncEngine(
     }
 
     /**
+     * How many times each walk has changed since the app started, so an upload that was
+     * already on its way with the older copy isn't taken as the latest.
+     */
+    private val walkEdits = HashMap<UUID, Int>()
+
+    /**
+     * Walks that changed after they went up (a place that added itself since counted
+     * their tiles), so they go up again. Saving a walk replaces its copy in the account.
+     */
+    private fun changed(ids: List<UUID>) {
+        for (id in ids) walkEdits[id] = (walkEdits[id] ?: 0) + 1
+        state = state.copy(uploadedWalks = state.uploadedWalks - ids.toSet())
+        save()
+        countWaiting()
+    }
+
+    /**
      * This phone's data belongs to whoever it first synced for. Someone else signing in,
      * say after a session ran out, starts from their own account instead. Anything the
      * last account hadn't uploaded yet is lost here, but that's rare: their session
@@ -273,6 +291,7 @@ class SyncEngine(
         for (walk in model.walks.toList()) {
             if (walk.id in state.uploadedWalks) continue
             val endedAt = walk.endedAt ?: continue
+            val edit = walkEdits[walk.id]
             val file = upload(Codec.walk(walk), client)
             check(revision)
             client.mutation("sync:saveWalk", args {
@@ -284,6 +303,8 @@ class SyncEngine(
                 put("file", file)
             })
             check(revision)
+            // Credited again while this copy was on its way up: the next push sends the new one.
+            if (walkEdits[walk.id] != edit) continue
             state = state.copy(uploadedWalks = state.uploadedWalks + walk.id)
             save()
         }
@@ -351,6 +372,9 @@ class SyncEngine(
         }
         var batch = Batch()
         val failure = Failure()
+        // A place in the account that isn't here after all: it didn't download, or it
+        // won't read on this version.
+        var placesMissing = false
 
         suspend fun flush() {
             apply(batch, progress, secrets, revision)
@@ -361,7 +385,6 @@ class SyncEngine(
 
         for (place in snapshot.places) {
             val id = uuid(place.clientId) ?: continue
-            val url = place.url ?: continue
             val remoteChanged = SwiftDate.epoch(place.updatedAt / 1000)
             val local = model.cities.firstOrNull { it.id == id }
             if (local != null) {
@@ -369,7 +392,11 @@ class SyncEngine(
             } else if (state.deletedPlaces?.contains(id) == true) {
                 continue
             }
-            val city = fetch(url, client, revision, failure, Codec::city) ?: continue
+            val city = place.url?.let { fetch(it, client, revision, failure, Codec::city) }
+            if (city == null) {
+                placesMissing = true
+                continue
+            }
             if (city.gridVersion != HexGrid.VERSION) {
                 if (failure.error == null) failure.error = ConvexException.Server("The server still has places from the old grid.")
                 continue
@@ -401,6 +428,11 @@ class SyncEngine(
         flush()
         // Anything that didn't download is tried again next sync.
         failure.error?.let { throw it }
+        // Places add themselves only once every place in the account is here, so one
+        // can't be a second copy of a place that just didn't come down this time. One
+        // that won't read keeps them waiting too, until a later sync can read it.
+        if (placesMissing) return
+        model.pulledAccount()
     }
 
     private suspend fun apply(batch: Batch, progress: Ledger?, secrets: Map<String, SwiftDate>, revision: Int) {

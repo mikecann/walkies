@@ -120,6 +120,8 @@ struct FogMapView: UIViewRepresentable {
     var onSelectSticker: (String) -> Void = { _ in }
     var neighbours: [PlaceResult] = []
     var onPickNeighbour: (PlaceResult) -> Void = { _ in }
+    /// Each fix behind the blue dot, which comes in whether or not a walk's going.
+    var onUserLocation: (CLLocation) -> Void = { _ in }
     /// The app's buttons over the map, in window coordinates.
     var buttons: [CGRect] = []
     /// Room for the floating dock and its raised hex above the bottom safe area.
@@ -139,7 +141,15 @@ struct FogMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
-        map.layoutMargins.bottom = dockRoom
+        // Set whole, never `layoutMargins.bottom = …`: reading the margins back includes
+        // the safe area, so writing them back added the status bar to the top margin on
+        // every update. MapKit fits a place inside the margins, and after a few updates
+        // there was no room left, so flying to one showed half of Western Australia.
+        let margins = UIEdgeInsets(top: 0, left: 0, bottom: dockRoom, right: 0)
+        if context.coordinator.margins != margins {
+            context.coordinator.margins = margins
+            map.layoutMargins = margins
+        }
         context.coordinator.handle = handle
         context.coordinator.update(map, with: self)
     }
@@ -165,6 +175,8 @@ struct FogMapView: UIViewRepresentable {
         private var pins: [StickerPin] = []
         private var onSelectSticker: (String) -> Void = { _ in }
         weak var handle: MapHandle?
+        /// The map's own margins as last set, without the safe area MapKit adds to them.
+        var margins: UIEdgeInsets?
 
         private var outline: MKMultiPolygon?
         private var uncovered: MKMultiPolygon?
@@ -175,6 +187,7 @@ struct FogMapView: UIViewRepresentable {
         private var neighbourPins: [NeighbourAnnotation] = []
         private var showingNeighbours = false
         private var onPickNeighbour: (PlaceResult) -> Void = { _ in }
+        private var onUserLocation: (CLLocation) -> Void = { _ in }
         private var buttons: [CGRect] = []
 
         func update(_ map: MKMapView, with view: FogMapView) {
@@ -204,15 +217,17 @@ struct FogMapView: UIViewRepresentable {
                 drawUncovered(on: map)
             }
             selectedID = view.selectedID
-            if view.flyID != flyID, !cities.isEmpty {
+            if view.flyID != flyID {
                 let first = flyID == -1
                 flyID = view.flyID
                 // Opening the app goes to where you are (an `arrive` focus request), so
-                // the first time round there's no place to fly to.
-                if !first { zoomToCity(on: map) }
+                // the first time round there's no place to fly to. Your first place,
+                // added once the map's open, still gets flown to.
+                if !first, !cities.isEmpty { zoomToCity(on: map) }
             }
 
             onPickNeighbour = view.onPickNeighbour
+            onUserLocation = view.onUserLocation
             if view.buttons != buttons {
                 buttons = view.buttons
                 placeNeighbourLabels(on: map)
@@ -442,6 +457,7 @@ struct FogMapView: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView, didUpdate userLocation: MKUserLocation) {
             guard let location = userLocation.location else { return }
+            onUserLocation(location)
             if arriving {
                 arrive(on: mapView)
             } else if following {

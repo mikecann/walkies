@@ -28,6 +28,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -110,6 +111,29 @@ class SyncSafetyTest {
     }
 
     @Test
+    fun aWalkCreditedWhileItsGoingUpIsSentAgain() = runBlocking {
+        val (store, _) = tempStore()
+        val place = city()
+        store.save(listOf(place))
+        val walk = walk(0, place)
+        store.save(walk)
+        val server = FakeServer()
+        val model = model(store)
+        val engine = engine(model, store, server)
+        // A place adds itself and credits the walk just as the older copy is going up.
+        server.answers["sync:saveWalk"] = {
+            server.answers.remove("sync:saveWalk")
+            model.walksChanged?.invoke(listOf(walk.id))
+            JsonNull
+        }
+        engine.sync()
+        assertFalse(walk.id in store.loadSyncState().uploadedWalks)
+        engine.sync()
+        assertEquals(2, server.paths.count { it == "sync:saveWalk" })
+        assertTrue(walk.id in store.loadSyncState().uploadedWalks)
+    }
+
+    @Test
     fun deletedPlacesArePushedOnceAndNotPulledBack() = runBlocking {
         val (store, _) = tempStore()
         val keep = city("Keep")
@@ -180,6 +204,36 @@ class SyncSafetyTest {
         assertEquals(setOf(walks[0].id, walks[2].id), model.walks.map { it.id }.toSet())
         // Links are only asked for the walks this phone hasn't got.
         assertEquals("false", server.calls.last { it.path == "sync:snapshot" }.args["walkUrls"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun placesOnlyAddThemselvesOnceEveryPlaceHasComeDown() = runBlocking {
+        val (store, _) = tempStore()
+        val place = city()
+        val server = FakeServer()
+        server.seed(place)
+        server.fail(place.id)
+        val model = model(store)
+        val engine = engine(model, store, server)
+        engine.sync()
+        // The place didn't download, so one adding itself could be a second copy of it.
+        assertFalse(model.accountPulled)
+        server.fail(null)
+        engine.sync()
+        assertEquals(listOf(place.id), model.cities.map { it.id })
+        assertTrue(model.accountPulled)
+
+        // One that won't read on this version keeps them waiting too.
+        val (otherStore, _) = tempStore()
+        val other = FakeServer()
+        other.seed(place)
+        other.garble(place.id)
+        val fresh = model(otherStore)
+        val otherEngine = engine(fresh, otherStore, other)
+        otherEngine.sync()
+        assertEquals(SyncEngine.Status.Idle, otherEngine.status)
+        assertTrue(fresh.cities.isEmpty())
+        assertFalse(fresh.accountPulled)
     }
 
     @Test

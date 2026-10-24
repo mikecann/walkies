@@ -114,11 +114,15 @@ struct ContentView: View {
         .sensoryFeedback(.success, trigger: model.revealCount)
         .onChange(of: scenePhase, initial: true) { _, phase in
             model.stepsForeground(phase == .active)
+            // Looks at where you are now you're here, and stops once you've gone.
+            model.foreground(phase == .active)
             if phase == .background { model.saveNow(waiting: true) }
             if phase == .active {
                 model.placeYouOnNextFix = true
                 model.finishStaleAutoWalk()
                 model.refreshNeighbours()
+                // Catches up on walks that ended with the app closed.
+                model.addPlacesYouveBeen()
                 sync.schedule()
             }
         }
@@ -211,6 +215,7 @@ struct MapScreen: View {
             onSelectSticker: { navigation.openSecret = LoreLibrary.entry(id: $0) },
             neighbours: addingStatus == nil ? model.neighbours : [],
             onPickNeighbour: { pickedNeighbour = $0 },
+            onUserLocation: { model.noteWhereYouAre($0) },
             buttons: Array(buttonFrames.values),
             dockRoom: dockRoom
         )
@@ -231,7 +236,15 @@ struct MapScreen: View {
                 VStack(alignment: .leading, spacing: 8) {
                     PlaceChip(city: model.selectedCity, secrets: secretsCount) { navigation.showingPlaces = true }
                     ShellsChip { navigation.showProgress(.level) }
+                    if let notice = model.addedPlaceNotice {
+                        AddedPlaceNote(name: notice.name) {
+                            model.select(notice.id)
+                            withAnimation(.snappy) { model.addedPlaceNotice = nil }
+                        }
+                        .transition(.scale(scale: 0.8, anchor: .topLeading).combined(with: .opacity))
+                    }
                 }
+                .animation(.snappy, value: model.addedPlaceNotice)
                 .mapButton("top leading", in: $buttonFrames)
                 Spacer(minLength: 12)
                 // Long-press: a screenshot of the map and a voice note, straight away.
@@ -244,6 +257,11 @@ struct MapScreen: View {
         }
         .safeAreaInset(edge: .bottom) {
             VStack(alignment: .leading, spacing: 10) {
+                if model.showWalkHint, model.activeWalk == nil {
+                    WalkHint()
+                        .mapButton("walk hint", in: $buttonFrames)
+                        .transition(.opacity)
+                }
                 if model.secretsAlreadyWalked > 0 {
                     NewSecretsBadge(count: model.secretsAlreadyWalked) {
                         model.secretsAlreadyWalked = 0
@@ -265,6 +283,7 @@ struct MapScreen: View {
                 }
             }
             .animation(.snappy, value: model.secretsAlreadyWalked > 0)
+            .animation(.snappy, value: model.showWalkHint)
             .padding(.horizontal)
             // Clear of MapKit's legal link along the bottom of the map.
             .padding(.bottom, 26)
@@ -310,6 +329,22 @@ struct MapScreen: View {
             // Open on where you are, in whichever of your places that is.
             if phase == .active { focus.send(.arrive) }
         }
+        .task(id: "\(model.addedPlaceNotice?.id.uuidString ?? "")-\(mapInView)") {
+            // A few seconds once you can see it: not behind the walk summary or a sheet,
+            // on another tab, or with the app in the background. Covering it starts the
+            // count again.
+            guard model.addedPlaceNotice != nil, mapInView else { return }
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            withAnimation(.snappy) { model.addedPlaceNotice = nil }
+        }
+    }
+
+    /// The map's on screen with nothing over it.
+    private var mapInView: Bool {
+        scenePhase == .active && navigation.tab == .map && model.recap == nil && model.stickerQueue.isEmpty
+            && !navigation.showingPlaces && navigation.openSecret == nil && model.pendingTeamInvite == nil
+            && model.teamNotice == nil && pickedNeighbour == nil && addingStatus == nil && addingError == nil
     }
 }
 
@@ -373,6 +408,9 @@ struct PlaceChip: View {
                     if model.worldGridResetPending {
                         Text("Rebuilding places").font(.headline).lineLimit(1)
                         ProgressView().controlSize(.small)
+                    } else if city == nil, model.findingFirstPlace {
+                        Text("Finding your suburb…").font(.headline).lineLimit(1)
+                        ProgressView().controlSize(.small)
                     } else {
                         Text(city?.name ?? "Places").font(.headline).lineLimit(1)
                     }
@@ -393,13 +431,18 @@ struct PlaceChip: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(city.map { "\($0.name), \($0.progress.percentText.replacingOccurrences(of: "%", with: " percent"))" } ?? "Places")
+            .accessibilityLabel(city.map { "\($0.name), \($0.progress.percentText.replacingOccurrences(of: "%", with: " percent"))" }
+                ?? (model.findingFirstPlace ? "Finding your suburb" : "Places"))
             .accessibilityHint(open ? "Hides the details" : "Shows your progress")
 
             if open {
                 VStack(alignment: .leading, spacing: 10) {
                     if model.worldGridResetPending {
                         Text("Your places are moving onto the new map. It needs internet and can take a minute or two.")
+                            .font(.subheadline)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if city == nil, model.findingFirstPlace {
+                        Text("Getting the suburb you're in ready. It can take a minute.")
                             .font(.subheadline)
                             .fixedSize(horizontal: false, vertical: true)
                     } else if let city {
@@ -485,6 +528,44 @@ struct WalkControls: View {
             }
             .buttonStyle(StickerButtonStyle())
         }
+    }
+}
+
+/// Until your first tile clears: what to do, in one line.
+private struct WalkHint: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image("icon-walk").resizable().scaledToFit().frame(width: 24, height: 24)
+            Text("Go for a walk to clear the clouds")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.ink)
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 12)
+        .padding(.vertical, 6)
+        .stickerCard(in: .rect(cornerRadius: 20))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// A place that's just added itself, while you had others. Tap it to go and look.
+private struct AddedPlaceNote: View {
+    let name: String
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            Text("Added \(name) to your places")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.ink)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .stickerCard(in: .rect(cornerRadius: 20))
+        }
+        .buttonStyle(PressScale())
+        .accessibilityHint("Shows it on the map")
     }
 }
 
