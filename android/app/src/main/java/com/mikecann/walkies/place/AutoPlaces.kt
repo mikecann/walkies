@@ -14,6 +14,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
@@ -48,6 +49,12 @@ data class AutoPlaces(
     /** OSM ids of places you deleted on this phone. They don't add themselves again, though you can still add one by hand. */
     val declined: Set<Long> = emptySet(),
     /**
+     * Places saved before OSM ids were kept that you deleted on this phone, by name and
+     * a spot inside each. A suburb with that name around that spot is the same one, so
+     * it doesn't add itself again either.
+     */
+    val declinedPlaces: List<DeclinedPlace> = emptyList(),
+    /**
      * Walks that ended before this never add places. Set the first time the app runs
      * with this, so an update never adds places from walks done before it.
      */
@@ -64,6 +71,12 @@ data class AutoPlaces(
     val buildFailures: Map<String, BuildFailure> = emptyMap(),
 ) {
     data class BuildFailure(val count: Int, val retryAt: SwiftDate)
+
+    /**
+     * A deleted place without an OSM id. Known by name, as `isYours` knows those, and a
+     * spot inside it, so a suburb with the same name somewhere else can still add itself.
+     */
+    data class DeclinedPlace(val name: String, val point: Coordinate)
 
     /** Where you were when the app opened, and how sure the GPS was (metres). */
     data class Spot(val point: Coordinate, val accuracy: Double)
@@ -124,7 +137,7 @@ data class AutoPlaces(
         val projection = HexGrid.projection
         val outlines = (found + known).filter(::isSuburbSized).map { place ->
             val use = when {
-                isYours(place) || place.osmId in declined -> Use.Never
+                isYours(place) || isDeclined(place) -> Use.Never
                 waitingToBuild(place, now) -> Use.Later
                 else -> Use.Add
             }
@@ -216,8 +229,23 @@ data class AutoPlaces(
 
     fun added(place: PlaceResult) = copy(found = found.filterNot { same(it, place) }, buildFailures = buildFailures - key(place))
 
-    /** Kept in [found], if it's there, so its spots aren't asked about again. */
+    /** You deleted this place, so it doesn't add itself again. Kept in [found], if it's there, so its spots aren't asked about again. */
+    fun decline(city: City): AutoPlaces {
+        city.osmId?.let { return decline(it) }
+        val spot = DeclinedPlace(city.name, city.boundary.labelPoint)
+        return if (spot in declinedPlaces) this else copy(declinedPlaces = declinedPlaces + spot)
+    }
+
     fun decline(osmId: Long) = copy(declined = declined + osmId)
+
+    /** One you deleted: the same OSM boundary, or for one saved before those were kept, the same name around where it was. */
+    fun isDeclined(place: PlaceResult): Boolean {
+        if (place.osmId != null && place.osmId in declined) return true
+        val named = declinedPlaces.filter { it.name.equals(place.name, ignoreCase = true) }
+        if (named.isEmpty()) return false
+        val shape = BoundaryShape(place.boundary, HexGrid.projection)
+        return named.any { shape.contains(HexGrid.projection.project(it.point)) }
+    }
 
     /** The walks whose spots still need checking: ended since [walksSince], in the last [WALK_DAYS], and not done with yet. */
     fun due(walks: List<Walk>, now: SwiftDate): List<Walk> {
@@ -254,6 +282,12 @@ data class AutoPlaces(
         put("missedUntil", JsonObject(missedUntil.mapValues { Codec.number(it.value.sinceReference) }))
         put("found", JsonArray(found.map(NearbyPlaces::placeJson)))
         put("declined", JsonArray(declined.sorted().map(::JsonPrimitive)))
+        put("declinedPlaces", JsonArray(declinedPlaces.map { place ->
+            buildJsonObject {
+                put("name", place.name)
+                put("point", Codec.coordinate(place.point))
+            }
+        }))
         walksSince?.let { put("walksSince", Codec.number(it.sinceReference)) }
         put("checkedWalks", JsonObject(checkedWalks.mapValues { Codec.number(it.value.sinceReference) }))
         lookUpAgainAt?.let { put("lookUpAgainAt", Codec.number(it.sinceReference)) }
@@ -275,6 +309,13 @@ data class AutoPlaces(
                 missedUntil = dates("missedUntil"),
                 found = (o["found"] as? JsonArray)?.map(NearbyPlaces::placeResult).orEmpty(),
                 declined = (o["declined"] as? JsonArray)?.mapNotNullTo(HashSet()) { (it as? JsonPrimitive)?.longOrNull }.orEmpty(),
+                declinedPlaces = (o["declinedPlaces"] as? JsonArray)?.map { e ->
+                    val d = e as? JsonObject ?: throw Codec.Invalid("declinedPlaces")
+                    DeclinedPlace(
+                        name = (d["name"] as? JsonPrimitive)?.contentOrNull ?: throw Codec.Invalid("name"),
+                        point = Codec.coordinate(d["point"] ?: throw Codec.Invalid("point")),
+                    )
+                }.orEmpty(),
                 walksSince = date("walksSince"),
                 checkedWalks = dates("checkedWalks"),
                 lookUpAgainAt = date("lookUpAgainAt"),

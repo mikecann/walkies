@@ -61,6 +61,7 @@ final class SyncEngine {
         state = store.loadSyncState()
         lastSynced = UserDefaults.standard.object(forKey: "lastSynced") as? Date
         model.placesDeleted = { [weak self] in self?.deleted(places: $0) }
+        model.walksChanged = { [weak self] in self?.changed(walks: $0) }
         countWaiting()
     }
 
@@ -176,6 +177,14 @@ final class SyncEngine {
     /// Places deleted on this phone, so the next push deletes them from the account too.
     private func deleted(places ids: [UUID]) {
         state.deletedPlaces = (state.deletedPlaces ?? []).union(ids)
+        save()
+        countWaiting()
+    }
+
+    /// Walks that changed after they went up (a place that added itself since counted
+    /// their tiles), so they go up again. Saving a walk replaces its copy in the account.
+    private func changed(walks ids: [UUID]) {
+        state.uploadedWalks.subtract(ids)
         save()
         countWaiting()
     }

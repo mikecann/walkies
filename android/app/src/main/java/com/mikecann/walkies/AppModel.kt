@@ -257,7 +257,8 @@ class AppModel(
     private var placesRevision = 0
     private var secretsRevision = 0
     private var countingTilesByPlace: Map<UUID, Int> = emptyMap()
-    private var questTileCounts: Map<UUID, Map<UUID, Int>> = emptyMap()
+    var questTileCounts: Map<UUID, Map<UUID, Int>> = emptyMap()
+        private set
     private var cachedProgression: Pair<String, Progression.State>? = null
     private var cachedHistoricalRewards: Pair<String, Progression.HistoricalRewards>? = null
     /** How many times past weeks and streaks have been worked out, for tests. */
@@ -268,6 +269,8 @@ class AppModel(
     var requestSync: (() -> Unit)? = null
     /** Tells sync which places were deleted on purpose. Set by the sync engine. */
     var placesDeleted: ((List<UUID>) -> Unit)? = null
+    /** Tells sync which walks changed after they were saved, so they go up again. Set by the sync engine. */
+    var walksChanged: ((List<UUID>) -> Unit)? = null
     /** A client for the server's street cache, from Account.client(), like sync. Tests leave it null. */
     var makePlaceClient: (suspend () -> ConvexClient?)? = null
     /** Where background place work runs (the main thread on the phone). Null in tests, which turns it off. */
@@ -921,7 +924,9 @@ class AppModel(
     /**
      * [selecting]: pick it and fly there. Places that add themselves while you've got
      * others don't take you away from what you're looking at. [builtFrom]: the walks it
-     * was built with. Any that have ended since are walked into it too, so their tiles count.
+     * was built with ([walksToBuildWith]). The rest, ones that have ended since and ones
+     * the auto-add hadn't finished with, are walked into it here, and the tiles they
+     * uncover are new on them, so they count for those walks' quests too.
      */
     fun add(city: City, selecting: Boolean = true, builtFrom: List<Walk>? = null) {
         // Already one of yours: the same suburb added by hand and found by itself, or
@@ -933,14 +938,21 @@ class AppModel(
         }
         val shape = city.shape()
         var walked = city
+        val uncovered = HashMap<UUID, Pair<Set<Hex>, Set<Hex>>>()
         if (builtFrom != null) {
             val had = builtFrom.mapTo(HashSet()) { it.id }
-            for (walk in walks) if (walk.id !in had) walked = walked.visit(CoverageTracer.samples(walk.points), shape).first
+            // In the order they were walked, so a tile two of them crossed is the first one's.
+            for (walk in walks.filter { it.id !in had }.sortedWith(Progression.walkedFirst)) {
+                val (visited, fresh) = walked.visit(CoverageTracer.samples(walk.points), shape)
+                if (fresh.isNotEmpty()) uncovered[walk.id] = fresh to (fresh - walked.tiles)
+                walked = visited
+            }
         }
         val added = walkActiveWalk(walked, shape).copy(updatedAt = now())
         cities = cities + added
         placesRevision++
         rebuildCountingTiles()
+        credit(uncovered, added.id)
         shapes[added.id] = shape
         // Its dates for the mist come from your walks, even if the walk you're on gave it some.
         lastWalkedPending.add(added.id)
@@ -953,6 +965,57 @@ class AppModel(
         refreshNeighbours()
         fillInLastWalked()
         onChange()
+    }
+
+    /**
+     * The walks a place is built with: all but the ones the auto-add hasn't finished
+     * with yet, the walk that's just ended say, which [add] walks into it afterwards so
+     * the tiles they uncover there count for their quests. Older walks only uncover its
+     * tiles, as they always have for a place added by hand, rather than changing quests
+     * from weeks ago.
+     */
+    private fun walksToBuildWith(): List<Walk> {
+        val due = autoPlaces.due(walks, now()).mapTo(HashSet()) { it.id }
+        return walks.filter { it.id !in due }
+    }
+
+    /**
+     * Tiles a place that's just been added uncovered on finished walks it wasn't built
+     * with ([uncovered]: each walk's new tiles, and those it added to the place's tiles).
+     * They're new on those walks, as if it had been one of your places when you walked
+     * them, so they count for their quests. A tile a walk already had for this place (it
+     * was deleted and added again, say) isn't counted twice.
+     */
+    private fun credit(uncovered: Map<UUID, Pair<Set<Hex>, Set<Hex>>>, placeId: UUID) {
+        val key = placeId.uuidString
+        val changed = ArrayList<UUID>()
+        walks = walks.map { walk ->
+            val (tiles, added) = uncovered[walk.id] ?: return@map walk
+            val hexes = walk.newTileHexesByPlace ?: return@map walk
+            val had = hexes[key].orEmpty()
+            val all = had + tiles
+            if (all.size == had.size) return@map walk
+            val before = walk.addedTilesByPlace
+            val grew = if (added.isEmpty()) before else before.orEmpty() + (key to (before?.get(key).orEmpty() + added))
+            val credited = walk.copy(
+                newTileHexesByPlace = hexes + (key to all),
+                newTilesByPlace = walk.newTilesByPlace.orEmpty() + (key to all.size),
+                addedTilesByPlace = grew,
+                newTiles = walk.newTiles + all.size - had.size,
+            )
+            store.save(credited)
+            changed.add(walk.id)
+            credited
+        }
+        if (changed.isEmpty()) return
+        // Deduplicated against every other walk the way the next launch's backfill does,
+        // so the two always agree.
+        val counts = questTileCounts.toMutableMap()
+        for ((id, n) in Progression.placeCounts(placeId, walks, cities)) counts[id] = counts[id].orEmpty() + (placeId to n)
+        questTileCounts = counts
+        historyRevision++
+        // Already uploaded, most likely, so they go up again with the new tiles.
+        walksChanged?.invoke(changed)
     }
 
     /**
@@ -983,7 +1046,7 @@ class AppModel(
             return
         }
         val generation = dataGeneration
-        val builtFrom = walks
+        val builtFrom = walksToBuildWith()
         val build = buildPlace
         val city = if (build != null) build(place, builtFrom) else CityBuilder.build(place, builtFrom, makePlaceClient?.invoke(), osm, status)
         if (generation != dataGeneration) throw CancellationException("Signed out while adding ${place.name}")
@@ -1000,10 +1063,8 @@ class AppModel(
     fun deleteCity(id: UUID) {
         val deleting = cities.firstOrNull { it.id == id } ?: return
         // Deleted on purpose, so it doesn't add itself again next time you walk there.
-        deleting.osmId?.let {
-            autoPlaces = autoPlaces.decline(it)
-            saveAutoPlaces()
-        }
+        autoPlaces = autoPlaces.decline(deleting)
+        saveAutoPlaces()
         placesDeleted?.invoke(listOf(id))
         cities = cities.filter { it.id != id }
         placesRevision++
@@ -1446,7 +1507,7 @@ class AppModel(
      * longer each time before it's tried again.
      */
     private suspend fun autoAdd(place: PlaceResult, generation: Int) {
-        val builtFrom = walks
+        val builtFrom = walksToBuildWith()
         val city = try {
             val build = buildPlace
             if (build != null) build(place, builtFrom) else CityBuilder.build(place, builtFrom, makePlaceClient?.invoke(), osm) {}
@@ -1462,7 +1523,7 @@ class AppModel(
         if (generation != dataGeneration) return
         // Deleted while this one was downloading: it stays in `found`, so its spots
         // aren't asked about again, and isn't added.
-        if (place.osmId in autoPlaces.declined) return
+        if (autoPlaces.isDeclined(place)) return
         autoPlaces = autoPlaces.added(place)
         saveAutoPlaces()
         // Added by hand, or pulled from the account, while this one was downloading.

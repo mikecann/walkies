@@ -141,7 +141,15 @@ struct FogMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
-        map.layoutMargins.bottom = dockRoom
+        // Set whole, never `layoutMargins.bottom = …`: reading the margins back includes
+        // the safe area, so writing them back added the status bar to the top margin on
+        // every update. MapKit fits a place inside the margins, and after a few updates
+        // there was no room left, so flying to one showed half of Western Australia.
+        let margins = UIEdgeInsets(top: 0, left: 0, bottom: dockRoom, right: 0)
+        if context.coordinator.margins != margins {
+            context.coordinator.margins = margins
+            map.layoutMargins = margins
+        }
         context.coordinator.handle = handle
         context.coordinator.update(map, with: self)
     }
@@ -167,6 +175,8 @@ struct FogMapView: UIViewRepresentable {
         private var pins: [StickerPin] = []
         private var onSelectSticker: (String) -> Void = { _ in }
         weak var handle: MapHandle?
+        /// The map's own margins as last set, without the safe area MapKit adds to them.
+        var margins: UIEdgeInsets?
 
         private var outline: MKMultiPolygon?
         private var uncovered: MKMultiPolygon?

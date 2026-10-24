@@ -153,7 +153,7 @@ final class AppModel {
     @ObservationIgnored private var placesRevision = 0
     @ObservationIgnored private var batchingProgress = false
     @ObservationIgnored private var countingTilesByPlace: [UUID: Int] = [:]
-    @ObservationIgnored private var questTileCounts: [UUID: [UUID: Int]] = [:]
+    @ObservationIgnored private(set) var questTileCounts: [UUID: [UUID: Int]] = [:]
     @ObservationIgnored private var addedTiles: [UUID: Set<Hex>] = [:]
 
     /// True when iOS launched the app in the background before the phone's first unlock
@@ -1057,8 +1057,10 @@ final class AppModel {
     /// - Parameters:
     ///   - selecting: pick it and fly there. Places that add themselves while you've
     ///     got others don't take you away from what you're looking at.
-    ///   - builtFrom: the walks it was built with. Any that have ended since are
-    ///     walked into it too, so their tiles count.
+    ///   - builtFrom: the walks it was built with (`walksToBuildWith`). The rest, ones
+    ///     that have ended since and ones the auto-add hadn't finished with, are walked
+    ///     into it here, and the tiles they uncover are new on them, so they count for
+    ///     those walks' quests too.
     func add(_ city: City, selecting: Bool = true, builtFrom: [Walk]? = nil) {
         // Already one of yours: the same suburb added by hand and found by itself, or
         // added on another phone and synced meanwhile. Just go there.
@@ -1068,10 +1070,14 @@ final class AppModel {
         }
         var city = city
         let shape = city.shape()
+        var uncovered: [UUID: (tiles: Set<Hex>, added: Set<Hex>)] = [:]
         if let builtFrom {
             let had = Set(builtFrom.map(\.id))
-            for walk in walks where !had.contains(walk.id) {
-                _ = city.visit(CoverageTracer.samples(for: walk.points), within: shape)
+            // In the order they were walked, so a tile two of them crossed is the first one's.
+            for walk in walks.filter({ !had.contains($0.id) }).sorted(by: Progression.walkedFirst) {
+                let tiles = city.tiles
+                let fresh = city.visit(CoverageTracer.samples(for: walk.points), within: shape)
+                if !fresh.isEmpty { uncovered[walk.id] = (fresh, fresh.subtracting(tiles)) }
             }
         }
         walkActiveWalk(into: &city, within: shape)
@@ -1079,6 +1085,7 @@ final class AppModel {
         cities.append(city)
         placesRevision += 1
         rebuildCountingTiles()
+        credit(uncovered, in: city.id)
         shapes[city.id] = shape
         // Its dates for the mist come from your walks, even if the walk you're on gave it some.
         lastWalkedPending.insert(city.id)
@@ -1090,6 +1097,49 @@ final class AppModel {
         requestSync?()
         refreshNeighbours()
         fillInLastWalked()
+    }
+
+    /// The walks a place is built with: all but the ones the auto-add hasn't finished
+    /// with yet, the walk that's just ended say, which `add` walks into it afterwards so
+    /// the tiles they uncover there count for their quests. Older walks only uncover its
+    /// tiles, as they always have for a place added by hand, rather than changing quests
+    /// from weeks ago.
+    private var walksToBuildWith: [Walk] {
+        let due = Set(autoPlaces.due(walks, now: .now).map(\.id))
+        return walks.filter { !due.contains($0.id) }
+    }
+
+    /// Tiles a place that's just been added uncovered on finished walks it wasn't built
+    /// with. They're new on those walks, as if it had been one of your places when you
+    /// walked them, so they count for their quests. A tile a walk already had for this
+    /// place (it was deleted and added again, say) isn't counted twice.
+    private func credit(_ uncovered: [UUID: (tiles: Set<Hex>, added: Set<Hex>)], in placeID: UUID) {
+        let key = placeID.uuidString
+        var changed: [UUID] = []
+        for i in walks.indices {
+            guard let (tiles, added) = uncovered[walks[i].id], var hexes = walks[i].newTileHexesByPlace else { continue }
+            let had = hexes[key] ?? []
+            let all = had.union(tiles)
+            guard all.count > had.count else { continue }
+            hexes[key] = all
+            var counts = walks[i].newTilesByPlace ?? [:]
+            counts[key] = all.count
+            walks[i].newTileHexesByPlace = hexes
+            walks[i].newTilesByPlace = counts
+            if !added.isEmpty { walks[i].addedTilesByPlace = (walks[i].addedTilesByPlace ?? [:]).merging([key: added]) { $0.union($1) } }
+            walks[i].newTiles += all.count - had.count
+            store.save(walks[i])
+            changed.append(walks[i].id)
+        }
+        guard !changed.isEmpty else { return }
+        // Deduplicated against every other walk the way the next launch's backfill does,
+        // so the two always agree.
+        for (id, n) in Progression.placeCounts(placeID, walks: walks, cities: cities) {
+            questTileCounts[id, default: [:]][placeID] = n
+        }
+        historyRevision += 1
+        // Already uploaded, most likely, so they go up again with the new tiles.
+        walksChanged?(changed)
     }
 
     /// A place added partway through a walk gets the walk so far, as if it had been
@@ -1117,7 +1167,7 @@ final class AppModel {
     func deleteCities(at offsets: IndexSet) {
         let removed = offsets.map { cities[$0].id }
         // Deleted on purpose, so it doesn't add itself again next time you walk there.
-        for i in offsets { if let osmId = cities[i].osmId { autoPlaces.decline(osmId: osmId) } }
+        for i in offsets { autoPlaces.decline(cities[i]) }
         saveAutoPlaces()
         placesDeleted?(removed)
         cities.remove(atOffsets: offsets)
@@ -1423,7 +1473,7 @@ final class AppModel {
     /// a note on the map says it's been added. If its streets won't download, it waits
     /// longer each time before it's tried again.
     private func autoAdd(_ place: PlaceResult, generation: Int) async {
-        let builtFrom = walks
+        let builtFrom = walksToBuildWith
         do {
             let city: City
             if let buildPlace {
@@ -1434,7 +1484,7 @@ final class AppModel {
             guard generation == dataGeneration, !worldGridResetPending else { return }
             // Deleted while this one was downloading: it stays in `found`, so its spots
             // aren't asked about again, and isn't added.
-            if place.osmId.map(autoPlaces.declined.contains) == true { return }
+            if autoPlaces.isDeclined(place) { return }
             autoPlaces.added(place)
             saveAutoPlaces()
             // Added by hand, or pulled from the account, while this one was downloading.
@@ -1601,6 +1651,8 @@ final class AppModel {
     @ObservationIgnored var requestSync: (() -> Void)?
     /// Tells the sync engine which places were deleted on purpose. Set by the sync engine.
     @ObservationIgnored var placesDeleted: (([UUID]) -> Void)?
+    /// Tells sync which walks changed after they were saved, so they go up again.
+    @ObservationIgnored var walksChanged: (([UUID]) -> Void)?
 
     /// Apply a pull as one batch. Merge ownership before preparing any level menu,
     /// and do coverage recovery on a worker rather than once per downloaded walk.
@@ -1827,7 +1879,7 @@ extension AppModel {
             return
         }
         let generation = dataGeneration
-        let builtFrom = walks
+        let builtFrom = walksToBuildWith
         let city: City
         if let buildPlace {
             city = try await buildPlace(place, builtFrom)

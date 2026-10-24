@@ -20,6 +20,10 @@ nonisolated struct AutoPlaces: Codable, Sendable {
     /// OSM ids of places you deleted on this phone. They don't add themselves again,
     /// though you can still add one by hand.
     var declined: Set<Int> = []
+    /// Places saved before OSM ids were kept that you deleted on this phone, by name and
+    /// a spot inside each. A suburb with that name around that spot is the same one, so
+    /// it doesn't add itself again either.
+    var declinedPlaces: [DeclinedPlace] = []
     /// Walks that ended before this never add places. Set the first time the app runs
     /// with this, so an update never adds places from walks done before it.
     var walksSince: Date?
@@ -37,6 +41,13 @@ nonisolated struct AutoPlaces: Codable, Sendable {
     struct BuildFailure: Codable, Equatable, Sendable {
         var count: Int
         var retryAt: Date
+    }
+
+    /// A deleted place without an OSM id. Known by name, as `isYours` knows those, and a
+    /// spot inside it, so a suburb with the same name somewhere else can still add itself.
+    struct DeclinedPlace: Codable, Equatable, Sendable {
+        var name: String
+        var point: Coordinate
     }
 
     static let cellSize = 0.002
@@ -121,7 +132,7 @@ nonisolated struct AutoPlaces: Codable, Sendable {
               isYours: (PlaceResult) -> Bool, asked: Set<Hex> = [], now: Date) -> Next {
         let grid = HexGrid.world
         let outlines = (found + known).filter(Self.isSuburbSized).map { place in
-            let use: Use = isYours(place) || place.osmId.map(declined.contains) == true ? .never
+            let use: Use = isYours(place) || isDeclined(place) ? .never
                 : waitingToBuild(place, now: now) ? .later : .add
             return (place: place, shape: BoundaryShape(place.boundary, projection: grid.projection), use: use)
         }
@@ -253,9 +264,30 @@ nonisolated struct AutoPlaces: Codable, Sendable {
         buildFailures[Self.key(place)] = nil
     }
 
-    /// Kept in `found`, if it's there, so its spots aren't asked about again.
+    /// You deleted this place, so it doesn't add itself again. Kept in `found`, if it's
+    /// there, so its spots aren't asked about again.
+    mutating func decline(_ city: City) {
+        if let osmId = city.osmId {
+            decline(osmId: osmId)
+        } else {
+            let spot = DeclinedPlace(name: city.name, point: city.boundary.labelPoint)
+            if !declinedPlaces.contains(spot) { declinedPlaces.append(spot) }
+        }
+    }
+
     mutating func decline(osmId: Int) {
         declined.insert(osmId)
+    }
+
+    /// One you deleted: the same OSM boundary, or for one saved before those were kept,
+    /// the same name around where it was.
+    func isDeclined(_ place: PlaceResult) -> Bool {
+        if let osmId = place.osmId, declined.contains(osmId) { return true }
+        let named = declinedPlaces.filter { $0.name.caseInsensitiveCompare(place.name) == .orderedSame }
+        guard !named.isEmpty else { return false }
+        let projection = HexGrid.world.projection
+        let shape = BoundaryShape(place.boundary, projection: projection)
+        return named.contains { shape.contains(projection.project($0.point)) }
     }
 
     /// The walks whose spots still need checking: ended since `walksSince`, in the last
@@ -353,6 +385,7 @@ nonisolated extension AutoPlaces {
         missedUntil = try c.decodeIfPresent([String: Date].self, forKey: .missedUntil) ?? [:]
         found = try c.decodeIfPresent([PlaceResult].self, forKey: .found) ?? []
         declined = try c.decodeIfPresent(Set<Int>.self, forKey: .declined) ?? []
+        declinedPlaces = try c.decodeIfPresent([DeclinedPlace].self, forKey: .declinedPlaces) ?? []
         walksSince = try c.decodeIfPresent(Date.self, forKey: .walksSince)
         checkedWalks = try c.decodeIfPresent([String: Date].self, forKey: .checkedWalks) ?? [:]
         lookUpAgainAt = try c.decodeIfPresent(Date.self, forKey: .lookUpAgainAt)

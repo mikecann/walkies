@@ -106,6 +106,7 @@ class SyncEngine(
 
     init {
         model.placesDeleted = ::deleted
+        model.walksChanged = ::changed
         countWaiting()
     }
 
@@ -211,6 +212,16 @@ class SyncEngine(
     /** Places deleted on this phone, so the next push deletes them from the account too. */
     private fun deleted(ids: List<UUID>) {
         state = state.copy(deletedPlaces = state.deletedPlaces.orEmpty() + ids)
+        save()
+        countWaiting()
+    }
+
+    /**
+     * Walks that changed after they went up (a place that added itself since counted
+     * their tiles), so they go up again. Saving a walk replaces its copy in the account.
+     */
+    private fun changed(ids: List<UUID>) {
+        state = state.copy(uploadedWalks = state.uploadedWalks - ids.toSet())
         save()
         countWaiting()
     }

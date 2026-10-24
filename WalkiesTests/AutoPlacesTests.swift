@@ -114,6 +114,21 @@ struct AutoPlacesTests {
                 == .lookUp(spot(x: 2100)))
     }
 
+    @Test func aDeletedPlaceWithoutAnOSMIdIsKnownByNameWhereItWas() {
+        var old = CityBuilder.build(from: place("Abbey", osmId: 2, x: 2000), ways: [], walks: [])
+        old.osmId = nil
+        var auto = AutoPlaces()
+        auto.decline(old)
+        #expect(auto.declined.isEmpty)
+        // OpenStreetMap's outline now, a little different from the one saved back then.
+        let now = place("abbey", osmId: 2, x: 2100)
+        #expect(auto.isDeclined(now))
+        #expect(auto.next(here: here(x: 2100), tracks: [], places: [], known: [now], isYours: { _ in false }, now: .now) == .nothing)
+        // Another suburb with that name somewhere else, or another suburb there, still can.
+        #expect(!auto.isDeclined(place("Abbey", osmId: 3, x: 20_000)))
+        #expect(!auto.isDeclined(place("Broadwater", osmId: 4, x: 2000)))
+    }
+
     @Test func aRememberedMissIsntLookedUpAgainForAMonth() {
         var auto = AutoPlaces()
         let sea = spot(x: 5000)
@@ -398,6 +413,9 @@ struct AutoPlacesTests {
         auto.looked(at: spot(x: 5000), found: AutoPlaces.Lookup(place: nil), isYours: { _ in false }, now: .now)
         auto.looked(at: spot(x: 2000), found: AutoPlaces.Lookup(place: place("Abbey", osmId: 21, x: 2000)), isYours: { _ in false }, now: .now)
         auto.decline(osmId: 7)
+        var legacy = CityBuilder.build(from: place("Busselton", osmId: 8, x: 8000), ways: [], walks: [])
+        legacy.osmId = nil
+        auto.decline(legacy)
         auto.checked([walk(from: 0, to: 100, endedAt: .now)])
         auto.lookUpFailed(now: .now)
         auto.failedToBuild(place("Abbey", osmId: 21, x: 2000), now: .now)
@@ -406,6 +424,8 @@ struct AutoPlacesTests {
         #expect(read.missedUntil == auto.missedUntil)
         #expect(read.found == auto.found)
         #expect(read.declined == [7])
+        #expect(read.declinedPlaces == auto.declinedPlaces)
+        #expect(read.declinedPlaces.map(\.name) == ["Busselton"])
         #expect(read.walksSince == auto.walksSince)
         #expect(read.checkedWalks == auto.checkedWalks)
         #expect(read.lookUpAgainAt == auto.lookUpAgainAt)
@@ -413,6 +433,7 @@ struct AutoPlacesTests {
         // One from before most of this was kept.
         let old = try JSONDecoder().decode(AutoPlaces.self, from: Data(#"{"declined":[3],"found":[]}"#.utf8))
         #expect(old.declined == [3])
+        #expect(old.declinedPlaces.isEmpty)
         #expect(old.walksSince == nil)
     }
 
@@ -599,8 +620,94 @@ struct AutoPlacesTests {
         await model.waitForPlacesYouveBeen()
         let walk = try #require(model.walks.last)
         #expect(walk.newTileHexesByPlace?[abbey.id.uuidString]?.isEmpty == false)
+        #expect(model.questTileCounts[walk.id]?[abbey.id] == walk.newTileHexesByPlace?[abbey.id.uuidString]?.count)
         // The walk's end finds nothing more to add.
         #expect(osm.lookups.count == 1)
+    }
+
+    @Test func aWalkIntoANewSuburbCountsItsTilesThereForQuestsOnce() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let osm = FakeOSM()
+        let abbeyPlace = place("Abbey", osmId: 21, x: 2000)
+        osm.suburbs = [abbeyPlace]
+        let home = CityBuilder.build(from: place("Home", osmId: 20, x: 0), ways: [], walks: [])
+        store.save([home])
+        let model = await model(store, osm: osm)
+        var reuploaded: [UUID] = []
+        model.walksChanged = { reuploaded += $0 }
+        model.checkSpotOnNextFix = false
+        model.pulledAccount()
+        await model.waitForPlacesYouveBeen()
+        model.startWalk()
+        for (i, x) in stride(from: 505.0, through: 2505, by: 50).enumerated() {
+            model.tracker.onLocation?(location(spot(x: x), after: Double(i) * 40))
+        }
+        model.endWalk()
+        await model.waitForPlacesYouveBeen()
+        let abbey = try #require(model.cities.first { $0.name == "Abbey" })
+        let walk = try #require(model.walks.last)
+        #expect(!abbey.visited.isEmpty)
+        // Abbey's tiles are new on the walk that's just ended, once each.
+        #expect(walk.newTileHexesByPlace?[abbey.id.uuidString] == abbey.visited)
+        #expect(walk.newTilesByPlace?[abbey.id.uuidString] == abbey.visited.count)
+        #expect(walk.newTiles == walk.newTileHexesByPlace?.values.reduce(0) { $0 + $1.count })
+        #expect(model.questTileCounts[walk.id]?[abbey.id] == abbey.visited.count)
+        #expect(model.questTileCounts[walk.id]?[home.id] == walk.newTileHexesByPlace?[home.id.uuidString]?.count)
+        // The same as the next launch works out, and it goes up again.
+        #expect(Progression.backfill(walks: model.walks, cities: model.cities).counts[walk.id] == model.questTileCounts[walk.id])
+        #expect(store.loadWalks().first { $0.id == walk.id }?.newTileHexesByPlace == walk.newTileHexesByPlace)
+        #expect(reuploaded == [walk.id])
+
+        // Deleted and added again by hand, the walk still counts them once.
+        model.deleteCity(abbey.id)
+        try await model.addPlace(abbeyPlace) { _ in }
+        #expect(model.cities.first { $0.id == abbey.id }?.visited == abbey.visited)
+        #expect(model.walks.last?.newTileHexesByPlace == walk.newTileHexesByPlace)
+        #expect(model.questTileCounts[walk.id]?[abbey.id] == abbey.visited.count)
+        #expect(reuploaded == [walk.id])
+        store.flush()
+        let relaunched = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await relaunched.waitForHistory()
+        #expect(relaunched.questTileCounts[walk.id] == model.questTileCounts[walk.id])
+    }
+
+    @Test func aWalkThatEndsWhileAPlaceIsBuildingCountsForQuests() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let model = await model(store, osm: FakeOSM())
+        model.startWalk()
+        for (i, x) in stride(from: 1505.0, through: 2505, by: 50).enumerated() {
+            model.tracker.onLocation?(location(spot(x: x), after: Double(i) * 20))
+        }
+        model.buildPlace = { [weak model] place, walks in
+            model?.endWalk()
+            return CityBuilder.build(from: place, ways: [], walks: walks)
+        }
+        try await model.addPlace(place("Abbey", osmId: 21, x: 2000)) { _ in }
+        let abbey = try #require(model.cities.first)
+        let walk = try #require(model.walks.last)
+        #expect(!abbey.visited.isEmpty)
+        #expect(walk.newTileHexesByPlace?[abbey.id.uuidString] == abbey.visited)
+        #expect(model.questTileCounts[walk.id]?[abbey.id] == abbey.visited.count)
+    }
+
+    @Test func aPlaceAddedByHandLeavesOlderWalksQuestsAlone() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let model = await model(store, osm: FakeOSM())
+        let since = try #require(model.autoPlaces.walksSince)
+        // A walk from before places added themselves, so it was never looked at.
+        var old = walk(from: 1500, to: 2500, endedAt: since.addingTimeInterval(-3600))
+        old.newTilesByPlace = [:]
+        old.newTileHexesByPlace = [:]
+        await model.addRemote(cities: [], walks: [old], progress: nil, secrets: [:])
+        try await model.addPlace(place("Abbey", osmId: 21, x: 2000)) { _ in }
+        let abbey = try #require(model.cities.first)
+        // Its tiles are explored, as they always were, but it's not new on that walk.
+        #expect(!abbey.visited.isEmpty)
+        #expect(model.walks.first?.newTileHexesByPlace?[abbey.id.uuidString] == nil)
+        #expect(model.questTileCounts[old.id]?[abbey.id] == nil)
     }
 
     @Test func addingAPlaceByHandPartwayThroughAWalkCountsTheWalk() async throws {
@@ -770,6 +877,37 @@ struct AutoPlacesTests {
         #expect(model.autoPlaces.declined == [21])
         // One more look to learn the spot's in a place you deleted, and then no more.
         #expect(osm.lookups.count == 2)
+    }
+
+    @Test func anOlderPlaceYouDeleteDoesntAddItselfAgainEither() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let osm = FakeOSM()
+        let abbey = place("Abbey", osmId: 21, x: 0)
+        osm.suburbs = [abbey, place("Abbey", osmId: 31, x: 20_000)]
+        // Saved before OSM ids were kept: a random id and none from OpenStreetMap.
+        var old = CityBuilder.build(from: abbey, ways: [], walks: [])
+        old.id = UUID()
+        old.osmId = nil
+        store.save([old])
+        let model = await model(store, osm: osm)
+        model.pulledAccount()
+        await model.waitForPlacesYouveBeen()
+        model.deleteCity(old.id)
+        #expect(model.autoPlaces.declinedPlaces.map(\.name) == ["Abbey"])
+        for _ in 0..<2 {
+            model.foreground(true)
+            model.noteWhereYouAre(location(spot(x: 100)))
+            await model.waitForPlacesYouveBeen()
+        }
+        #expect(model.cities.isEmpty)
+        // One more look to learn the spot's in the place you deleted, and then no more.
+        #expect(osm.lookups.count == 1)
+        // The Abbey somewhere else still adds itself.
+        model.foreground(true)
+        model.noteWhereYouAre(location(spot(x: 20_000)))
+        await model.waitForPlacesYouveBeen()
+        #expect(model.cities.map(\.osmId) == [31])
     }
 
     @Test func aPlaceDeletedWhileItsBuildingIsntAdded() async throws {

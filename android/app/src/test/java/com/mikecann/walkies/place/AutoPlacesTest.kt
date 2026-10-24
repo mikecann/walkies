@@ -9,6 +9,7 @@ import com.mikecann.walkies.grid.Coordinate
 import com.mikecann.walkies.grid.HexGrid
 import com.mikecann.walkies.grid.Vec2
 import com.mikecann.walkies.model.CoverageTracer
+import com.mikecann.walkies.model.Progression
 import com.mikecann.walkies.model.SwiftDate
 import com.mikecann.walkies.model.TrackPoint
 import com.mikecann.walkies.model.Walk
@@ -153,6 +154,20 @@ class AutoPlacesTest {
         assertEquals(AutoPlaces.Next.Nothing, AutoPlaces().decline(2).next(here(2100.0), emptyList(), emptyList(), listOf(next), nobody, now = today))
         val huge = place("Shire", 3, 2000.0, half = 15_000.0)
         assertEquals(AutoPlaces.Next.LookUp(spot(2100.0)), AutoPlaces().next(here(2100.0), emptyList(), emptyList(), listOf(huge), nobody, now = today))
+    }
+
+    @Test
+    fun aDeletedPlaceWithoutAnOSMIdIsKnownByNameWhereItWas() {
+        val old = CityBuilder.build(place("Abbey", 2, 2000.0), emptyList(), emptyList()).copy(osmId = null)
+        val auto = AutoPlaces().decline(old)
+        assertTrue(auto.declined.isEmpty())
+        // OpenStreetMap's outline now, a little different from the one saved back then.
+        val now = place("abbey", 2, 2100.0)
+        assertTrue(auto.isDeclined(now))
+        assertEquals(AutoPlaces.Next.Nothing, auto.next(here(2100.0), emptyList(), emptyList(), listOf(now), nobody, now = today))
+        // Another suburb with that name somewhere else, or another suburb there, still can.
+        assertFalse(auto.isDeclined(place("Abbey", 3, 20_000.0)))
+        assertFalse(auto.isDeclined(place("Broadwater", 4, 2000.0)))
     }
 
     @Test
@@ -567,9 +582,99 @@ class AutoPlacesTest {
         assertTrue(model.freshTiles[abbey.id].orEmpty().isNotEmpty())
         model.endWalk()
         model.waitForPlacesYouveBeen()
-        assertTrue(model.walks.last().newTileHexesByPlace?.get(abbey.id.uuidString).orEmpty().isNotEmpty())
+        val walk = model.walks.last()
+        assertTrue(walk.newTileHexesByPlace?.get(abbey.id.uuidString).orEmpty().isNotEmpty())
+        assertEquals(walk.newTileHexesByPlace?.get(abbey.id.uuidString)?.size, model.questTileCounts[walk.id]?.get(abbey.id))
         // The walk's end finds nothing more to add.
         assertEquals(1, osm.lookups.size)
+    }
+
+    @Test
+    fun aWalkIntoANewSuburbCountsItsTilesThereForQuestsOnce() = runBlocking {
+        val (store, _) = tempStore()
+        val osm = FakeOSM()
+        val abbeyPlace = place("Abbey", 21, 2000.0)
+        osm.suburbs = listOf(abbeyPlace)
+        val home = CityBuilder.build(place("Home", 20, 0.0), emptyList(), emptyList())
+        store.save(listOf(home))
+        val model = model(store, osm, this)
+        val reuploaded = ArrayList<UUID>()
+        model.walksChanged = { reuploaded += it }
+        model.checkSpotOnNextFix = false
+        model.pulledAccount()
+        model.waitForPlacesYouveBeen()
+        model.startWalk()
+        var x = 505.0
+        var seconds = 0.0
+        while (x <= 2505.0) {
+            model.record(fix(spot(x), after = seconds))
+            x += 50
+            seconds += 40
+        }
+        now += seconds
+        model.endWalk()
+        model.waitForPlacesYouveBeen()
+        val abbey = model.cities.single { it.name == "Abbey" }
+        val walk = model.walks.last()
+        assertTrue(abbey.visited.isNotEmpty())
+        // Abbey's tiles are new on the walk that's just ended, once each.
+        assertEquals(abbey.visited, walk.newTileHexesByPlace?.get(abbey.id.uuidString))
+        assertEquals(abbey.visited.size, walk.newTilesByPlace?.get(abbey.id.uuidString))
+        assertEquals(walk.newTileHexesByPlace!!.values.sumOf { it.size }, walk.newTiles)
+        assertEquals(abbey.visited.size, model.questTileCounts[walk.id]?.get(abbey.id))
+        assertEquals(walk.newTileHexesByPlace!![home.id.uuidString]?.size, model.questTileCounts[walk.id]?.get(home.id))
+        // The same as the next launch works out, and it goes up again.
+        assertEquals(model.questTileCounts[walk.id], Progression.backfill(model.walks, model.cities).counts[walk.id])
+        assertEquals(walk.newTileHexesByPlace, store.loadWalks().single { it.id == walk.id }.newTileHexesByPlace)
+        assertEquals(listOf(walk.id), reuploaded)
+
+        // Deleted and added again by hand, the walk still counts them once.
+        model.deleteCity(abbey.id)
+        model.addPlace(abbeyPlace) {}
+        assertEquals(abbey.visited, model.cities.single { it.id == abbey.id }.visited)
+        assertEquals(walk.newTileHexesByPlace, model.walks.last().newTileHexesByPlace)
+        assertEquals(abbey.visited.size, model.questTileCounts[walk.id]?.get(abbey.id))
+        assertEquals(listOf(walk.id), reuploaded)
+        store.flush()
+        val restarted = model(store, FakeOSM(), this)
+        assertEquals(model.questTileCounts[walk.id], restarted.questTileCounts[walk.id])
+    }
+
+    @Test
+    fun aWalkThatEndsWhileAPlaceIsBuildingCountsForQuests() = runBlocking {
+        val model = model(tempStore().first, FakeOSM(), this)
+        model.startWalk()
+        var x = 1505.0
+        while (x <= 2505.0) {
+            model.record(fix(spot(x)))
+            x += 50
+            now += 20
+        }
+        model.buildPlace = { place, walks ->
+            model.endWalk()
+            CityBuilder.build(place, emptyList(), walks)
+        }
+        model.addPlace(place("Abbey", 21, 2000.0)) {}
+        val abbey = model.cities.single()
+        val walk = model.walks.last()
+        assertTrue(abbey.visited.isNotEmpty())
+        assertEquals(abbey.visited, walk.newTileHexesByPlace?.get(abbey.id.uuidString))
+        assertEquals(abbey.visited.size, model.questTileCounts[walk.id]?.get(abbey.id))
+    }
+
+    @Test
+    fun aPlaceAddedByHandLeavesOlderWalksQuestsAlone() = runBlocking {
+        val model = model(tempStore().first, FakeOSM(), this)
+        val since = model.autoPlaces.walksSince!!
+        // A walk from before places added themselves, so it was never looked at.
+        val old = walk(1500.0, 2500.0, since.plus(-3600.0)).copy(newTilesByPlace = emptyMap(), newTileHexesByPlace = emptyMap())
+        model.addRemote(emptyList(), listOf(old), null, emptyMap())
+        model.addPlace(place("Abbey", 21, 2000.0)) {}
+        val abbey = model.cities.single()
+        // Its tiles are explored, as they always were, but it's not new on that walk.
+        assertTrue(abbey.visited.isNotEmpty())
+        assertNull(model.walks.single().newTileHexesByPlace?.get(abbey.id.uuidString))
+        assertNull(model.questTileCounts[old.id]?.get(abbey.id))
     }
 
     @Test
@@ -746,6 +851,35 @@ class AutoPlacesTest {
     }
 
     @Test
+    fun anOlderPlaceYouDeleteDoesntAddItselfAgainEither() = runBlocking {
+        val (store, _) = tempStore()
+        val osm = FakeOSM()
+        val abbey = place("Abbey", 21, 0.0)
+        osm.suburbs = listOf(abbey, place("Abbey", 31, 20_000.0))
+        // Saved before OSM ids were kept: a random id and none from OpenStreetMap.
+        val old = CityBuilder.build(abbey, emptyList(), emptyList()).copy(id = UUID.randomUUID(), osmId = null)
+        store.save(listOf(old))
+        val model = model(store, osm, this)
+        model.pulledAccount()
+        model.waitForPlacesYouveBeen()
+        model.deleteCity(old.id)
+        assertEquals(listOf("Abbey"), model.autoPlaces.declinedPlaces.map { it.name })
+        repeat(2) {
+            model.foreground(true)
+            model.record(fix(spot(100.0)))
+            model.waitForPlacesYouveBeen()
+        }
+        assertTrue(model.cities.isEmpty())
+        // One more look to learn the spot's in the place you deleted, and then no more.
+        assertEquals(1, osm.lookups.size)
+        // The Abbey somewhere else still adds itself.
+        model.foreground(true)
+        model.record(fix(spot(20_000.0)))
+        model.waitForPlacesYouveBeen()
+        assertEquals(listOf(31L), model.cities.map { it.osmId })
+    }
+
+    @Test
     fun aPlaceDeletedWhileItsBuildingIsntAdded() = runBlocking {
         val osm = FakeOSM()
         osm.suburbs = listOf(place("Abbey", 21, 0.0))
@@ -804,6 +938,7 @@ class AutoPlacesTest {
             missedUntil = mapOf("-16825,57675" to SwiftDate(812345678.25)),
             found = listOf(place("Abbey", 21, 0.0)),
             declined = setOf(7, 3),
+            declinedPlaces = listOf(AutoPlaces.DeclinedPlace("Busselton", Coordinate(-33.65, 115.35))),
             walksSince = SwiftDate(812345600.0),
             checkedWalks = mapOf(walkId.uuidString to SwiftDate(812345700.0)),
             lookUpAgainAt = SwiftDate(812346000.0),
@@ -814,6 +949,9 @@ class AutoPlacesTest {
         val json = Json.parseToJsonElement(File(root, "auto-places.json").readText()).jsonObject
         assertEquals("812345678.25", (json["missedUntil"] as JsonObject)["-16825,57675"]!!.jsonPrimitive.content)
         assertEquals(listOf(3L, 7L), (json["declined"] as JsonArray).map { it.jsonPrimitive.long })
+        val declinedPlace = (json["declinedPlaces"] as JsonArray).single().jsonObject
+        assertEquals("Busselton", declinedPlace["name"]!!.jsonPrimitive.content)
+        assertEquals("-33.65", declinedPlace["point"]!!.jsonObject["lat"]!!.jsonPrimitive.content)
         assertEquals(21L, (json["found"] as JsonArray).single().jsonObject["osmId"]!!.jsonPrimitive.long)
         assertEquals("812345600", json["walksSince"]!!.jsonPrimitive.content)
         assertEquals("812345700", (json["checkedWalks"] as JsonObject)["0E1D3A52-6E5B-4C77-9C5F-5C2C2C9E7A10"]!!.jsonPrimitive.content)
@@ -824,6 +962,7 @@ class AutoPlacesTest {
         // One from before most of this was kept still reads.
         val old = AutoPlaces.from(Json.parseToJsonElement("""{"declined":[3],"found":[]}"""))
         assertEquals(setOf(3L), old.declined)
+        assertTrue(old.declinedPlaces.isEmpty())
         assertNull(old.walksSince)
     }
 
