@@ -224,6 +224,26 @@ class ServerLoreTest {
     }
 
     @Test
+    fun anotherPhonesPinOnATileYouveWalkedIsYoursWhenItsSecretArrives() = runBlocking {
+        val (store, _) = tempStore()
+        // Synced from another phone, on a tile this one's walked before it's heard from the server.
+        val bare = city(somewhere)
+        val base = HexGrid.hex(containing = bare.boundary.centre)
+        val theirs = Hex(base.q + 5, base.r)
+        val id = "osm$somewhere-the-jetty"
+        store.save(listOf(bare.copy(visited = (0 until 10).mapTo(LinkedHashSet()) { Hex(base.q + it, base.r) }, stickers = mapOf(id to theirs))))
+        val server = FakeServer()
+        val model = model(store, server)
+        assertTrue(theirs in model.cities[0].visited)
+        assertNull(model.foundStickers[id])
+        server.answers[somewhere] = ServerLore.Answer(ServerLore.Status.Ready, 1, listOf(secret("the-jetty", bare, tile = 50)))
+        model.updateLore()
+        assertEquals(theirs, model.cities[0].stickers?.get(id))
+        assertNotNull(model.foundStickers[id])
+        assertEquals(1, model.secretsAlreadyWalked)
+    }
+
+    @Test
     fun theSameVersionReusesTheCache() = runBlocking {
         val (store, _) = tempStore()
         val server = FakeServer()

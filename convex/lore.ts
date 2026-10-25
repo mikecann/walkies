@@ -443,7 +443,9 @@ export const runFinished = internalMutation({
   returns: v.null(),
   handler: async (ctx, { result, context: { osmId, run } }) => {
     const row = await placeRow(ctx, osmId);
-    if (row !== null && row.status === "researching" && row.attempts === run) {
+    // A successful run's last step (loreRun.publish) has already moved it to ready or quiet.
+    const finishing = result.kind === "success" ? ["researching", "ready", "quiet"] : ["researching"];
+    if (row !== null && finishing.includes(row.status) && row.attempts === run) {
       const now = Date.now();
       // A manual run's retries respect LORE_AUTO like any other.
       const done = { manual: undefined, requestedBy: undefined, journalUntil: now + journalKeep };

@@ -1062,10 +1062,29 @@ class AppModel(
     private fun loreChanged(arrived: List<Pair<Long, ServerLore.Change>>) {
         LoreLibrary.useServer(serverLore, store.serverStickers)
         placeStickers()
+        unlockArrivedSecrets()
         for ((osmId, change) in arrived) {
             val city = cities.firstOrNull { it.osmId == osmId } ?: continue
             loreNotice = LoreNotice(city.id, city.name, change.arrived.size)
             break
+        }
+    }
+
+    /**
+     * Pins already down for server secrets that hadn't arrived yet (say another phone
+     * placed them) on tiles you've walked. Walking there couldn't find a secret this
+     * phone didn't have, and [placeStickers] keeps the pin rather than placing it again,
+     * so they're yours now, counted like newly placed ones.
+     */
+    private fun unlockArrivedSecrets() {
+        for (city in cities) {
+            val arrived = city.stickers.orEmpty().filter { (id, hex) ->
+                foundStickers[id] == null && hex in city.visited &&
+                    LoreLibrary.bundledEntry(id) == null && serverLore.entry(id) != null
+            }
+            if (arrived.isEmpty()) continue
+            // Just these pins, so a bundled one under a walked tile is left as it was.
+            secretsAlreadyWalked += unlockStickers(city.copy(stickers = arrived), city.visited, notify = false, popUp = false)
         }
     }
 

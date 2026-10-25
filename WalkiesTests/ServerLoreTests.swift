@@ -187,6 +187,27 @@ struct ServerLoreTests {
         #expect(model.cities.first?.stickers?["osm\(Self.somewhere)-the-jetty"] == theirs)
     }
 
+    @Test func anotherPhonesPinOnATileYouveWalkedIsYoursWhenItsSecretArrives() async throws {
+        let store = store()
+        defer { store.wipe() }
+        // Synced from another phone, on a tile this one's walked before it's heard from the server.
+        var place = city(osmId: Self.somewhere, visited: 10)
+        let base = place.grid.hex(containing: place.boundary.centre)
+        let theirs = Hex(q: base.q + 5, r: base.r)
+        #expect(place.visited.contains(theirs))
+        let id = "osm\(Self.somewhere)-the-jetty"
+        place.stickers = [id: theirs]
+        store.save([place])
+        let server = FakeServer()
+        let model = await model(store, server: server)
+        #expect(model.foundStickers[id] == nil)
+        server.answers[Self.somewhere] = ServerLore.Answer(status: .ready, version: 1, entries: [secret("the-jetty", in: place, tile: 50)])
+        await model.updateLore()
+        #expect(model.cities.first?.stickers?[id] == theirs)
+        #expect(model.foundStickers[id] != nil)
+        #expect(model.secretsAlreadyWalked == 1)
+    }
+
     @Test func theSameVersionReusesTheCache() async throws {
         let store = store()
         defer { store.wipe() }

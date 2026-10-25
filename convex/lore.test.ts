@@ -828,6 +828,26 @@ describe("finishing a run", () => {
     expect(await t.query(internal.loreRun.needStickers, { osmId: somewhere, run: 1 })).toHaveLength(3);
   });
 
+  test("a run that publishes is finished off too: its threads go, its journal's kept two weeks, and who asked is let go", async () => {
+    const { t, aliceId } = await setup();
+    agentTest.register(t, "agent");
+    const agent = components.agent;
+    await addPlace(t, { manual: true, requestedBy: aliceId, workflowId: "w" });
+    const thread = await t.run((ctx) => ctx.runMutation(agent.threads.createThread, { title: "Somewhere: heritage, run 1" }));
+    await t.mutation(internal.loreRun.saveThread, { osmId: somewhere, run: 1, threadId: thread._id });
+    for (const slug of ["one", "two", "three"]) await addEntry(t, { slug });
+    // The workflow's last step, then its onComplete.
+    const returnValue = await t.mutation(internal.loreRun.publish, { osmId: somewhere, run: 1 });
+    expect(returnValue.status).toBe("ready");
+    await t.mutation(internal.lore.runFinished, { workflowId: "w" as never, result: { kind: "success", returnValue }, context: { osmId: somewhere, run: 1 } });
+    const row = await placeOf(t);
+    expect(row).toMatchObject({ status: "ready", journalUntil: Date.now() + 14 * day });
+    expect([row.manual, row.requestedBy]).toEqual([undefined, undefined]);
+    await runScheduled(t);
+    expect(await t.run((ctx) => ctx.db.query("loreThreads").collect())).toEqual([]);
+    expect(await t.run((ctx) => ctx.runQuery(agent.threads.getThread, { threadId: thread._id }))).toBeNull();
+  });
+
   test("a finished run's threads go at once, its journal after two weeks, and a manual run's retries respect the switch", async () => {
     const { t } = await setup();
     agentTest.register(t, "agent");

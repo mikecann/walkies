@@ -1172,10 +1172,30 @@ final class AppModel {
     private func loreChanged(arrived: [(osmId: Int, change: ServerLore.Change)]) {
         LoreLibrary.useServer(serverLore, stickers: store.serverStickers)
         placeStickers()
+        unlockArrivedSecrets()
         for (osmId, change) in arrived {
             guard let city = cities.first(where: { $0.osmId == osmId }) else { continue }
             loreNotice = LoreNotice(id: city.id, name: city.name, count: change.arrived.count)
             break
+        }
+    }
+
+    /// Pins already down for server secrets that hadn't arrived yet (say another phone
+    /// placed them) on tiles you've walked. Walking there couldn't find a secret this
+    /// phone didn't have, and placeStickers keeps the pin rather than placing it again,
+    /// so they're yours now, counted like newly placed ones.
+    private func unlockArrivedSecrets() {
+        for city in cities {
+            guard let placed = city.stickers else { continue }
+            let arrived = placed.filter { id, hex in
+                foundStickers[id] == nil && city.visited.contains(hex)
+                    && LoreLibrary.bundledEntry(id: id) == nil && serverLore.entry(id: id) != nil
+            }
+            guard !arrived.isEmpty else { continue }
+            // Just these pins, so a bundled one under a walked tile is left as it was.
+            var only = city
+            only.stickers = arrived
+            secretsAlreadyWalked += unlockStickers(in: only, on: city.visited, notify: false, popUp: false)
         }
     }
 
