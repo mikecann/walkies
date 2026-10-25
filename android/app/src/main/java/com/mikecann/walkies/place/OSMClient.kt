@@ -253,32 +253,28 @@ class OSMClient(
     }
 
     /**
-     * With Overpass down: the boundary Nominatim's reverse lookup gives at suburb level,
-     * if its admin_level and size would pass AutoPlaces' rule (so in Australia only a
-     * locality, never the council).
+     * With Overpass down: Nominatim's reverse lookup at a few zooms stands in for is_in
+     * ([AutoPlaces.fallbackCandidates]), then one lookup brings the outlines, and the
+     * suburb has to pass the same rule (so in Australia only a locality, never the
+     * council).
      */
     private suspend fun fallbackSuburb(point: Coordinate): AutoPlaces.Lookup {
-        val item = reverse(point, details = true)
-        val id = (item?.get("osm_id") as? JsonPrimitive)?.longOrNull
-        if (item == null || (item["osm_type"] as? JsonPrimitive)?.contentOrNull != "relation" || id == null) {
-            return AutoPlaces.Lookup(null, fallback = true)
+        val candidates = AutoPlaces.fallbackCandidates { zoom ->
+            reverseAnswer(reverse(point, zoom, details = true) ?: JsonObject(emptyMap()))
         }
-        val level = ((item["extratags"] as? JsonObject)?.get("admin_level") as? JsonPrimitive)?.contentOrNull
-        val country = ((item["address"] as? JsonObject)?.get("country_code") as? JsonPrimitive)?.contentOrNull
-        val candidates = AutoPlaces.suburbCandidates(listOf(AutoPlaces.Relation(id, level)), country)
         if (candidates.isEmpty()) return AutoPlaces.Lookup(null, fallback = true)
         return AutoPlaces.Lookup(AutoPlaces.pick(lookup(candidates), candidates), fallback = true)
     }
 
     /**
-     * Nominatim's reverse lookup at suburb level. [details] brings the boundary's tags
-     * (its admin_level) and the country it's in.
+     * Nominatim's reverse lookup. [zoom] 12 is suburb level: any closer and it can answer
+     * with the suburb's name pin rather than its boundary. [details] brings the
+     * boundary's tags (its admin_level) and the country it's in.
      */
-    private suspend fun reverse(point: Coordinate, details: Boolean = false): JsonObject? {
+    private suspend fun reverse(point: Coordinate, zoom: Int = 12, details: Boolean = false): JsonObject? {
         val url = "https://nominatim.openstreetmap.org/reverse?" + form(
             "lat" to point.lat.toString(), "lon" to point.lon.toString(),
-            // Suburb level. Any closer and it can answer with the suburb's name pin rather than its boundary.
-            "zoom" to "12", "format" to "jsonv2",
+            "zoom" to zoom.toString(), "format" to "jsonv2",
             *(if (details) arrayOf("extratags" to "1", "addressdetails" to "1") else emptyArray<Pair<String, String>>()),
         )
         return get(url, english = false) as? JsonObject
@@ -343,6 +339,20 @@ class OSMClient(
 
         private fun form(vararg pairs: Pair<String, String>) =
             pairs.joinToString("&") { (k, v) -> URLEncoder.encode(k, "UTF-8") + "=" + URLEncoder.encode(v, "UTF-8") }
+
+        /**
+         * The boundary a detailed reverse lookup answered with, if it's one rather than a
+         * town's name pin, with its admin_level, and the country the spot's in.
+         */
+        fun reverseAnswer(item: JsonObject): AutoPlaces.ReverseAnswer {
+            val id = (item["osm_id"] as? JsonPrimitive)?.longOrNull
+            val relation = if ((item["osm_type"] as? JsonPrimitive)?.contentOrNull == "relation" && id != null) {
+                AutoPlaces.Relation(id, ((item["extratags"] as? JsonObject)?.get("admin_level") as? JsonPrimitive)?.contentOrNull)
+            } else {
+                null
+            }
+            return AutoPlaces.ReverseAnswer(relation, ((item["address"] as? JsonObject)?.get("country_code") as? JsonPrimitive)?.contentOrNull)
+        }
 
         /** One Nominatim result, if it has an outline. */
         fun place(item: JsonObject): PlaceResult? {

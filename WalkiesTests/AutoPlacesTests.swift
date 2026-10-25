@@ -299,9 +299,10 @@ struct AutoPlacesTests {
             return (500, "")
         }
         let found = try await OSMClient.suburb(at: Coordinate(lat: -33.635, lon: 115.385), session: session)
-        // The City of Busselton is the council, not a suburb.
+        // The City of Busselton is the council, not a suburb, at every zoom.
         #expect(found == AutoPlaces.Lookup(place: nil, fallback: true))
         #expect(OSMStub.asked.contains { $0.path == "/reverse" && $0.query?.contains("extratags=1") == true })
+        #expect(zooms(OSMStub.asked) == AutoPlaces.fallbackZooms)
         #expect(!OSMStub.asked.contains { $0.path == "/lookup" })
     }
 
@@ -319,6 +320,90 @@ struct AutoPlacesTests {
         let found = try await OSMClient.suburb(at: Coordinate(lat: -33.635, lon: 115.385), session: session)
         #expect(found.place?.osmId == 11688696)
         #expect(found.fallback)
+        // The locality is as small as it gets in Australia, so no other zoom is asked.
+        #expect(zooms(OSMStub.asked) == [12])
+    }
+
+    /// shared/fixtures/places/reverse-fallback.json: what Nominatim really answered at a
+    /// few spots, at each zoom, and the outlines of the boundaries it gave.
+    func fallbackFixture() throws -> (cases: [[String: Any]], outlines: [[String: Any]]) {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "shared/fixtures/places/reverse-fallback.json")
+        let fixture = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        return (try #require(fixture["cases"] as? [[String: Any]]), try #require(fixture["lookup"] as? [[String: Any]]))
+    }
+
+    func fallbackCase(_ prefix: String) throws -> [String: Any] {
+        try #require(try fallbackFixture().cases.first { ($0["name"] as? String)?.hasPrefix(prefix) == true })
+    }
+
+    /// The zooms the reverse lookups asked at, in order.
+    func zooms(_ asked: [URL]) -> [Int] {
+        asked.filter { $0.path == "/reverse" }.compactMap { url in
+            URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "zoom" }?.value.flatMap { Int($0) }
+        }
+    }
+
+    /// OpenStreetMap with Overpass down, and Nominatim answering as it did at this spot.
+    func overpassDown(_ test: [String: Any], outlines: [[String: Any]]) -> URLSession {
+        let answers = test["reverse"] as? [String: Any] ?? [:]
+        func json(_ value: Any) -> String { String(decoding: try! JSONSerialization.data(withJSONObject: value), as: UTF8.self) }
+        return OSMStub.session { url in
+            if OSMClient.overpassEndpoints.contains(url) { return (504, "") }
+            let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            let value = { (name: String) in query.first { $0.name == name }?.value }
+            if url.path == "/reverse", let answer = value("zoom").flatMap({ answers[$0] }) { return (200, json(answer)) }
+            if url.path == "/lookup", let ids = value("osm_ids")?.split(separator: ",").map(String.init) {
+                return (200, json(outlines.filter { ids.contains("R\($0["osm_id"] as? Int ?? 0)") }))
+            }
+            return (500, "")
+        }
+    }
+
+    @Test func theFallbackMatchesTheSharedFixture() async throws {
+        let fixture = try fallbackFixture()
+        let outlines = fixture.outlines.compactMap(OSMClient.place)
+        for test in fixture.cases {
+            let name = test["name"] as? String ?? "?"
+            let answers = test["reverse"] as? [String: [String: Any]] ?? [:]
+            var asked: [Int] = []
+            let candidates = try await AutoPlaces.fallbackCandidates { zoom in
+                asked.append(zoom)
+                return OSMClient.reverseAnswer(try #require(answers[String(zoom)], "\(name) asked at zoom \(zoom)"))
+            }
+            #expect(asked == test["asked"] as? [Int], "\(name)")
+            #expect(candidates == test["candidates"] as? [Int], "\(name)")
+            #expect(AutoPlaces.pick(outlines, order: candidates)?.osmId == test["osmId"] as? Int, "\(name)")
+        }
+    }
+
+    @Test func inEnglandTheFallbackFindsTheParishPastTheCounty() async throws {
+        let fixture = try fallbackFixture()
+        let porlock = try fallbackCase("Porlock")
+        let session = overpassDown(porlock, outlines: fixture.outlines)
+        let found = try await OSMClient.suburb(at: Coordinate(lat: 51.2092, lon: -3.5953), session: session)
+        // Somerset at zoom 12 is far too big, so it asks again closer in.
+        #expect(found.place?.osmId == 2676434)
+        #expect(found.place?.name == "Porlock")
+        #expect(found.fallback)
+        #expect(zooms(OSMStub.asked) == [12, 14])
+        #expect(OSMStub.asked.filter { $0.path == "/lookup" }.count == 1)
+    }
+
+    @Test func whenEveryZoomFindsNothingTheSpotIsRuledOutForADay() async throws {
+        let fixture = try fallbackFixture()
+        let bay = try fallbackCase("Out in Geographe Bay")
+        let session = overpassDown(bay, outlines: fixture.outlines)
+        let point = Coordinate(lat: -33.6, lon: 115.38)
+        let found = try await OSMClient.suburb(at: point, session: session)
+        // Busselton's name pin at every zoom, and never a boundary to look up.
+        #expect(found == AutoPlaces.Lookup(place: nil, fallback: true))
+        #expect(zooms(OSMStub.asked) == AutoPlaces.fallbackZooms)
+        #expect(!OSMStub.asked.contains { $0.path == "/lookup" })
+        var auto = AutoPlaces()
+        auto.looked(at: point, found: found, isYours: { _ in false }, now: .now)
+        #expect(auto.missed(at: point, now: .now.addingTimeInterval(23 * 3600)))
+        #expect(!auto.missed(at: point, now: .now.addingTimeInterval(25 * 3600)))
     }
 
     @Test func oneRequestAtATimeToOpenStreetMap() async throws {

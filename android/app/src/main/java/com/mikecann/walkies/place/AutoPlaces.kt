@@ -91,6 +91,12 @@ data class AutoPlaces(
     /** A boundary a spot is in, as Overpass's is_in describes it. [country] is the ISO 3166-1 code, which only a country has. */
     data class Relation(val id: Long, val adminLevel: String?, val country: String? = null)
 
+    /**
+     * What Nominatim's reverse lookup said at one zoom: the boundary it answered with, if
+     * it was one rather than a town's name pin, and the country the spot's in.
+     */
+    data class ReverseAnswer(val relation: Relation?, val country: String?)
+
     sealed interface Next {
         /** Every spot is in one of your places, too close to one, or somewhere already ruled out. */
         data object Nothing : Next
@@ -353,6 +359,14 @@ data class AutoPlaces(
          * a walk out along a jetty never adds a whole city council.
          */
         val AUSTRALIAN_LEVELS = 9..10
+        /**
+         * Zooms the fallback asks Nominatim's reverse lookup at, in turn. At 12 it's the
+         * locality in Australia. In England 12 is the county or a town's name pin, so 14
+         * comes next, where the parish answers; and where there's no parish, 10 gives the
+         * district or London borough (8), since no suburb's name pin can answer instead at
+         * that zoom.
+         */
+        val FALLBACK_ZOOMS = listOf(12, 14, 10)
         /** Lookups in one go. The rest wait for the next time the app opens or a walk ends. */
         const val LOOKUPS_PER_RUN = 10
         /** Metres. A fix vaguer than this when the app opens could be in the suburb next door. */
@@ -444,6 +458,31 @@ data class AutoPlaces(
                 .sortedWith(compareByDescending<Pair<Long, Int>> { it.second }.thenBy { it.first })
                 .map { it.first }
                 .distinct()
+        }
+
+        /**
+         * With Overpass down, the boundaries Nominatim says a spot is in that could be its
+         * suburb, smallest first, from its reverse lookup at each of [FALLBACK_ZOOMS] in turn.
+         * It stops once it has a locality in Australia or a parish (10) anywhere else, since
+         * nothing smaller would count, but a county or district might have a parish inside
+         * that the next zoom finds. A lookup that fails throws, so a spot is only ruled out
+         * when every zoom answered.
+         */
+        suspend fun fallbackCandidates(reverse: suspend (zoom: Int) -> ReverseAnswer): List<Long> {
+            val relations = ArrayList<Relation>()
+            var country: String? = null
+            for (zoom in FALLBACK_ZOOMS) {
+                val answer = reverse(zoom)
+                country = country ?: answer.country
+                answer.relation?.let { relations.add(it) }
+                val australia = country.equals("AU", ignoreCase = true)
+                val smallest = relations.any { r ->
+                    val level = r.adminLevel?.toIntOrNull() ?: return@any false
+                    if (australia) level in AUSTRALIAN_LEVELS else level == SUBURB_LEVELS.last
+                }
+                if (smallest) break
+            }
+            return suburbCandidates(relations, country)
         }
 
         /** The suburb from these outlines, in [order] (smallest first): the first that's a sensible size, so a tiny one gives way to the next one up. */

@@ -215,30 +215,37 @@ nonisolated enum OSMClient {
         return AutoPlaces.Lookup(place: AutoPlaces.pick(try await lookup(relations: candidates, session: session), order: candidates))
     }
 
-    /// With Overpass down: the boundary Nominatim's reverse lookup gives at suburb level,
-    /// if its admin_level and size would pass AutoPlaces' rule (so in Australia only a
-    /// locality, never the council).
+    /// With Overpass down: Nominatim's reverse lookup at a few zooms stands in for is_in
+    /// (`AutoPlaces.fallbackCandidates`), then one lookup brings the outlines, and the
+    /// suburb has to pass the same rule (so in Australia only a locality, never the
+    /// council).
     private static func fallbackSuburb(at point: Coordinate, session: URLSession) async throws -> AutoPlaces.Lookup {
-        guard let item = try await reverse(point, details: true, session: session),
-              item["osm_type"] as? String == "relation", let id = item["osm_id"] as? Int
-        else { return AutoPlaces.Lookup(place: nil, fallback: true) }
-        let level = (item["extratags"] as? [String: Any])?["admin_level"] as? String
-        let country = (item["address"] as? [String: Any])?["country_code"] as? String
-        let candidates = AutoPlaces.suburbCandidates([AutoPlaces.Relation(id: id, adminLevel: level)], country: country)
+        let candidates = try await AutoPlaces.fallbackCandidates { zoom in
+            reverseAnswer(try await reverse(point, zoom: zoom, details: true, session: session) ?? [:])
+        }
         guard !candidates.isEmpty else { return AutoPlaces.Lookup(place: nil, fallback: true) }
         return AutoPlaces.Lookup(place: AutoPlaces.pick(try await lookup(relations: candidates, session: session), order: candidates), fallback: true)
     }
 
-    /// Nominatim's reverse lookup at suburb level. `details` brings the boundary's tags
-    /// (its admin_level) and the country it's in.
-    private static func reverse(_ point: Coordinate, details: Bool = false, session: URLSession) async throws -> [String: Any]? {
+    /// The boundary a detailed reverse lookup answered with, if it's one rather than a
+    /// town's name pin, with its admin_level, and the country the spot's in.
+    static func reverseAnswer(_ item: [String: Any]) -> AutoPlaces.ReverseAnswer {
+        var relation: AutoPlaces.Relation?
+        if item["osm_type"] as? String == "relation", let id = item["osm_id"] as? Int {
+            relation = AutoPlaces.Relation(id: id, adminLevel: (item["extratags"] as? [String: Any])?["admin_level"] as? String)
+        }
+        return AutoPlaces.ReverseAnswer(relation: relation, country: (item["address"] as? [String: Any])?["country_code"] as? String)
+    }
+
+    /// Nominatim's reverse lookup. `zoom` 12 is suburb level: any closer and it can answer
+    /// with the suburb's name pin rather than its boundary. `details` brings the
+    /// boundary's tags (its admin_level) and the country it's in.
+    private static func reverse(_ point: Coordinate, zoom: Int = 12, details: Bool = false, session: URLSession) async throws -> [String: Any]? {
         var components = URLComponents(string: "https://nominatim.openstreetmap.org/reverse")!
         components.queryItems = [
             URLQueryItem(name: "lat", value: String(point.lat)),
             URLQueryItem(name: "lon", value: String(point.lon)),
-            // Suburb level. Any closer and it can answer with the suburb's
-            // name pin rather than its boundary.
-            URLQueryItem(name: "zoom", value: "12"),
+            URLQueryItem(name: "zoom", value: String(zoom)),
             URLQueryItem(name: "format", value: "jsonv2"),
         ] + (details ? [URLQueryItem(name: "extratags", value: "1"), URLQueryItem(name: "addressdetails", value: "1")] : [])
         var request = URLRequest(url: components.url!)

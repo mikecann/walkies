@@ -27,10 +27,12 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
+import kotlinx.serialization.json.longOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -39,6 +41,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 import java.io.IOException
+import java.net.URLDecoder
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -342,9 +345,84 @@ class AutoPlacesTest {
                 }
             }
         }
-        assertEquals(AutoPlaces.Lookup(null, fallback = true), OSMClient(http).suburb(Coordinate(-33.635, 115.385)))
-        // Overpass, then the reverse lookup, and no outline to fetch.
-        assertEquals(2, asked.size)
+        assertEquals(AutoPlaces.Lookup(null, fallback = true), OSMClient(http, OSMLane(0)).suburb(Coordinate(-33.635, 115.385)))
+        // Overpass, then the reverse lookup at every zoom (the council each time), and no outline to fetch.
+        assertEquals(AutoPlaces.FALLBACK_ZOOMS, zooms(asked))
+        assertEquals(1 + AutoPlaces.FALLBACK_ZOOMS.size, asked.size)
+    }
+
+    private val fallback by lazy { Json.parseToJsonElement(File(repoRoot(), "shared/fixtures/places/reverse-fallback.json").readText()).jsonObject }
+
+    /** A spot in shared/fixtures/places/reverse-fallback.json: what Nominatim really answered there, at each zoom. */
+    private fun fallbackCase(prefix: String) =
+        fallback["cases"]!!.jsonArray.map { it.jsonObject }.first { it["name"]!!.jsonPrimitive.content.startsWith(prefix) }
+
+    /** The zooms the reverse lookups asked at, in order. */
+    private fun zooms(asked: List<String>) = asked
+        .filter { it.startsWith("https://nominatim.openstreetmap.org/reverse") }
+        .map { Regex("[?&]zoom=(\\d+)").find(it)!!.groupValues[1].toInt() }
+
+    /** OpenStreetMap with Overpass down, and Nominatim answering as it did at this spot. */
+    private fun overpassDown(case: JsonObject, asked: MutableList<String>) = object : Http {
+        override fun send(url: String, body: ByteArray?, headers: Map<String, String>, timeoutSeconds: Int): Http.Response {
+            asked.add(url)
+            fun query(name: String) = Regex("[?&]$name=([^&]*)").find(url)?.groupValues?.get(1)?.let { URLDecoder.decode(it, "UTF-8") }
+            return when {
+                url in OSMClient.OVERPASS -> Http.Response(504, ByteArray(0))
+                url.startsWith("https://nominatim.openstreetmap.org/reverse") -> {
+                    val answer = case["reverse"]!!.jsonObject[query("zoom")] ?: throw AssertionError("Didn't expect to ask at zoom ${query("zoom")}")
+                    Http.Response(200, answer.toString().toByteArray())
+                }
+                url.startsWith("https://nominatim.openstreetmap.org/lookup") -> {
+                    val ids = query("osm_ids")!!.split(",")
+                    val found = fallback["lookup"]!!.jsonArray.filter { "R${it.jsonObject["osm_id"]!!.jsonPrimitive.long}" in ids }
+                    Http.Response(200, JsonArray(found).toString().toByteArray())
+                }
+                else -> throw AssertionError("Didn't expect to go to $url")
+            }
+        }
+    }
+
+    @Test
+    fun theFallbackMatchesTheSharedFixture() = runBlocking {
+        val outlines = fallback["lookup"]!!.jsonArray.mapNotNull { OSMClient.place(it.jsonObject) }
+        for (case in fallback["cases"]!!.jsonArray.map { it.jsonObject }) {
+            val name = case["name"]!!.jsonPrimitive.content
+            val asked = ArrayList<Int>()
+            val candidates = AutoPlaces.fallbackCandidates { zoom ->
+                asked.add(zoom)
+                OSMClient.reverseAnswer(case["reverse"]!!.jsonObject[zoom.toString()]?.jsonObject ?: throw AssertionError("$name asked at zoom $zoom"))
+            }
+            assertEquals(name, case["asked"]!!.jsonArray.map { it.jsonPrimitive.int }, asked)
+            assertEquals(name, case["candidates"]!!.jsonArray.map { it.jsonPrimitive.long }, candidates)
+            assertEquals(name, case["osmId"]!!.jsonPrimitive.longOrNull, AutoPlaces.pick(outlines, candidates)?.osmId)
+        }
+    }
+
+    @Test
+    fun inEnglandTheFallbackFindsTheParishPastTheCounty() = runBlocking {
+        val asked = ArrayList<String>()
+        val found = OSMClient(overpassDown(fallbackCase("Porlock"), asked), OSMLane(0)).suburb(Coordinate(51.2092, -3.5953))
+        // Somerset at zoom 12 is far too big, so it asks again closer in.
+        assertEquals(2676434L, found.place?.osmId)
+        assertEquals("Porlock", found.place?.name)
+        assertTrue(found.fallback)
+        assertEquals(listOf(12, 14), zooms(asked))
+        assertEquals(1, asked.count { it.startsWith("https://nominatim.openstreetmap.org/lookup") })
+    }
+
+    @Test
+    fun whenEveryZoomFindsNothingTheSpotIsRuledOutForADay() = runBlocking {
+        val asked = ArrayList<String>()
+        val point = Coordinate(-33.6, 115.38)
+        val found = OSMClient(overpassDown(fallbackCase("Out in Geographe Bay"), asked), OSMLane(0)).suburb(point)
+        // Busselton's name pin at every zoom, and never a boundary to look up.
+        assertEquals(AutoPlaces.Lookup(null, fallback = true), found)
+        assertEquals(AutoPlaces.FALLBACK_ZOOMS, zooms(asked))
+        assertFalse(asked.any { it.startsWith("https://nominatim.openstreetmap.org/lookup") })
+        val auto = AutoPlaces().looked(point, found, nobody, today)
+        assertTrue(auto.missed(point, today.plus(23 * 3600.0)))
+        assertFalse(auto.missed(point, today.plus(25 * 3600.0)))
     }
 
     @Test
@@ -1024,6 +1102,8 @@ class AutoPlacesTest {
         assertEquals(11688696L, found.place?.osmId)
         assertTrue(found.fallback)
         assertEquals(OSMClient.OVERPASS.size + 2, asked.size)
+        // The locality is as small as it gets in Australia, so no other zoom is asked.
+        assertEquals(listOf(12), zooms(asked))
     }
 
     private object NoNetwork : Http {

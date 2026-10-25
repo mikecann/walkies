@@ -66,6 +66,12 @@ nonisolated struct AutoPlaces: Codable, Sendable {
     /// In Australia, just the localities the neighbours use (9 in WA, 10 elsewhere), so
     /// a walk out along a jetty never adds a whole city council.
     static let australianLevels = 9...10
+    /// Zooms the fallback asks Nominatim's reverse lookup at, in turn. At 12 it's the
+    /// locality in Australia. In England 12 is the county or a town's name pin, so 14
+    /// comes next, where the parish answers; and where there's no parish, 10 gives the
+    /// district or London borough (8), since no suburb's name pin can answer instead at
+    /// that zoom.
+    static let fallbackZooms = [12, 14, 10]
     /// Lookups in one go. The rest wait for the next time the app opens or a walk ends.
     static let lookupsPerRun = 10
     /// Metres. A fix vaguer than this when the app opens could be in the suburb next door.
@@ -364,6 +370,36 @@ nonisolated struct AutoPlaces: Codable, Sendable {
         levelled.sort { $0.level != $1.level ? $0.level > $1.level : $0.id < $1.id }
         var seen = Set<Int>()
         return levelled.map(\.id).filter { seen.insert($0).inserted }
+    }
+
+    /// What Nominatim's reverse lookup said at one zoom: the boundary it answered with,
+    /// if it was one rather than a town's name pin, and the country the spot's in.
+    struct ReverseAnswer: Sendable {
+        var relation: Relation?
+        var country: String?
+    }
+
+    /// With Overpass down, the boundaries Nominatim says a spot is in that could be its
+    /// suburb, smallest first, from its reverse lookup at each of `fallbackZooms` in turn.
+    /// It stops once it has a locality in Australia or a parish (10) anywhere else, since
+    /// nothing smaller would count, but a county or district might have a parish inside
+    /// that the next zoom finds. A lookup that fails throws, so a spot is only ruled out
+    /// when every zoom answered.
+    static func fallbackCandidates(_ reverse: (_ zoom: Int) async throws -> ReverseAnswer) async rethrows -> [Int] {
+        var relations: [Relation] = []
+        var country: String?
+        for zoom in fallbackZooms {
+            let answer = try await reverse(zoom)
+            country = country ?? answer.country
+            if let relation = answer.relation { relations.append(relation) }
+            let australia = country?.uppercased() == "AU"
+            let smallest = relations.contains { relation in
+                guard let level = relation.adminLevel.flatMap({ Int($0) }) else { return false }
+                return australia ? australianLevels.contains(level) : level == suburbLevels.upperBound
+            }
+            if smallest { break }
+        }
+        return suburbCandidates(relations, country: country)
     }
 
     /// The suburb from these outlines, in `order` (smallest first): the first that's a
