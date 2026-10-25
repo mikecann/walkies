@@ -38,6 +38,8 @@ type Env = {
   readonly AUTH_GOOGLE_CLIENT_SECRET: string;
   readonly AUTH_JWKS: string;
   readonly AUTH_PRIVATE_KEY: string;
+  readonly LORE_AUTO: string | undefined;
+  readonly OPENROUTER_API_KEY: string | undefined;
   readonly WALKIES_TEST_SIGNIN: string | undefined;
 };
 

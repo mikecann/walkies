@@ -12,6 +12,9 @@ struct SettingsView: View {
     @State private var reallyDeleting = false
     @State private var deleting = false
     @State private var deleteFailed: String?
+    /// Server secrets waiting for Mike's OK. Nil for everyone else, who never sees the list.
+    @State private var waitingSecrets: [WaitingSecret]?
+    @State private var reviewFailed: String?
 
     private var syncText: String {
         switch sync.status {
@@ -39,6 +42,21 @@ struct SettingsView: View {
         Task {
             await sync.wipe()
             await account.signOut()
+        }
+    }
+
+    /// Approves or hides a waiting secret, then looks again so it shows up on this phone
+    /// too if it's in one of your places.
+    private func review(_ secret: WaitingSecret, approve: Bool) {
+        Task {
+            guard let client = await account.client() else { reviewFailed = "Sign in again and try that once more."; return }
+            do {
+                if approve { try await SecretsReview.approve(secret, client) } else { try await SecretsReview.hide(secret, client) }
+                withAnimation { waitingSecrets?.removeAll { $0.id == secret.id } }
+                model.refreshLore(now: secret.osmId)
+            } catch {
+                reviewFailed = error.localizedDescription
+            }
         }
     }
 
@@ -99,6 +117,22 @@ struct SettingsView: View {
                         .disabled(deleting)
                     } footer: {
                         Text("Deletes your account and everything in it from Walkies' server, then clears Walkies off this phone and signs you out. You can't undo it.")
+                    }
+                }
+
+                if let waitingSecrets, !waitingSecrets.isEmpty {
+                    Section {
+                        ForEach(waitingSecrets) { secret in
+                            WaitingSecretRow(secret: secret) {
+                                review(secret, approve: true)
+                            } onHide: {
+                                review(secret, approve: false)
+                            }
+                        }
+                    } header: {
+                        Text("Secrets waiting for you")
+                    } footer: {
+                        Text("Written by the server for a new suburb. Only you can see these, and they stay hidden until you approve them.")
                     }
                 }
 
@@ -173,6 +207,11 @@ struct SettingsView: View {
             } message: {
                 Text(deleteFailed ?? "")
             }
+            .alert("Couldn't save that", isPresented: Binding(get: { reviewFailed != nil }, set: { if !$0 { reviewFailed = nil } })) {
+                Button("OK") {}
+            } message: {
+                Text(reviewFailed ?? "")
+            }
             .alert("Not yet", isPresented: Binding(get: { cantSignOut != nil }, set: { if !$0 { cantSignOut = nil } })) {
                 Button("OK") {}
             } message: {
@@ -187,8 +226,61 @@ struct SettingsView: View {
             .scrollContentBackground(.hidden)
             .background(Color.cream)
             .task { await model.refreshStepsToday() }
+            .task(id: account.isSignedIn) {
+                guard account.isSignedIn, let client = await account.client() else { waitingSecrets = nil; return }
+                waitingSecrets = await SecretsReview.waiting(client, userId: account.userId)
+            }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+}
+
+/// One secret waiting for Mike: its sticker, title, story, kind and sources, with
+/// Approve and Hide.
+private struct WaitingSecretRow: View {
+    let secret: WaitingSecret
+    let onApprove: () -> Void
+    let onHide: () -> Void
+
+    var body: some View {
+        let style = StickerStyle(category: secret.category)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                AsyncImage(url: secret.stickerUrl) { image in
+                    image.resizable().scaledToFit()
+                } placeholder: {
+                    StickerArt(entry: secret.entry, size: 56)
+                }
+                .frame(width: 56, height: 56)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(secret.title).font(.headline)
+                    Label(style.label, systemImage: style.symbol)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(style.colour)
+                    Text(secret.sensitive.isEmpty ? secret.suburb : "\(secret.suburb) · \(secret.sensitive.joined(separator: ", "))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Text(secret.body).font(.subheadline)
+            ForEach(secret.sources, id: \.self) { source in
+                if let url = URL(string: source), url.scheme != nil {
+                    Link(url.host() ?? source, destination: url)
+                        .font(.caption)
+                        .buttonStyle(.borderless)
+                } else {
+                    Text(source).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            HStack {
+                // Bordered, so each is its own button rather than the whole row.
+                Button("Approve", action: onApprove)
+                    .buttonStyle(.borderedProminent)
+                Button("Hide", role: .destructive, action: onHide)
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }

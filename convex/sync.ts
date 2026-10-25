@@ -2,6 +2,7 @@ import { ConvexError, v } from "convex/values";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { currentUserId } from "./users";
 import { mergeLedgers, parseLedger } from "./progression";
+import { noticePlace, noticeWalk } from "./lore";
 
 async function requireUser(ctx: QueryCtx | MutationCtx) {
   const userId = await currentUserId(ctx);
@@ -42,7 +43,10 @@ export const saveWalk = mutation({
       if (existing.file !== walk.file) await ctx.storage.delete(existing.file);
       return null;
     }
-    await ctx.db.insert("walks", { userId, ...walk });
+    const walkId = await ctx.db.insert("walks", { userId, ...walk });
+    // A first walk arrives after the places it went through (the phones upload those
+    // first), so they get another look now there's a walk to show for them (lore.ts).
+    await noticeWalk(ctx, userId, walkId);
     return null;
   },
 });
@@ -65,10 +69,13 @@ export const savePlace = mutation({
       .withIndex("by_user_client", (q) => q.eq("userId", userId).eq("clientId", place.clientId))
       .unique();
     if (existing === null) {
-      await ctx.db.insert("places", { userId, ...place });
+      const placeId = await ctx.db.insert("places", { userId, ...place });
+      await noticePlace(ctx, (await ctx.db.get("places", placeId))!);
     } else if (place.updatedAt > existing.updatedAt) {
       await ctx.db.patch("places", existing._id, { name: place.name, updatedAt: place.updatedAt, file: place.file });
       await ctx.storage.delete(existing.file);
+      // Saving after a walk is how the server hears where someone walked (lore.ts).
+      await noticePlace(ctx, { ...existing, file: place.file });
     } else {
       await ctx.storage.delete(place.file);
     }

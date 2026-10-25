@@ -128,7 +128,7 @@ class LoreTest {
 
     @Test
     fun shippedLoreLoadsWithUniqueIdsAndArt() {
-        val all = LoreLibrary.all
+        val all = LoreLibrary.bundled
         assertTrue("${all.size} entries", all.size > 100)
         assertEquals(all.size, all.map { it.id }.toSet().size)
         val assets = File(repoRoot(), "Walkies/Assets.xcassets")

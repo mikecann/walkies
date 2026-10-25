@@ -16,7 +16,7 @@ let package = Package(name: "WalkiesModelTests", platforms: [.macOS(.v15)], targ
     .testTarget(name: "WalkiesTests", dependencies: ["Walkies"])
 ])
 ''')
-for name in ['Progression', 'Geo', 'HexGrid', 'City', 'Walk', 'Boundary', 'Lore', 'WalkRecap', 'LevelMeter', 'Team', 'SecretsBook', 'Mist']:
+for name in ['Progression', 'Geo', 'HexGrid', 'City', 'Walk', 'Boundary', 'Lore', 'WalkRecap', 'LevelMeter', 'Team', 'SecretsBook', 'Mist', 'ServerLore']:
     shutil.copy(f'Walkies/Model/{name}.swift', root / 'Sources/Walkies')
 shutil.copytree('Walkies/Lore', root / 'Sources/Walkies/Lore', dirs_exist_ok=True)
 # SwiftPM keeps resources in its own bundle rather than the iOS app bundle.

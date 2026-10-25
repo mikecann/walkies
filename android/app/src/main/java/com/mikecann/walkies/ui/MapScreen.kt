@@ -261,6 +261,13 @@ fun MapScreen(
         delay(5000)
         if (model.addedPlaceNotice?.id == noticeId) model.dismissAddedPlaceNotice()
     }
+    // The same for secrets that have just arrived.
+    val loreNotice = model.loreNotice
+    LaunchedEffect(loreNotice, inView) {
+        if (loreNotice == null || !inView) return@LaunchedEffect
+        delay(5000)
+        if (model.loreNotice == loreNotice) model.dismissLoreNotice()
+    }
 
     /** Where am I: street level, where you can see the dotted roads to head for, and keep following. */
     fun focusOnYou() {
@@ -327,6 +334,26 @@ fun MapScreen(
                             model.dismissAddedPlaceNotice()
                         }
                     }
+                }
+                AnimatedVisibility(
+                    loreNotice != null,
+                    enter = fadeIn() + scaleIn(initialScale = 0.8f, transformOrigin = TransformOrigin(0f, 0f)),
+                    exit = fadeOut() + scaleOut(targetScale = 0.8f, transformOrigin = TransformOrigin(0f, 0f)),
+                ) {
+                    var shown by remember { mutableStateOf(loreNotice) }
+                    if (loreNotice != null) shown = loreNotice
+                    shown?.let { notice ->
+                        SecretsArrivedNote(notice) {
+                            model.select(notice.id)
+                            model.dismissLoreNotice()
+                        }
+                    }
+                }
+                val looking = if (loreNotice == null) model.lookingForSecrets else null
+                AnimatedVisibility(looking != null, enter = fadeIn(), exit = fadeOut()) {
+                    var name by remember { mutableStateOf(looking?.name.orEmpty()) }
+                    if (looking != null) name = looking.name
+                    LookingForSecretsNote(name)
                 }
             }
         }
@@ -444,6 +471,46 @@ private fun WalkHint() {
         AssetIcon("icon-walk", 24.dp)
         BasicText("Go for a walk to clear the clouds", style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold))
     }
+}
+
+/** While the server's writing secrets for one of your places: what's happening, in one line (LookingForSecretsNote in ContentView.swift). */
+@Composable
+private fun LookingForSecretsNote(name: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .widthIn(max = 300.dp)
+            .stickerCard(RoundedCornerShape(20.dp))
+            .semantics(mergeDescendants = true) {}
+            .padding(start = 8.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+    ) {
+        AssetIcon("icon-book", 24.dp)
+        BasicText("Looking for secrets in $name…", style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold), maxLines = 2)
+    }
+}
+
+/**
+ * Secrets the server's just written for a place, or that it turned out quiet. Tap it
+ * to go and look (SecretsArrivedNote in ContentView.swift).
+ */
+@Composable
+private fun SecretsArrivedNote(notice: AppModel.LoreNotice, onOpen: () -> Unit) {
+    val text = when (notice.count) {
+        0 -> "Not many stories in ${notice.name} yet"
+        1 -> "A secret hidden in ${notice.name}"
+        else -> "${notice.count} secrets hidden in ${notice.name}"
+    }
+    BasicText(
+        text,
+        style = Type.subheadline.copy(fontWeight = FontWeight.SemiBold),
+        maxLines = 2,
+        modifier = Modifier
+            .widthIn(max = 280.dp)
+            .stickerCard(RoundedCornerShape(20.dp))
+            .pressScale(onOpen)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    )
 }
 
 /** A place that's just added itself, while you had others. Tap it to go and look (AddedPlaceNote in ContentView.swift). */

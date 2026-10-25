@@ -112,6 +112,18 @@ export const get = action({
   },
 });
 
+/** A place's street file for jobs with nobody signed in (lore research), fetching it
+ * first if it isn't cached. Waits longer than places:get, since nobody's watching. */
+export async function cachedFile(ctx: ActionCtx, osmId: number): Promise<Id<"_storage">> {
+  for (let attempt = 0; attempt <= 90; attempt++) {
+    const state = await ctx.runMutation(internal.places.claim, { osmId });
+    if (state.kind === "ready") return state.file;
+    if (state.kind === "fetch") await fetchPlace(ctx, osmId, state.lease, workerOverpassWait);
+    else await sleep(2000);
+  }
+  throw new Error("This place is still getting ready");
+}
+
 /** Queues places to warm. One worker fetches them one at a time, so a long list
  * never has several Overpass queries in flight at once. Repeated lists can't
  * queue a place twice. */
@@ -294,6 +306,18 @@ async function fetchJSON(url: string, timeout: number, init?: RequestInit): Prom
   }
 }
 
+/** A Nominatim request ("lookup", "search"), after waiting its turn in the shared throttle. */
+export async function nominatim(ctx: ActionCtx, endpoint: string, params: Record<string, string>): Promise<unknown> {
+  const deadline = Date.now() + 30_000;
+  while (true) {
+    const wait = await ctx.runMutation(internal.places.nominatimSlot, {});
+    if (wait === 0) break;
+    if (Date.now() + wait > deadline) throw new Error("Nominatim is busy");
+    await sleep(wait);
+  }
+  return await fetchJSON(`https://nominatim.openstreetmap.org/${endpoint}?${new URLSearchParams(params)}`, 15_000);
+}
+
 /** Runs `query` while holding the Overpass slot, waiting up to `wait` for it. */
 async function withOverpass<T>(ctx: ActionCtx, wait: number, query: () => Promise<T>): Promise<T> {
   const deadline = Date.now() + wait;
@@ -314,15 +338,8 @@ async function withOverpass<T>(ctx: ActionCtx, wait: number, query: () => Promis
 
 async function fetchPlace(ctx: ActionCtx, osmId: number, lease: number, overpassWait: number): Promise<Cached> {
   try {
-    const deadline = Date.now() + 30_000;
-    while (true) {
-      const wait = await ctx.runMutation(internal.places.nominatimSlot, {});
-      if (wait === 0) break;
-      if (Date.now() + wait > deadline) throw new Error("Nominatim is busy");
-      await sleep(wait);
-    }
-    const params = new URLSearchParams({ osm_ids: `R${osmId}`, format: "jsonv2", polygon_geojson: "1", polygon_threshold: "0.0001" });
-    const { name, boundary } = boundaryFromNominatim(await fetchJSON(`https://nominatim.openstreetmap.org/lookup?${params}`, 15_000), osmId);
+    const params = { osm_ids: `R${osmId}`, format: "jsonv2", polygon_geojson: "1", polygon_threshold: "0.0001" };
+    const { name, boundary } = boundaryFromNominatim(await nominatim(ctx, "lookup", params), osmId);
     const body = new URLSearchParams({ data: walkableQuery(boundary) }).toString();
     const ways = await withOverpass(ctx, overpassWait, async () => {
       let lastError: unknown;

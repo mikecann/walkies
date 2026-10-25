@@ -1,4 +1,5 @@
 import Foundation
+import os
 import simd
 
 /// A bit of local history or a story about a place, found by walking to it.
@@ -39,25 +40,84 @@ nonisolated struct LoreEntry: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
-/// The lore that ships with the app: the Busselton area so far.
+/// The lore the app knows about: what ships with it (the Busselton area so far), and
+/// what the server has written for your other places (ServerLore), which the app hands
+/// over with `useServer`.
 nonisolated enum LoreLibrary {
     static let files = ["geographe", "busselton-area"]
 
-    static let all: [LoreEntry] = files.flatMap(load)
+    /// The secrets that ship with the app.
+    static let bundled: [LoreEntry] = files.flatMap(load)
 
-    private static let byID = Dictionary(all.map { ($0.id, $0) }) { first, _ in first }
+    /// The OpenStreetMap relations the bundled secrets cover, from bundled-places.json
+    /// (the server's `bundledOsmIds`, which a server test keeps it matching). These
+    /// places never ask the server for secrets.
+    static let bundledOsmIds: Set<Int> = {
+        struct File: Decodable {
+            struct Place: Decodable { var osmId: Int }
+            var places: [Place]
+        }
+        guard let url = Bundle.main.url(forResource: "bundled-places", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let file = try? JSONDecoder().decode(File.self, from: data)
+        else { return [] }
+        return Set(file.places.map(\.osmId))
+    }()
+
+    private static let byID = Dictionary(bundled.map { ($0.id, $0) }) { first, _ in first }
+
+    /// The server's secrets, as last handed over. Behind a lock because the views,
+    /// notifications and background work all read it.
+    private struct Server: Sendable {
+        var all: [LoreEntry] = []
+        var byID: [String: LoreEntry] = [:]
+        var stickers: URL?
+        var revision = 0
+    }
+    private static let server = OSAllocatedUnfairLock(initialState: Server())
+
+    /// Every secret: the bundled ones, then the server's.
+    static var all: [LoreEntry] { bundled + server.withLock { $0.all } }
 
     static func entry(id: String) -> LoreEntry? {
+        byID[id] ?? server.withLock { $0.byID[id] }
+    }
+
+    static func bundledEntry(id: String) -> LoreEntry? {
         byID[id]
+    }
+
+    /// Goes up whenever the server's secrets or their art change, so cached images go too.
+    static var serverRevision: Int { server.withLock { $0.revision } }
+
+    /// Takes the server's secrets for the views and notifications, with the folder their
+    /// sticker art is saved in.
+    static func useServer(_ lore: ServerLore, stickers: URL) {
+        let entries = lore.all.filter { byID[$0.id] == nil }
+        server.withLock {
+            $0.all = entries
+            $0.byID = Dictionary(entries.map { ($0.id, $0) }) { first, _ in first }
+            $0.stickers = stickers
+            $0.revision += 1
+        }
+    }
+
+    /// A server secret's sticker art, if it's been downloaded. Bundled ones are assets.
+    static func serverSticker(id: String) -> URL? {
+        guard let folder = server.withLock({ $0.stickers }) else { return nil }
+        let file = ServerLore.stickerFile(for: id, in: folder)
+        return FileManager.default.fileExists(atPath: file.path) ? file : nil
     }
 
     /// Which secrets each place gets. A story about a spot belongs to the place that
     /// spot is in, so it's found where it happened, and waits there until you add
     /// that place. One about a whole suburb goes to that suburb, scattered over its
     /// streets. The few from the first batch that aren't about anywhere in particular
-    /// go to the first Busselton-area place you added.
+    /// go to the first Busselton-area place you added. The server's secrets (`server`,
+    /// by OpenStreetMap relation) go to the place with that relation, pins and all.
     static func assign(
-        _ entries: [LoreEntry] = all,
+        _ entries: [LoreEntry] = bundled,
+        server: [Int: [LoreEntry]] = [:],
         to cities: [City],
         contains: (City, Coordinate) -> Bool
     ) -> [UUID: [LoreEntry]] {
@@ -75,6 +135,12 @@ nonisolated enum LoreLibrary {
             } else if let home {
                 out[home.id, default: []].append(entry)
             }
+        }
+        // By relation, not by name: two suburbs can share a name, and the server's
+        // pins have already been moved inside the one it researched.
+        for (osmId, entries) in server.sorted(by: { $0.key < $1.key }) {
+            guard let owner = cities.first(where: { $0.osmId == osmId }) else { continue }
+            out[owner.id, default: []].append(contentsOf: entries)
         }
         return out
     }

@@ -93,6 +93,7 @@ class MainActivity : ComponentActivity() {
     private var testSignInRequested = false
     private var testUserName: String? = null
     private var periodicSync: Job? = null
+    private var periodicLore: Job? = null
     private val handler = Handler(Looper.getMainLooper())
     private var stopListening: (() -> Unit)? = null
 
@@ -408,6 +409,7 @@ class MainActivity : ComponentActivity() {
         app.model.refreshNeighbours()
         // Catches up on walks that ended with the app closed.
         app.model.addPlacesYouveBeen()
+        app.model.refreshLore()
         app.sync.schedule()
         // While you're looking, a sync every few minutes picks up the other phone's walks.
         periodicSync?.cancel()
@@ -415,6 +417,14 @@ class MainActivity : ComponentActivity() {
             while (isActive) {
                 delay(180_000)
                 app.sync.sync()
+            }
+        }
+        // While a place's secrets are being written. Asks nothing unless one's due.
+        periodicLore?.cancel()
+        periodicLore = app.scope.launch {
+            while (isActive) {
+                delay(120_000)
+                app.model.updateLore()
             }
         }
     }
@@ -440,6 +450,8 @@ class MainActivity : ComponentActivity() {
         // The foreground service keeps recording, if there's anything to record.
         periodicSync?.cancel()
         periodicSync = null
+        periodicLore?.cancel()
+        periodicLore = null
         app.onScreen = false
         app.model.foreground(false)
         app.model.saveNow(waiting = true)

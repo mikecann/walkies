@@ -191,6 +191,33 @@ nonisolated struct Store {
 
     private var autoPlacesURL: URL { root.appending(path: "auto-places.json") }
 
+    /// What the server's said about your places without bundled secrets (ServerLore).
+    func loadServerLore() -> ServerLore? {
+        read(ServerLore.self, from: serverLoreURL)
+    }
+
+    func save(serverLore: ServerLore) {
+        write(serverLore, to: serverLoreURL)
+    }
+
+    private var serverLoreURL: URL { root.appending(path: "server-lore.json") }
+
+    /// The server's sticker art, one PNG per secret (ServerLore.stickerFile).
+    var serverStickers: URL { root.appending(path: "server-stickers", directoryHint: .isDirectory) }
+
+    func save(serverSticker png: Data, for id: String) {
+        do {
+            try FileManager.default.createDirectory(at: serverStickers, withIntermediateDirectories: true)
+            try png.write(to: ServerLore.stickerFile(for: id, in: serverStickers), options: .atomic)
+        } catch {
+            Self.log.error("Couldn't save the sticker for \(id): \(error)")
+        }
+    }
+
+    func deleteServerSticker(for id: String) {
+        try? FileManager.default.removeItem(at: ServerLore.stickerFile(for: id, in: serverStickers))
+    }
+
     /// Deletes everything the app has saved, for signing out.
     func wipe() {
         cityFiles.replace {

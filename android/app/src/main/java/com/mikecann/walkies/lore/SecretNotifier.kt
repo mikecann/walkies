@@ -45,9 +45,12 @@ object SecretNotifier {
                 .setCategory(NotificationCompat.CATEGORY_RECOMMENDATION)
             // The sticker art, as iOS attaches it, at half size (256 px is plenty here).
             val half = BitmapFactory.Options().apply { inSampleSize = 2 }
-            runCatching {
+            val art = runCatching {
                 context.assets.open("images/sticker-${entry.id}.png").use { BitmapFactory.decodeStream(it, null, half) }
-            }.getOrNull()?.let(builder::setLargeIcon)
+            }.getOrNull()
+                // A server secret's art is the PNG it downloaded.
+                ?: LoreLibrary.serverSticker(entry.id)?.let { BitmapFactory.decodeFile(it.path, half) }
+            art?.let(builder::setLargeIcon)
             manager.notify("sticker-${entry.id}", 0, builder.build())
         }
     }
