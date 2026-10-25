@@ -15,6 +15,7 @@ import type * as crons from "../crons.js";
 import type * as grid from "../grid.js";
 import type * as http from "../http.js";
 import type * as lore from "../lore.js";
+import type * as loreBudget from "../loreBudget.js";
 import type * as loreChecks from "../loreChecks.js";
 import type * as loreConfig from "../loreConfig.js";
 import type * as loreCutout from "../loreCutout.js";
@@ -43,6 +44,7 @@ declare const fullApi: ApiFromModules<{
   grid: typeof grid;
   http: typeof http;
   lore: typeof lore;
+  loreBudget: typeof loreBudget;
   loreChecks: typeof loreChecks;
   loreConfig: typeof loreConfig;
   loreCutout: typeof loreCutout;

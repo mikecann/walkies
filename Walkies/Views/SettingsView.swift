@@ -228,7 +228,7 @@ struct SettingsView: View {
             .task { await model.refreshStepsToday() }
             .task(id: account.isSignedIn) {
                 guard account.isSignedIn, let client = await account.client() else { waitingSecrets = nil; return }
-                waitingSecrets = await SecretsReview.waiting(client)
+                waitingSecrets = await SecretsReview.waiting(client, userId: account.userId)
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

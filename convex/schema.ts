@@ -70,6 +70,10 @@ export default defineSchema({
     file: v.id("_storage"),
     /** Its OSM relation, read from the file by lore.readPlace. Unset until then. */
     osmId: v.optional(v.number()),
+    /** Tiles walked in it, from the same file. What the phone says, so only a first filter. */
+    walkedTiles: v.optional(v.number()),
+    /** lore.readPlace found its relation isn't a suburb-sized admin boundary, so it's never researched. */
+    loreNoSuburb: v.optional(v.boolean()),
   }).index("by_user_client", ["userId", "clientId"]),
 
   progress: defineTable({
@@ -138,8 +142,17 @@ export default defineSchema({
     status: vLoreStatus,
     /** Bumped whenever the live secrets change, so the phones know to fetch them again. */
     version: v.number(),
-    /** Asked for with lore:research rather than by someone's walk, so it runs with LORE_AUTO off. */
+    /** Asked for with lore:research or lore:resume rather than by someone's walk, so it
+     * runs with LORE_AUTO off. Cleared when that run finishes, so its retries don't. */
     manual: v.optional(v.boolean()),
+    /** Whose walk queued it, while it's queued or running, so the queue takes turns between people. */
+    requestedBy: v.optional(v.id("users")),
+    /** What it was before a retry put it back on the queue, for when the wait runs out. */
+    requeuedFrom: v.optional(v.union(v.literal("ready"), v.literal("quiet"), v.literal("failed"))),
+    /** Set by lore:resume: the step the queued run restarts from, in the same journal. */
+    resumeFrom: v.optional(v.string()),
+    /** Budget segments so far: each start or resume gets its own caps.perRun (runCost). */
+    segment: v.optional(v.number()),
     /** From Nominatim when the run starts: "Porlock, Somerset, England, United Kingdom",
      * "England" and "gb". */
     displayName: v.optional(v.string()),
@@ -155,12 +168,16 @@ export default defineSchema({
     /** When a quiet or failed place goes back on the queue. */
     retryAt: v.optional(v.number()),
     workflowId: v.optional(v.string()),
-    /** US dollars from OpenRouter, for every run and for this one. */
+    /** When the finished run's journal is deleted (lore.tick). Until then lore:resume can use it. */
+    journalUntil: v.optional(v.number()),
+    /** US dollars from OpenRouter, for every run and for this budget segment, counting
+     * holds on calls still going at their most (loreRun.reserve). */
     cost: v.number(),
     runCost: v.number(),
     /** Why the last run failed. */
     error: v.optional(v.string()),
-  }).index("by_osm", ["osmId"]).index("by_status", ["status", "queuedAt"]).index("by_retry", ["retryAt"]),
+  }).index("by_osm", ["osmId"]).index("by_status", ["status", "queuedAt"]).index("by_retry", ["retryAt"])
+    .index("by_journal", ["journalUntil"]).index("by_requester", ["requestedBy"]),
 
   // What the research agents found, one fact per row with the page and the exact words.
   loreNotes: defineTable({
@@ -200,19 +217,44 @@ export default defineSchema({
     sensitive: v.array(v.string()),
     /** checking (in the pipeline), dropped, then auto (live), pending, approved or hidden. */
     review: vLoreReview,
-    /** The check that dropped it. */
+    /** The check that dropped it. "run stopped", "budget" and "not checked" weren't the
+     * secret's fault, so lore:resume brings those back. */
     droppedBy: v.optional(v.string()),
+    /** The fact-check has passed it (perhaps after revising), so a retried check skips it.
+     * A secret is never published without this. */
+    factChecked: v.optional(v.boolean()),
     /** What each check found or changed, in plain words. */
     checkNotes: v.array(v.string()),
     stickerFile: v.optional(v.id("_storage")),
   }).index("by_osm_review", ["osmId", "review"]).index("by_review", ["review"]).index("by_entry", ["entryId"])
     .index("by_osm_run", ["osmId", "run"]),
 
-  // OpenRouter spend in US dollars, by UTC day, place and step, for the caps.
-  loreSpend: defineTable({ day: v.string(), osmId: v.number(), step: v.string(), cost: v.number(), calls: v.number() })
-    .index("by_day", ["day", "osmId", "step"]),
+  // OpenRouter spend in US dollars, by UTC day, place and step, for the caps. `cost`
+  // includes `held`: holds on calls still going, at the most each could cost.
+  loreSpend: defineTable({
+    day: v.string(), osmId: v.number(), step: v.string(), cost: v.number(), calls: v.number(),
+    held: v.optional(v.number()),
+    /** Holds kept as spent because the call's real cost never came back. Part of `cost`. */
+    unpriced: v.optional(v.number()),
+  }).index("by_day", ["day", "osmId", "step"]),
 
-  // New suburbs each person's walks started today, for suburbsPerUserPerDay.
+  // One hold per paid call in flight (loreRun.reserve), settled to the real cost after.
+  loreHolds: defineTable({
+    osmId: v.number(), day: v.string(), step: v.string(), amount: v.number(),
+    /** The place's budget segment when it was booked, so a late settle never touches a newer one's runCost. */
+    segment: v.number(),
+    at: v.number(),
+  }).index("by_at", ["at"]),
+
+  // Eligibility checks each person's places took today (lore.readPlace), for checksPerUserPerDay.
   loreCalls: defineTable({ userId: v.id("users"), windowStart: v.number(), count: v.number() })
     .index("by_user", ["userId"]),
+
+  // Each new suburb someone's walk queued, for the per-person day and month limits.
+  loreRequests: defineTable({ userId: v.id("users"), osmId: v.number(), at: v.number() })
+    .index("by_user_at", ["userId", "at"]).index("by_at", ["at"]),
+
+  // The research agents' threads (every search and page they read), deleted when the run finishes.
+  loreThreads: defineTable({ osmId: v.number(), run: v.number(), threadId: v.string() })
+    .index("by_osm_run", ["osmId", "run"]),
 });

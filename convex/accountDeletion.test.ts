@@ -49,6 +49,7 @@ async function seed(t: T, userId: Id<"users">, n = 2) {
     await ctx.db.insert("teamInviteAttempts", { userId, windowStart: 0, count: 1 });
     await ctx.db.insert("placeCalls", { userId, windowStart: 0, count: 1 });
     await ctx.db.insert("loreCalls", { userId, windowStart: 0, count: 1 });
+    await ctx.db.insert("loreRequests", { userId, osmId: 1, at: 0 });
     await ctx.runMutation(components.feedback.items.create, { userId, title: "Dark mode", description: "Please" });
     return files;
   });
