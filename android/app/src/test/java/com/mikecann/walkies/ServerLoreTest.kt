@@ -103,6 +103,14 @@ class ServerLoreTest {
     }
 
     @Test
+    fun readsAVersionTheServerSendsAsADouble() {
+        // The Convex client hands every number back as a double, so a live answer says
+        // "version": 8.0 even though the fixture above says 1.
+        val answer = ServerLore.Answer.from(Codec.parse("""{"status":"ready","version":8.0,"entries":[]}"""))
+        assertEquals(8, answer.version)
+    }
+
+    @Test
     fun aStatusFromANewerServerIsTakenAsNone() {
         val answer = ServerLore.Answer.from(Codec.parse("""{"status":"pondering","version":0,"entries":[]}"""))
         assertEquals(ServerLore.Status.NotStarted, answer.status)

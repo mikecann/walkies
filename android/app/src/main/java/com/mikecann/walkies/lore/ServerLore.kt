@@ -63,7 +63,8 @@ data class ServerLore(
                 val o = e as? JsonObject ?: throw Codec.Invalid("forPlace")
                 return Answer(
                     status = Status.of((o["status"] as? JsonPrimitive)?.contentOrNull),
-                    version = (o["version"] as? JsonPrimitive)?.intOrNull ?: throw Codec.Invalid("version"),
+                    // Convex sends every number as a double ("8.0"), so read it as one.
+                    version = (o["version"] as? JsonPrimitive)?.doubleOrNull?.toInt() ?: throw Codec.Invalid("version"),
                     entries = (o["entries"] as? JsonArray)?.map(Entry::from).orEmpty(),
                 )
             }
