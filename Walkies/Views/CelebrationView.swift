@@ -169,13 +169,13 @@ final class ReplayPlayer {
     @ObservationIgnored private var lastHaptic = Date.distantPast
     @ObservationIgnored private var generation = 0
 
-    /// Seconds for the route to draw: 2 for every 10 minutes walked. At least 2, so a
+    /// Seconds for the route to draw: 2 for every 10 minutes walked. At least 5, so a
     /// short walk is still watchable, and at most 12, so a long one doesn't drag.
     /// It was 5 seconds per 10 minutes, up to 30, which felt too long (Chef #12).
     var duration: Double { Self.duration(walked: recap.walk.duration) }
 
     nonisolated static func duration(walked: TimeInterval) -> Double {
-        min(12, max(2, walked / 600 * 2))
+        min(12, max(5, walked / 600 * 2))
     }
 
     /// Time into the walk at the replay's current point.

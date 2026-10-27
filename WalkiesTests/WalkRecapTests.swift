@@ -89,8 +89,8 @@ struct WalkRecapTests {
         #expect(!recap(times: []).isRewatch)
     }
 
-    @Test func replayIsTwoSecondsPerTenMinutesBetweenTwoAndTwelve() {
-        #expect(ReplayPlayer.duration(walked: 3 * 60) == 2)
+    @Test func replayIsTwoSecondsPerTenMinutesBetweenFiveAndTwelve() {
+        #expect(ReplayPlayer.duration(walked: 3 * 60) == 5)
         #expect(ReplayPlayer.duration(walked: 30 * 60) == 6)
         #expect(ReplayPlayer.duration(walked: 60 * 60) == 12)
         #expect(ReplayPlayer.duration(walked: 3 * 3600) == 12)
