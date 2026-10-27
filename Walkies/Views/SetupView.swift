@@ -34,17 +34,19 @@ struct SetupView: View {
 
             VStack(spacing: 14) {
                 if step == .location {
-                    Text("iOS asks a couple of things. Tap Allow While Using App, then Change to Always Allow when it checks back later. Motion & Fitness lets Walkies tell walking from cycling or driving, and count your steps.")
+                    // App Review (5.1.1(iv), 27 Oct 2026) rejects priming screens that steer people
+                    // towards Allow, so this says what each permission is for and the button is "Continue".
+                    Text("iOS asks a couple of things next. Location lets Walkies clear the clouds as you walk, including when it's in the background. Motion & Fitness lets it tell walking from cycling or driving, and count your steps.")
                         .font(.footnote)
                         .foregroundStyle(Color.ink.opacity(0.6))
                         .multilineTextAlignment(.center)
                     Button(action: allowLocation) {
-                        label("Allow location", working: asking)
+                        label("Continue", working: asking)
                     }
                     .buttonStyle(StickerButtonStyle())
                 } else {
                     Button(action: allowNotifications) {
-                        label("Allow notifications", working: asking)
+                        label("Continue", working: asking)
                     }
                     .buttonStyle(StickerButtonStyle())
                     Button("Not now", action: finish)
