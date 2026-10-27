@@ -6,7 +6,7 @@
 //
 // Pages can use {{phone <name>}} for a screenshot in a phone (add "hero" for one that
 // loads straight away, "first" for the one to fetch first), {{gallery}} for the row of
-// every screenshot, {{appStoreBadge}} and {{promoVideo}}. The screenshots are
+// every screenshot, {{appStoreBadge}}, {{promoVideo}} and {{icon <name>}} for an icon from web/icons. The screenshots are
 // web/public/screens/*.webp, made by scripts/make-web-screens.mjs.
 import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -140,8 +140,7 @@ const escape = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", 
 
 /**
  * A Phosphor icon (web/icons/, copied from @phosphor-icons/core, MIT), inlined so it takes
- * the text colour and costs no request. Used by the landing page, after the Elaya
- * landing-page-design skill's "icons from Phosphor, Solar or Iconamoon" rule.
+ * the text colour and costs no request.
  */
 function icon(name) {
   const svg = readFileSync(join(root, "web/icons", `${name}.svg`), "utf8").trim();
@@ -149,7 +148,7 @@ function icon(name) {
 }
 
 /**
- * FAQPage structured data, read back out of the landing page's <details class="faq-item">
+ * FAQPage structured data, read back out of the home page's <details class="faq-item">
  * so the questions only live in one place.
  */
 function faqData(html) {
@@ -176,10 +175,7 @@ rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 cpSync(join(root, "web/public"), dist, { recursive: true });
 
-// A page can pick its layout with "layout" in its <!--page --> line. The landing page uses
-// layout-landing.html (the Elaya skill experiment); the others keep layout.html.
-const layouts = {};
-const layoutFor = (name) => (layouts[name] ??= readFileSync(join(src, `${name}.html`), "utf8"));
+const layout = readFileSync(join(src, "layout.html"), "utf8");
 const version = Date.now().toString(36);
 const appId = APP_STORE_URL.match(/id(\d+)/)?.[1];
 const shared = {
@@ -188,7 +184,7 @@ const shared = {
   // Safari's Smart App Banner. It shows "View" until the app's out, then "Open" or "Get".
   appStoreMeta: appId ? `<meta name="apple-itunes-app" content="app-id=${appId}">` : "",
 };
-const pages = readdirSync(src).filter((f) => f.endsWith(".html") && !f.startsWith("layout"));
+const pages = readdirSync(src).filter((f) => f.endsWith(".html") && f !== "layout.html");
 const paths = [];
 for (const file of pages) {
   const html = readFileSync(join(src, file), "utf8");
@@ -197,9 +193,10 @@ for (const file of pages) {
   const page = JSON.parse(match[1]);
   const name = file.replace(/\.html$/, "");
   const content = fill(html.slice(match[0].length), shared).trimEnd();
-  const out = fill(layoutFor(page.layout ?? "layout"), {
+  const out = fill(layout, {
     ...shared,
     title: escape(page.title), description: escape(page.description), url: SITE_URL + page.path, page: name,
+    homeCurrent: name === "index" ? ' aria-current="page"' : "",
     supportCurrent: name === "support" ? ' aria-current="page"' : "",
     privacyCurrent: name === "privacy" ? ' aria-current="page"' : "",
     structuredData: name === "index" ? structuredData() + faqData(content) : "",
@@ -212,7 +209,6 @@ for (const file of pages) {
   paths.push(page.path);
 }
 cpSync(join(src, "styles.css"), join(dist, "styles.css"));
-cpSync(join(src, "landing.css"), join(dist, "landing.css"));
 const urls = paths.sort().map((p) => `  <url><loc>${SITE_URL}${p}</loc></url>`).join("\n");
 writeFileSync(join(dist, "sitemap.xml"), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`);
 console.log(`Built ${pages.length} pages into web/dist.`);
