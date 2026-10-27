@@ -406,7 +406,7 @@
 			repositoryURL = "https://github.com/convex/chef-cloud";
 			requirement = {
 				kind = revision;
-				revision = dacd0428b138796f66373fedc756dddadc8e913a;
+				revision = 7f3eb9a40621d52ee2408f7fb9e48069ec07982e;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
