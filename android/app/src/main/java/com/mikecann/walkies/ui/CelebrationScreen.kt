@@ -436,7 +436,7 @@ class ReplayPlayer(private val recap: WalkRecap, private val others: List<City>)
     }
 
     companion object {
-        fun replayDuration(walkSeconds: Double) = min(30.0, max(2.0, walkSeconds / 600 * 5))
+        fun replayDuration(walkSeconds: Double) = min(12.0, max(5.0, walkSeconds / 600 * 2))
     }
 }
 

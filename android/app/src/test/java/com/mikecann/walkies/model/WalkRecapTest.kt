@@ -111,12 +111,13 @@ class WalkRecapTest {
     }
 
     @Test
-    fun theReplayTakesFiveSecondsForEveryTenMinutesWalked() {
+    fun theReplayTakesTwoSecondsForEveryTenMinutesWalked() {
         assertEquals(5.0, ReplayPlayer.replayDuration(600.0), 1e-9)
-        assertEquals(15.0, ReplayPlayer.replayDuration(1800.0), 1e-9)
+        assertEquals(6.0, ReplayPlayer.replayDuration(1800.0), 1e-9)
+        assertEquals(12.0, ReplayPlayer.replayDuration(3600.0), 1e-9)
         // A dash to the letterbox is still watchable; a day out doesn't drag.
-        assertEquals(2.0, ReplayPlayer.replayDuration(60.0), 1e-9)
-        assertEquals(30.0, ReplayPlayer.replayDuration(5 * 3600.0), 1e-9)
+        assertEquals(5.0, ReplayPlayer.replayDuration(60.0), 1e-9)
+        assertEquals(12.0, ReplayPlayer.replayDuration(5 * 3600.0), 1e-9)
     }
 
     @Test
