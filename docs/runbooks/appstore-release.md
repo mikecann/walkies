@@ -123,4 +123,6 @@ It waits for you, since release is manual: App Store Connect > the version > **R
 
 ## If it's rejected
 
-Read the message in App Store Connect > Resolution Center. Fix it, bump nothing (the version stays 1.0.0), upload a new build with `UPLOAD=1 scripts/appstore-upload.sh` (it gets a new build number), attach it with step 8 and resubmit. Listing-only fixes just need the metadata script again and a resubmit.
+Read the message in App Store Connect > Resolution Center. Fix it, bump nothing (the version stays 1.0.0), upload a new build with `UPLOAD=1 scripts/appstore-upload.sh` (it gets a new build number), attach it with step 8 and resubmit. `node scripts/appstore-submit.mjs <build> --submit` does the attach and the resubmit: it marks the rejected item resolved and resubmits the rejected submission, because a fresh submission is refused. The rejection message itself is only in App Store Connect > App Review, not the API.
+
+App Store Connect's **Resubmit to App Review** button stayed greyed out in October 2026, even after the build was attached, so use the script. Check the version page for a "This item requires your attention" box too. That time it asked for Apple's new **Regulated Medical Device** declaration (App Information > Declare Regulated Medical Device), and Walkies is declared not a medical device. Listing-only fixes just need the metadata script again and a resubmit.
