@@ -28,10 +28,14 @@
   <link rel="icon" href="/img/icon-192.png" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
   <link rel="manifest" href="/site.webmanifest">
+  <link rel="preload" href="/fonts/manrope.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/styles.css?v={{version}}">
+  <!-- Set before first paint so sections waiting to be revealed never flash in and out. -->
+  <script>document.documentElement.classList.add("js")</script>
   {{structuredData}}
 </head>
 <body class="page-{{page}}">
+  <a class="skip" href="#main">Skip to content</a>
   <!-- "Made with Convex" top-left and the code on GitHub top-right, the same corner
        triangles as Poddle's site. They sit in the page rather than being fixed, so they
        scroll away instead of covering anything, and the top bar moves in to clear them. -->
@@ -46,24 +50,111 @@
       <path class="octo" d="M115.0,115.0 C114.9,115.1 118.7,116.5 119.8,115.4 L133.7,101.6 C136.9,99.2 139.9,98.4 142.2,98.6 C133.8,88.0 127.5,74.4 143.8,58.0 C148.5,53.4 154.0,51.2 159.7,51.0 C160.3,49.4 163.2,43.6 171.4,40.1 C171.4,40.1 176.1,42.5 178.8,56.2 C183.1,58.6 187.2,61.8 190.9,65.4 C194.5,69.0 197.7,73.2 200.1,77.6 C213.8,80.2 216.3,84.9 216.3,84.9 C212.7,93.1 206.9,96.0 205.4,96.6 C205.1,102.4 203.0,107.8 198.3,112.5 C181.9,128.9 168.3,122.5 157.7,114.1 C157.9,116.9 156.7,120.9 152.7,124.9 L141.0,136.5 C139.8,137.7 141.6,141.9 141.8,141.8 Z"/>
     </svg>
   </a>
-  <header class="topbar">
-    <a class="brand" href="/" aria-label="Walkies home"><img src="/img/icon-192.png" alt="" width="36" height="36"><b>Walkies</b></a>
-    <nav aria-label="Help and privacy">
-      <a href="/support"{{supportCurrent}}>Help</a>
-      <a href="/privacy"{{privacyCurrent}}>Privacy</a>
+  <!-- Soft clouds drifting behind everything, like the ones that lift off the tiles in the
+       app. Purely decoration, so hidden from screen readers. -->
+  <div class="sky" aria-hidden="true"><i class="cloud c1"></i><i class="cloud c2"></i><i class="cloud c3"></i><i class="cloud c4"></i></div>
+  <!-- A compact translucent bar floating off the top edge, sized to its content. On phones
+       the links move into a full height panel. -->
+  <header class="nav-wrap">
+    <nav class="nav" aria-label="Main">
+      <a class="nav-brand" href="/" aria-label="Walkies home"><img src="/img/icon-192.png" alt="" width="28" height="28"><span>Walkies</span></a>
+      <div class="nav-links">
+        <a href="/"{{homeCurrent}}>Home</a>
+        <a href="/#how">How it works</a>
+        <a href="/#faq">Questions</a>
+        <a href="/support"{{supportCurrent}}>Help</a>
+      </div>
+      <a class="btn btn-sm nav-cta" href="/#download">Get Walkies</a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="menu" aria-label="Open the menu">
+        <span></span><span></span>
+      </button>
     </nav>
+    <div class="menu" id="menu" hidden>
+      <a href="/"{{homeCurrent}}>Home</a>
+      <a href="/#how">How it works</a>
+      <a href="/#faq">Questions</a>
+      <a href="/support"{{supportCurrent}}>Help</a>
+      <a class="btn" href="/#download">Get Walkies</a>
+    </div>
   </header>
-  <main>
+  <main id="main" tabindex="-1">
 {{content}}
   </main>
   <footer class="footer">
-    <p>Walkies is made by Mike Cann. Suburb outlines and streets come from <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> and its contributors.</p>
-    <nav aria-label="About Walkies">
-      <a href="/">Home</a>
-      <a href="/support">Help</a>
-      <a href="/privacy">Privacy</a>
-      <a href="mailto:{{email}}">{{email}}</a>
-    </nav>
+    <div class="footer-inner">
+      <a class="nav-brand" href="/"><img src="/img/icon-192.png" alt="" width="28" height="28"><span>Walkies</span></a>
+      <p>Made by Mike Cann. Suburb outlines and streets come from <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> and its contributors.</p>
+      <nav aria-label="About Walkies">
+        <a href="/support"{{supportCurrent}}>Help</a>
+        <a href="/privacy"{{privacyCurrent}}>Privacy policy</a>
+        <a href="{{github}}">Code on GitHub</a>
+        <a href="mailto:{{email}}">{{email}}</a>
+      </nav>
+    </div>
   </footer>
+  <script>
+    // The phone menu, scroll reveals and the home page tagline's word by word reveal.
+    (() => {
+      const root = document.documentElement;
+
+      // Mobile menu: a full height panel. It stays [hidden] until opened so it's out of the
+      // tab order, and gets one frame to paint before .open so the links can animate in.
+      const toggle = document.querySelector(".nav-toggle");
+      const menu = document.getElementById("menu");
+      const setOpen = (open) => {
+        toggle.setAttribute("aria-expanded", String(open));
+        toggle.setAttribute("aria-label", open ? "Close the menu" : "Open the menu");
+        root.classList.toggle("menu-open", open);
+        // The panel covers the page, so take the page out of the tab order (and away from
+        // screen readers) while it's open, leaving just the nav bar and the menu.
+        for (const el of document.body.children) if (el.tagName !== "HEADER" && el.tagName !== "SCRIPT") el.inert = open;
+        if (open) { menu.hidden = false; requestAnimationFrame(() => requestAnimationFrame(() => menu.classList.add("open"))); }
+        else { menu.classList.remove("open"); setTimeout(() => { if (!menu.classList.contains("open")) menu.hidden = true; }, 500); }
+      };
+      toggle.addEventListener("click", () => setOpen(toggle.getAttribute("aria-expanded") !== "true"));
+      menu.addEventListener("click", (e) => { if (e.target.closest("a")) setOpen(false); });
+      addEventListener("keydown", (e) => { if (e.key === "Escape" && root.classList.contains("menu-open")) { setOpen(false); toggle.focus(); } });
+      matchMedia("(min-width: 768px)").addEventListener("change", (e) => { if (e.matches) setOpen(false); });
+
+      // Sections rise 32px and fade in once as they enter the viewport.
+      const reveals = document.querySelectorAll("[data-reveal]");
+      const io = new IntersectionObserver((entries) => {
+        for (const entry of entries) if (entry.isIntersecting) { entry.target.classList.add("in"); io.unobserve(entry.target); }
+      }, { rootMargin: "0px 0px -5% 0px", threshold: 0 });
+      reveals.forEach((el) => io.observe(el));
+
+      // The tagline: split into words, then light each one once it crosses a line 60% of the
+      // way down the screen. One scroll listener, throttled to a frame, per the skill.
+      const tagline = document.querySelector(".tagline-text");
+      if (tagline) {
+        const walk = (node) => {
+          for (const child of [...node.childNodes]) {
+            if (child.nodeType === 3) {
+              const frag = document.createDocumentFragment();
+              for (const part of child.textContent.split(/(\s+)/)) {
+                if (!part) continue;
+                if (/^\s+$/.test(part)) { frag.append(part); continue; }
+                const span = document.createElement("span");
+                span.className = "word"; span.textContent = part; frag.append(span);
+              }
+              child.replaceWith(frag);
+            } else if (child.nodeType === 1 && child.tagName !== "BR") walk(child);
+          }
+        };
+        walk(tagline);
+        const words = [...tagline.querySelectorAll(".word")];
+        let queued = false;
+        const update = () => {
+          queued = false;
+          const line = innerHeight * 0.6;
+          // One way, like the section reveals: a lit word stays lit when you scroll back up.
+          for (const w of words) if (w.getBoundingClientRect().top < line) w.classList.add("lit");
+        };
+        addEventListener("scroll", () => { if (!queued) { queued = true; requestAnimationFrame(update); } }, { passive: true });
+        addEventListener("resize", update);
+        update();
+      }
+    })();
+  </script>
 </body>
 </html>

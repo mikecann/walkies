@@ -1,262 +1,447 @@
-/* Walkies' website, in the app's look (Walkies/Views/Theme.swift): cream paper, cards with a
-   white die-cut edge like the stickers, the burnt orange accent and the map's hex tiles.
-   The layout follows Poddle's home page (poddle.mikecann.app). */
+/* Walkies' website. The layout and the type, spacing, radius and motion rules follow Elaya's
+   landing-page-design skill (github.com/elayadesign/ai-design-skills): Manrope only, Tailwind's
+   type scale and radii, the spacing tokens below and one easing curve. The colours, the white
+   sticker rims and the hex tiles behind everything come from the app (Walkies/Views/Theme.swift). */
+
+@font-face {
+  font-family: "Manrope"; src: url("/fonts/manrope.woff2") format("woff2");
+  font-weight: 200 800; font-style: normal; font-display: swap;
+}
 
 :root {
-  --cream: #fbf4e6; --card: #fdf8ee; --sand: #eadbc0; --well: #efe3cd;
-  --ink: #3b312b; --body: #54473e; --ink-soft: #6b5d52; --ink-faint: #9a8b7d;
-  --burnt: #c9573b; --burnt-d: #a9442b; --orange: #ff782e; --teal: #21a699; --badge-teal: #4a9494;
-  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --round: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
-  /* The app's sticker cards: a white rim and a soft shadow. */
+  /* The app's colours (Walkies/Views/Theme.swift), kept as the brand. */
+  --cream: #fbf4e6; --card: #fdf8ee; --well: #efe3cd; --line: #eadbc0;
+  --ink: #3b312b; --body: #54473e; --ink-soft: #6b5d52;
+  --burnt: #c9573b; --burnt-d: #a9442b; --orange: #ff782e;
+  /* Flat tints behind the screenshots. */
+  --tint-orange: #f8dfc9; --tint-teal: #d6ebe5; --tint-sand: #f3e4c3; --sky: #d8eaf6;
+
+  /* Spacing tokens. Nothing in between. */
+  --s25: 2px; --s50: 4px; --s75: 8px; --s100: 12px; --s200: 16px; --s300: 24px; --s400: 32px;
+  --s500: 40px; --s600: 48px; --s700: 64px; --s800: 80px; --s900: 96px;
+  /* Tailwind's radii (v4's scale, which adds 4xl). */
+  --r-md: 6px; --r-lg: 8px; --r-xl: 12px; --r-2xl: 16px; --r-3xl: 24px; --r-4xl: 32px; --r-full: 9999px;
+  /* The one easing curve, for everything that moves into place. */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --font: "Manrope", ui-sans-serif, system-ui, sans-serif;
   --rim: 3px solid #fff;
-  --lift: 0 3px 16px rgba(59, 49, 43, .13);
+  --lift: 0 4px 16px rgba(59, 49, 43, .12);
   color-scheme: light;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; scroll-padding-top: var(--s900); }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+/* Very faint hex tiles, like the map's. The skill wants flat backgrounds, but the tiles are
+   what makes it look like Walkies, so they stay, at lower contrast than the old site's. */
 body {
-  font-family: var(--sans); color: var(--ink); background-color: var(--cream);
-  /* Faint hex tiles, like the map's. */
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='84' height='145.5' viewBox='0 0 84 145.5'%3E%3Cg fill='none' stroke='%23eadbc0' stroke-width='1.5'%3E%3Cpath d='M42 0 84 24.25v48.5L42 97 0 72.75v-48.5z'/%3E%3Cpath d='M42 97v48.5'/%3E%3C/g%3E%3C/svg%3E");
+  font-family: var(--font); font-size: 16px; line-height: 24px; color: var(--body); background-color: var(--cream);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='84' height='145.5' viewBox='0 0 84 145.5'%3E%3Cg fill='none' stroke='%23f2e7d3' stroke-width='1'%3E%3Cpath d='M42 0 84 24.25v48.5L42 97 0 72.75v-48.5z'/%3E%3Cpath d='M42 97v48.5'/%3E%3C/g%3E%3C/svg%3E");
   background-size: 84px 145.5px;
-  -webkit-font-smoothing: antialiased; min-height: 100vh; min-height: 100dvh;
-  position: relative; display: flex; flex-direction: column;
+  -webkit-font-smoothing: antialiased; min-height: 100dvh; position: relative;
+  /* So the first card's top margin stays inside the body instead of pushing the whole body
+     (and the corner triangles pinned to its top) down. */
+  display: flow-root;
 }
-main { flex: 1; width: 100%; }
-a { color: var(--burnt-d); text-underline-offset: 3px; }
-a:hover { color: var(--burnt); }
+html.menu-open body { overflow: hidden; }
 img { max-width: 100%; height: auto; }
-:focus-visible { outline: 2.5px solid var(--orange); outline-offset: 2px; border-radius: 6px; }
+a { color: var(--burnt-d); text-underline-offset: 3px; transition: color 300ms var(--ease); }
+a:hover { color: var(--burnt); }
+:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; border-radius: var(--r-md); }
+main:focus { outline: none; }
+h1, h2, h3 { color: var(--ink); font-weight: 700; text-wrap: balance; }
+p, li { text-wrap: pretty; }
+.icon { width: 1em; height: 1em; flex: none; }
 
-/* ---------- frame ---------- */
-.topbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  max-width: 1080px; width: 100%; margin: 0 auto; padding: max(16px, env(safe-area-inset-top)) 20px 6px;
+.container { max-width: 1200px; margin: 0 auto; padding: 0 var(--s300); }
+.section { padding-top: var(--s900); }
+@media (max-width: 767px) { .section { padding-top: var(--s700); } }
+
+/* Skip to content, for keyboards. */
+.skip {
+  position: fixed; left: var(--s200); top: var(--s200); z-index: 60; padding: var(--s75) var(--s100);
+  background: var(--ink); color: #fff; border-radius: var(--r-lg); font-size: 14px; line-height: 20px; font-weight: 600;
+  transform: translateY(-200%); opacity: 0; pointer-events: none;
+  transition: transform 500ms var(--ease), opacity 300ms var(--ease);
 }
-/* "Made with Convex" and GitHub corner triangles (layout.html). They hang off the page's
-   top corners, so the top bar moves in when the screen is too narrow to clear them. */
-.corner { position: absolute; top: 0; z-index: 20; width: 72px; height: 72px; display: block; }
+.skip:focus { transform: none; opacity: 1; pointer-events: auto; color: #fff; }
+
+/* ---------- clouds drifting behind the page ---------- */
+/* A fixed layer under everything (z-index -1 paints it over the body's tiles but under the
+   content). Each cloud crosses the screen in two to three minutes. They drift at a constant
+   speed, so these use linear rather than the skill's easing curve, which would make them
+   lurch. Negative delays spread them out on load, and with reduced motion they stay put. */
+.sky { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+.cloud {
+  position: absolute; left: 0; display: block; width: 360px; aspect-ratio: 2 / 1;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 100'%3E%3Cg fill='%23fff'%3E%3Ccircle cx='62' cy='62' r='28'/%3E%3Ccircle cx='98' cy='46' r='36'/%3E%3Ccircle cx='138' cy='60' r='28'/%3E%3Crect x='34' y='58' width='132' height='32' rx='16'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+  filter: blur(6px); opacity: .7; will-change: transform;
+  animation: drift 160s linear infinite;
+}
+.cloud.c1 { top: 12%; width: 380px; animation-duration: 170s; animation-delay: -40s; }
+.cloud.c2 { top: 46%; width: 280px; opacity: .55; animation-duration: 210s; animation-delay: -130s; }
+.cloud.c3 { top: 72%; width: 440px; opacity: .6; animation-duration: 190s; animation-delay: -95s; }
+.cloud.c4 { top: 28%; width: 240px; opacity: .5; animation-duration: 240s; animation-delay: -200s; }
+@keyframes drift { from { transform: translateX(-480px); } to { transform: translateX(calc(100vw + 40px)); } }
+@media (max-width: 767px) { .cloud { scale: .6; } }
+@media (prefers-reduced-motion: reduce) {
+  .cloud { animation: none; }
+  .cloud.c1 { transform: translateX(8vw); }
+  .cloud.c2 { transform: translateX(62vw); }
+  .cloud.c3 { transform: translateX(30vw); }
+  .cloud.c4 { transform: translateX(78vw); }
+}
+
+/* ---------- buttons ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--s75);
+  padding: var(--s75) var(--s100); border-radius: var(--r-full);
+  font-size: 16px; line-height: 24px; font-weight: 600; text-decoration: none;
+  background: var(--burnt-d); color: #fff;
+  transition: background-color 300ms var(--ease), transform 500ms var(--ease);
+}
+.btn:hover { background: var(--burnt); color: #fff; transform: translateY(-1px); }
+.btn:active { transform: scale(0.98); }
+.btn-sm { font-size: 14px; line-height: 20px; }
+
+/* The App Store badge, after Apple's black one, in Manrope since the site uses one face. */
+.appstore {
+  display: inline-flex; align-items: center; gap: var(--s75); padding: var(--s75) var(--s200) var(--s75) var(--s100);
+  border-radius: var(--r-xl); background: #000; color: #fff; border: 1px solid #a6a6a6;
+  text-decoration: none; white-space: nowrap; box-shadow: var(--lift);
+  transition: background-color 300ms var(--ease), transform 500ms var(--ease);
+}
+.appstore-logo { width: 32px; height: 32px; flex: none; fill: currentColor; }
+.appstore span { display: flex; flex-direction: column; align-items: flex-start; }
+.appstore small { font-size: 12px; line-height: 16px; font-weight: 500; }
+.appstore b { font-size: 20px; line-height: 28px; font-weight: 700; letter-spacing: -.01em; }
+a.appstore:hover { background: #1c1c1c; color: #fff; transform: translateY(-1px); }
+a.appstore:active { transform: scale(0.98); }
+/* Until launch the badge isn't a link (visibly not clickable rather than a dead link). */
+.appstore.soon { cursor: default; opacity: .9; }
+
+/* ---------- corners: "Made with Convex" and GitHub, the same as Poddle's site ---------- */
+.corner { position: absolute; top: 0; z-index: 20; width: 64px; height: 64px; display: block; }
 .corner svg { width: 100%; height: 100%; display: block; fill: var(--ink); }
 .corner.convex { left: 0; clip-path: polygon(0 0, 100% 0, 0 100%); }
-.corner.convex img { position: absolute; top: 7px; left: 7px; width: 26px; height: 26px; transition: transform .2s; }
-.corner.convex:hover img { transform: scale(1.12); }
+.corner.convex img { position: absolute; top: var(--s75); left: var(--s75); width: 24px; height: 24px; transition: transform 300ms var(--ease); }
+.corner.convex:hover img { transform: scale(1.1); }
 .corner.github { right: 0; clip-path: polygon(0 0, 100% 0, 100% 100%); }
 .corner.github .octo { fill: var(--cream); }
-.corner.github:hover .arm { animation: octo-wave 560ms ease-in-out; transform-origin: 130px 106px; }
+.corner.github:hover .arm { animation: octo-wave 600ms var(--ease); transform-origin: 130px 106px; }
 @keyframes octo-wave { 0%, 100% { transform: rotate(0) } 20%, 60% { transform: rotate(-25deg) } 40%, 80% { transform: rotate(10deg) } }
-@media (max-width: 1240px) { .topbar { padding-left: 64px; padding-right: 64px; } }
-@media (max-width: 600px) {
-  .corner { width: 54px; height: 54px; }
-  .corner.convex img { top: 5px; left: 5px; width: 20px; height: 20px; }
-  .topbar { padding-left: 50px; padding-right: 50px; }
-}
-.brand { display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; }
-.brand:hover { color: var(--ink); }
-.brand img { border-radius: 10px; border: 2px solid #fff; box-shadow: var(--lift); }
-.brand b { font: 900 23px/1 var(--round); letter-spacing: -.02em; }
-.topbar nav { display: flex; gap: 8px; }
-.topbar nav a {
-  font: 700 15px/20px var(--round); color: var(--burnt-d); text-decoration: none; padding: 7px 13px;
-  border-radius: 999px; background: var(--card); border: 2px solid #fff; box-shadow: var(--lift);
-}
-.topbar nav a:hover, .topbar nav a[aria-current="page"] { color: var(--ink); }
-@media (max-width: 600px) {
-  .brand { gap: 8px; }
-  .brand b { font-size: 21px; }
-  .brand img { width: 32px; height: 32px; border-radius: 9px; }
-  .topbar nav { gap: 6px; }
-  .topbar nav a { padding: 5px 10px; font-size: 14px; }
-}
-@media (max-width: 370px) {
-  .brand b { font-size: 19px; }
-  .brand img { width: 28px; height: 28px; }
-  .topbar nav a { padding: 4px 8px; font-size: 13.5px; }
+@media (max-width: 767px) {
+  .corner { width: 48px; height: 48px; }
+  .corner.convex img { top: var(--s50); left: var(--s50); width: 20px; height: 20px; }
 }
 
-.footer {
-  max-width: 1080px; width: 100%; margin: 0 auto; text-align: center;
-  padding: 26px 20px max(30px, env(safe-area-inset-bottom)); font: 500 13.5px/19px var(--sans); color: var(--ink-soft);
+/* ---------- nav: floats off the top, centred, sized to its content ---------- */
+.nav-wrap { position: fixed; top: var(--s200); left: 0; right: 0; z-index: 40; pointer-events: none; }
+.nav {
+  pointer-events: auto; width: max-content; max-width: calc(100% - var(--s900) - var(--s900)); margin: 0 auto;
+  display: flex; align-items: center; gap: var(--s200); padding: var(--s75) var(--s75) var(--s75) var(--s100);
+  border-radius: var(--r-full); background: rgba(253, 248, 238, .72);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4); backdrop-filter: blur(16px) saturate(1.4);
+  border: 1px solid rgba(59, 49, 43, .08); box-shadow: 0 4px 24px rgba(59, 49, 43, .08);
+  position: relative; z-index: 2;
 }
-.footer p { max-width: 520px; margin: 0 auto; }
-.footer a { color: var(--ink-soft); }
-.footer nav { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px 18px; margin-top: 8px; }
-.footer nav a { text-decoration: none; }
-.footer a:hover { color: var(--burnt-d); }
-
-/* ---------- type ---------- */
-h1, h2, h3 { font-family: var(--round); color: var(--ink); text-wrap: balance; }
-h1 { font-weight: 900; font-size: clamp(30px, 6vw, 42px); line-height: 1.08; letter-spacing: -.02em; }
-.lede { font: 400 17px/26px var(--sans); color: var(--body); max-width: 600px; margin-top: 12px; }
-.muted { color: var(--ink-soft); font: 500 15px/21px var(--sans); }
-p { text-wrap: pretty; }
-
-/* A cream card with a white die-cut edge, like the app's. */
-.card { background: var(--card); border: var(--rim); border-radius: 26px; box-shadow: var(--lift); }
-
-/* ---------- the App Store badge, after Apple's black one ---------- */
-.appstore {
-  display: inline-flex; align-items: center; gap: 7px; height: 54px; padding: 0 18px 0 13px; border-radius: 12px;
-  background: #000; color: #fff; border: 1px solid #a6a6a6; text-decoration: none; white-space: nowrap;
-  font-family: var(--sans); box-shadow: 0 6px 16px rgba(40, 25, 15, .18);
+.nav-brand { display: flex; align-items: center; gap: var(--s75); color: var(--ink); text-decoration: none; font-size: 18px; line-height: 28px; font-weight: 700; letter-spacing: -.01em; }
+.nav-brand:hover { color: var(--ink); }
+/* The nested radius rule (outer minus gap) would make this icon a circle inside the pill,
+   but an app icon reads wrong as a circle, so it keeps the app icon's own rounding. */
+.nav-brand img { border-radius: var(--r-lg); }
+.nav-links { display: flex; gap: var(--s50); }
+.nav-links a {
+  font-size: 14px; line-height: 20px; font-weight: 600; color: var(--ink-soft); text-decoration: none;
+  padding: var(--s75) var(--s100); border-radius: var(--r-full);
+  transition: background-color 300ms var(--ease), color 300ms var(--ease);
 }
-.appstore-logo { width: 32px; height: 32px; margin-top: -4px; flex: none; fill: currentColor; }
-.appstore span { display: flex; flex-direction: column; align-items: flex-start; }
-.appstore small { font-size: 11.5px; font-weight: 500; line-height: 1.1; letter-spacing: .01em; }
-.appstore b { font-size: 23px; font-weight: 600; line-height: 1.05; letter-spacing: -.025em; }
-a.appstore:hover { background: #1c1c1c; color: #fff; }
-a.appstore:active { transform: translateY(1px); }
-.appstore.soon { cursor: default; }
+.nav-links a:hover { background: rgba(59, 49, 43, .06); color: var(--ink); }
+.nav-links a[aria-current="page"] { background: #fff; color: var(--ink); }
+.nav-links a:active, .menu a:active { transform: translateY(1px); }
 
-/* ---------- the home page ---------- */
-.section-title, .closing h2 { font-weight: 900; letter-spacing: -.025em; }
-.page-index h3 { font: 850 clamp(22px, 3vw, 28px)/1.15 var(--round); letter-spacing: -.015em; }
+/* The toggle's two lines turn into a cross on the base curve rather than swapping icons. */
+.nav-toggle {
+  display: none; width: 40px; height: 40px; border: 0; border-radius: var(--r-full); background: transparent;
+  cursor: pointer; position: relative; transition: background-color 300ms var(--ease);
+}
+.nav-toggle:hover { background: rgba(59, 49, 43, .06); }
+.nav-toggle:active { transform: scale(0.98); }
+.nav-toggle span {
+  position: absolute; left: var(--s100); width: 16px; height: 2px; border-radius: var(--r-full); background: var(--ink);
+  top: 19px; transition: transform 500ms var(--ease);
+}
+.nav-toggle span:first-child { transform: translateY(-4px); }
+.nav-toggle span:last-child { transform: translateY(4px); }
+.nav-toggle[aria-expanded="true"] span:first-child { transform: rotate(45deg); }
+.nav-toggle[aria-expanded="true"] span:last-child { transform: rotate(-45deg); }
 
-/* A phone, drawn round a screenshot. --w sets its width. */
+/* Mobile menu: a full height panel, the cream at high opacity over a strong blur. */
+.menu {
+  position: fixed; inset: 0; z-index: 1; pointer-events: auto;
+  display: flex; flex-direction: column; align-items: flex-start; gap: var(--s200);
+  padding: var(--s900) var(--s300) var(--s400);
+  background: rgba(251, 244, 230, .94); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);
+  opacity: 0; transition: opacity 500ms var(--ease);
+}
+.menu[hidden] { display: none; }
+.menu.open { opacity: 1; }
+.menu a:not(.btn) { font-size: 30px; line-height: 36px; font-weight: 700; color: var(--ink); text-decoration: none; }
+.menu a[aria-current="page"] { color: var(--burnt-d); }
+.menu .btn { margin-top: var(--s200); }
+/* Links arrive in reading order, 24px up while fading in, 60ms apart (5 links, so 240ms). */
+.menu > * { opacity: 0; transform: translateY(var(--s300)); transition: opacity 500ms var(--ease), transform 500ms var(--ease); }
+.menu.open > * { opacity: 1; transform: none; }
+.menu.open > :nth-child(2) { transition-delay: 60ms; }
+.menu.open > :nth-child(3) { transition-delay: 120ms; }
+.menu.open > :nth-child(4) { transition-delay: 180ms; }
+.menu.open > :nth-child(5) { transition-delay: 240ms; }
+
+@media (max-width: 767px) {
+  .nav { gap: var(--s100); max-width: calc(100% - var(--s900) - var(--s400)); }
+  .nav-links, .nav-cta { display: none; }
+  .nav-toggle { display: block; }
+}
+
+/* ---------- a phone, drawn round a screenshot ---------- */
+/* Outer radius 4xl (32px) with 8px of bezel, so the screen gets 24px (3xl), outer minus gap. The
+   bezel is flat. The screen's well colour is its placeholder while it loads. */
 .phone {
-  --w: 240px; width: var(--w); flex: none; padding: calc(var(--w) * .03); border-radius: calc(var(--w) * .165);
-  background: linear-gradient(150deg, #4c4039, #1f1915 45%, #2f2621);
-  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .1), 0 30px 46px -26px rgba(70, 45, 25, .6), 0 10px 22px rgba(70, 45, 25, .14);
+  --w: 240px; width: var(--w); flex: none; padding: var(--s75); border-radius: var(--r-4xl);
+  background: #241d19; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .1), 0 24px 48px -24px rgba(70, 45, 25, .6), 0 8px 24px rgba(70, 45, 25, .14);
 }
-.phone img { display: block; width: 100%; height: auto; border-radius: calc(var(--w) * .135); background: var(--well); }
+.phone img { display: block; width: 100%; height: auto; border-radius: var(--r-3xl); background: var(--well); }
 
-/* hero */
+/* ---------- hero ---------- */
 .hero {
-  max-width: 1080px; margin: 0 auto; padding: clamp(18px, 5vw, 56px) 20px 24px;
-  display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 40px; align-items: center;
+  display: grid; grid-template-columns: minmax(0, 680px) minmax(0, 1fr); gap: var(--s600); align-items: center;
+  padding-top: var(--s900); padding-bottom: var(--s700);
 }
-.hero-icon { display: block; border-radius: 18px; border: 3px solid #fff; margin-bottom: 18px; box-shadow: 0 8px 18px rgba(70, 45, 25, .2); }
-.hero h1 { font-size: clamp(38px, 5.6vw, 60px); line-height: 1.03; letter-spacing: -.03em; }
-.hero .lede { font-size: 18.5px; line-height: 28px; max-width: 520px; margin-top: 18px; }
-.hero-cta { display: flex; align-items: center; gap: 12px 16px; flex-wrap: wrap; margin-top: 28px; }
-.hero-media { position: relative; display: flex; justify-content: center; align-items: center; padding: 24px 0 12px; }
-/* A patch of sky behind the phones. */
-.hero-media::before {
-  content: ""; position: absolute; inset: 4% 0 0; border-radius: 48% 52% 46% 54% / 50% 46% 54% 50%;
-  background: radial-gradient(60% 60% at 45% 42%, #d3e9f7, rgba(207, 230, 247, .55) 55%, rgba(251, 244, 230, 0) 75%);
+.hero-copy > * { max-width: 680px; }
+/* The hero heading gets a black to grey gradient, on the text only. */
+.hero-title {
+  font-size: 60px; line-height: 1; letter-spacing: -.03em;
+  background: linear-gradient(90deg, #000000, #666666); -webkit-background-clip: text; background-clip: text;
+  color: transparent; -webkit-text-fill-color: transparent;
+  /* background-clip: text only paints inside the box, and with text-6xl's line height of 1
+     the last line's descenders (the g in "dog") hang below it, so pad the box to hold them. */
+  padding-bottom: var(--s75);
 }
-.hero-media .phone { position: relative; --w: clamp(190px, 21vw, 262px); }
+.hero-sub { font-size: 18px; line-height: 28px; margin-top: var(--s200); max-width: 560px; }
+.hero-cta { margin-top: var(--s400); display: flex; flex-wrap: wrap; gap: var(--s200); align-items: center; }
+.proof-line { list-style: none; display: flex; flex-wrap: wrap; gap: var(--s75) var(--s300); margin-top: var(--s300); }
+.proof-line li { display: flex; align-items: center; gap: var(--s75); font-size: 14px; line-height: 20px; font-weight: 500; color: var(--ink-soft); }
+.proof-line .icon { width: 20px; height: 20px; color: var(--burnt); }
+.hero-media { position: relative; display: flex; justify-content: center; align-items: center; padding: var(--s300) 0; }
+/* A flat patch of sky behind the phones. */
+.hero-media::before { content: ""; position: absolute; inset: 8% 4% 0; border-radius: var(--r-full); background: var(--sky); }
+.hero-media .phone { position: relative; --w: clamp(176px, 18vw, 248px); }
 .hero-media .back { transform: rotate(-7deg) translate(8%, 6%); margin-right: calc(var(--w) * -.32); }
 .hero-media .front { transform: rotate(4deg); z-index: 1; }
+@media (max-width: 1023px) {
+  .hero { grid-template-columns: 1fr; text-align: center; gap: var(--s400); }
+  .hero-copy { display: flex; flex-direction: column; align-items: center; }
+  .hero-cta, .proof-line { justify-content: center; }
+}
+@media (max-width: 767px) {
+  .hero { padding-top: var(--s900); padding-bottom: var(--s400); }
+  .hero-title { font-size: 36px; line-height: 40px; letter-spacing: -.02em; }
+  .hero-title br { display: none; }
+  .hero-sub { font-size: 16px; line-height: 24px; margin-top: var(--s200); }
+  .hero-cta { margin-top: var(--s300); }
+  .proof-line { flex-direction: column; align-items: center; }
+  .hero-media .phone { --w: min(42vw, 200px); }
+}
 
-/* The promo video: the poster with a play button until it's pressed (build-web.mjs promoVideo).
-   A card with the stickers' white rim, and a play button in the app's burnt orange. */
-.promo { max-width: 1080px; margin: clamp(20px, 5vw, 56px) auto 0; padding: 0 20px; }
-/* content-box so it's the video inside the white rim that's 16:9, or YouTube adds black bars. */
+/* ---------- promo video ---------- */
+/* Radius 4xl. The white rim is 3px, so inside it the formula gives 29px, which overflow does. */
 .promo-frame {
   position: relative; box-sizing: content-box; aspect-ratio: 16 / 9; overflow: hidden;
-  background: var(--well); border: var(--rim); border-radius: 32px; box-shadow: var(--lift);
+  background: var(--well); border: var(--rim); border-radius: var(--r-4xl); box-shadow: var(--lift);
 }
 .promo-frame iframe, .promo-play, .promo-play img { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
 .promo-play { padding: 0; background: none; cursor: pointer; }
 .promo-play img { object-fit: cover; }
-/* The frame clips anything outside it, so the focus ring goes round the frame instead. */
 .promo-play:focus-visible { outline: none; }
-.promo-frame:has(.promo-play:focus-visible) { outline: 2.5px solid var(--orange); outline-offset: 3px; }
+.promo-frame:has(.promo-play:focus-visible) { outline: 2px solid var(--orange); outline-offset: 4px; }
 .promo-icon {
-  position: absolute; left: 50%; top: 50%; width: 92px; height: 92px; transform: translate(-50%, -50%);
-  display: grid; place-items: center; border-radius: 50%; background: var(--burnt); border: 4px solid #fff;
-  box-shadow: 0 10px 28px rgba(120, 50, 25, .35); transition: transform .2s, background-color .2s;
+  position: absolute; left: 50%; top: 50%; width: 96px; height: 96px; transform: translate(-50%, -50%);
+  display: grid; place-items: center; border-radius: var(--r-full); background: var(--burnt); border: 4px solid #fff;
+  box-shadow: 0 8px 24px rgba(120, 50, 25, .35); transition: transform 500ms var(--ease), background-color 300ms var(--ease);
 }
-.promo-icon svg { width: 40px; height: 40px; fill: #fff; margin-left: 5px; }
+.promo-icon svg { width: 40px; height: 40px; fill: #fff; margin-left: var(--s50); }
 .promo-play:hover .promo-icon, .promo-play:focus-visible .promo-icon { transform: translate(-50%, -50%) scale(1.08); background: var(--burnt-d); }
-
-/* features */
-.features, .closing { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
-.section-title { display: block; font-size: clamp(30px, 4.4vw, 42px); line-height: 1.1; text-align: center; margin: clamp(48px, 8vw, 96px) 0 28px; }
-.feature {
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: stretch; overflow: hidden;
-  background: var(--card); border: var(--rim); border-radius: 32px; box-shadow: var(--lift);
+.promo-play:active .promo-icon { transform: translate(-50%, -50%) scale(0.98); }
+@media (max-width: 767px) {
+  .promo-frame { border-radius: var(--r-3xl); }
+  .promo-icon { width: 64px; height: 64px; border-width: 3px; }
+  .promo-icon svg { width: 32px; height: 32px; }
 }
-.feature + .feature { margin-top: 22px; }
-.feature-copy { padding: clamp(28px, 5vw, 56px); align-self: center; }
-.feature-copy p { font: 400 17.5px/28px var(--sans); color: var(--body); margin-top: 14px; max-width: 460px; }
-.feature-media {
-  position: relative; display: flex; justify-content: center; align-items: center; gap: 18px; padding: 40px 24px;
-  background: radial-gradient(90% 80% at 50% 45%, #fbe7d3, #f4d5bd);
-}
-.feature:nth-of-type(2) .feature-media { background: radial-gradient(90% 80% at 50% 45%, #e3f1ed, #cbe4dd); }
-.feature:nth-of-type(3) .feature-media { background: radial-gradient(90% 80% at 50% 45%, #f8ecd0, #efdcb2); }
-.feature.flip .feature-copy { order: 2; }
-.feature-media .phone { --w: 236px; }
-.feature-media.pair .phone { --w: 206px; }
-.feature-media.pair .phone:last-child { transform: translateY(22px); }
 
-/* The secrets' stickers, stuck round the phone. */
-.sticker { position: absolute; z-index: 1; width: 112px; height: auto; filter: drop-shadow(0 5px 8px rgba(70, 45, 25, .2)); pointer-events: none; }
+/* ---------- section heads ---------- */
+.section-title { font-size: 36px; line-height: 40px; letter-spacing: -.02em; text-align: center; max-width: 680px; margin: 0 auto var(--s600); }
+.section-sub { font-size: 18px; line-height: 28px; text-align: center; max-width: 560px; margin: calc(-1 * var(--s400)) auto var(--s600); }
+@media (max-width: 767px) {
+  .section-title { font-size: 30px; line-height: 36px; margin-bottom: var(--s400); }
+  .section-sub { font-size: 16px; line-height: 24px; margin: calc(-1 * var(--s200)) auto var(--s400); }
+}
+
+/* ---------- problem to solution ---------- */
+.problem { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s600); align-items: center; max-width: 960px; }
+.problem h2 { font-size: 36px; line-height: 40px; letter-spacing: -.02em; }
+.problem p { font-size: 18px; line-height: 28px; margin-top: var(--s200); }
+.problem .sign { font-size: 14px; line-height: 20px; font-weight: 600; color: var(--ink-soft); }
+.problem-art { width: 192px; transform: rotate(-8deg); filter: drop-shadow(0 4px 8px rgba(70, 45, 25, .18)); }
+@media (max-width: 767px) {
+  .problem { grid-template-columns: 1fr; gap: var(--s300); }
+  .problem h2 { font-size: 30px; line-height: 36px; }
+  .problem p { font-size: 16px; line-height: 24px; }
+  .problem-art { order: -1; width: 96px; }
+}
+
+/* ---------- benefits ---------- */
+.benefit {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); overflow: hidden;
+  background: var(--card); border: var(--rim); border-radius: var(--r-4xl); box-shadow: var(--lift);
+}
+.benefit + .benefit { margin-top: var(--s300); }
+.benefit-copy { padding: var(--s700); align-self: center; }
+.benefit-copy h3 { font-size: 30px; line-height: 36px; letter-spacing: -.02em; }
+.benefit-copy p { font-size: 16px; line-height: 24px; margin-top: var(--s200); max-width: 480px; }
+.benefit-media { position: relative; display: flex; justify-content: center; align-items: center; gap: var(--s200); padding: var(--s500) var(--s300); }
+.tint-orange { background: var(--tint-orange); }
+.tint-teal { background: var(--tint-teal); }
+.tint-sand { background: var(--tint-sand); }
+.benefit.flip .benefit-copy { order: 2; }
+.benefit-media .phone { --w: 240px; }
+.benefit-media.pair .phone { --w: 208px; }
+.benefit-media.pair .phone:last-child { transform: translateY(var(--s300)); }
+.sticker { position: absolute; z-index: 1; width: 112px; height: auto; filter: drop-shadow(0 4px 8px rgba(70, 45, 25, .2)); pointer-events: none; }
 .sticker.s1 { top: 7%; left: 6%; transform: rotate(-9deg); }
 .sticker.s2 { top: 40%; right: 5%; transform: rotate(7deg); }
 .sticker.s3 { bottom: 6%; left: 9%; transform: rotate(5deg); }
+@media (max-width: 1023px) {
+  .benefit { grid-template-columns: 1fr; }
+  .benefit.flip .benefit-copy { order: 0; }
+  .benefit-copy { padding: var(--s400) var(--s300); }
+}
+@media (max-width: 767px) {
+  .benefit-copy h3 { font-size: 24px; line-height: 32px; }
+  .benefit { border-radius: var(--r-3xl); }
+  .benefit-media { padding: var(--s400) var(--s200); }
+  .benefit-media .phone { --w: min(56vw, 240px); }
+  .benefit-media.pair { gap: var(--s100); }
+  .benefit-media.pair .phone { --w: min(38vw, 200px); }
+  .sticker { width: min(22vw, 96px); }
+}
 
-.bits { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; margin-top: 22px; }
-.bit { background: var(--card); border: var(--rim); border-radius: 28px; box-shadow: var(--lift); padding: 28px 30px; }
-.page-index .bit h3 { font-size: 22px; }
-.bit p { font: 400 16.5px/26px var(--sans); color: var(--body); margin-top: 10px; }
-.bit.story { grid-column: 1 / -1; display: flex; align-items: center; gap: 30px; background: linear-gradient(120deg, #fdf3e4, #f7e2cf); }
-.bit.story img { width: 132px; flex: none; transform: rotate(-8deg); filter: drop-shadow(0 5px 8px rgba(70, 45, 25, .18)); }
-.bit.story p { max-width: 680px; }
+/* ---------- tagline reveal ---------- */
+.tagline { padding-top: var(--s900); padding-bottom: var(--s900); margin-top: var(--s900); }
+.tagline-text {
+  max-width: 680px; margin: 0 auto; text-align: center; color: var(--ink);
+  font-size: 60px; line-height: 1; font-weight: 700; letter-spacing: -.03em; text-wrap: balance;
+}
+/* Words start at 30% and light one at a time. Opacity, since only transform and opacity animate. */
+.js .tagline-text .word { opacity: .3; transition: opacity 600ms var(--ease); }
+.js .tagline-text .word.lit { opacity: 1; }
+@media (max-width: 767px) {
+  .tagline { padding-top: var(--s700); padding-bottom: var(--s700); margin-top: var(--s700); }
+  /* text-3xl, below the skill's text-4xl floor for this: at 36px "Watch the clouds lift." leaves "lift."
+     alone on a line at 390px wide, and no orphans wins that fight. */
+  .tagline-text { font-size: 30px; line-height: 36px; letter-spacing: -.02em; }
+}
 
-/* gallery: one row of phones that scrolls sideways */
+/* ---------- how it works and proof ---------- */
+.steps, .proofs { list-style: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s300); }
+.step, .proof { background: var(--card); border: var(--rim); border-radius: var(--r-3xl); box-shadow: var(--lift); padding: var(--s400); }
+.step-icon {
+  display: grid; place-items: center; width: 48px; height: 48px; border-radius: var(--r-2xl);
+  background: var(--tint-orange); color: var(--burnt-d); font-size: 24px;
+}
+.step h3, .proof h3 { font-size: 20px; line-height: 28px; margin-top: var(--s300); }
+.step p, .proof p { margin-top: var(--s75); }
+@media (max-width: 1023px) { .steps, .proofs { grid-template-columns: 1fr; } .step, .proof { padding: var(--s300); } }
+
+/* The screenshot strip, scrolling sideways. */
+.gallery { margin-top: var(--s600); }
 .strip {
-  list-style: none; display: flex; gap: 22px; overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain;
-  padding: 8px 20px 26px; scrollbar-width: thin; scrollbar-color: var(--sand) transparent;
-  /* All six fit side by side on a wide screen, so centre them there. "safe" falls back to
-     the start once they don't fit, so the first one never gets cut off. */
-  justify-content: safe center;
+  list-style: none; display: flex; gap: var(--s300); overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain;
+  padding: var(--s75) var(--s300) var(--s300); margin: 0 calc(-1 * var(--s300));
+  scrollbar-width: thin; scrollbar-color: var(--line) transparent; justify-content: safe center;
 }
 .strip li { flex: none; scroll-snap-align: center; }
-.strip figure { display: flex; flex-direction: column; align-items: center; gap: 14px; }
-.strip .phone { --w: 210px; }
-.strip figcaption { font: 800 15px/18px var(--round); color: var(--ink-soft); }
+.strip figure { display: flex; flex-direction: column; align-items: center; gap: var(--s100); }
+.strip .phone { --w: 176px; }
+.strip figcaption { font-size: 14px; line-height: 20px; font-weight: 600; color: var(--ink-soft); }
+@media (max-width: 767px) { .strip .phone { --w: min(48vw, 176px); } }
 
-/* closing */
-.closing { margin-top: clamp(40px, 7vw, 80px); padding-bottom: 40px; text-align: center; display: flex; flex-direction: column; align-items: center; }
-.closing h2 { font-size: clamp(32px, 5vw, 46px); line-height: 1.1; }
-.closing .lede { text-align: center; max-width: 560px; margin: 14px 0 26px; }
+/* ---------- FAQ ---------- */
+.faq-list { max-width: 768px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--s100); }
+.faq-item { background: var(--card); border: var(--rim); border-radius: var(--r-2xl); box-shadow: var(--lift); }
+.faq-item summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: var(--s200);
+  padding: var(--s200) var(--s300); font-size: 18px; line-height: 28px; font-weight: 600; color: var(--ink);
+  border-radius: var(--r-2xl); transition: background-color 300ms var(--ease);
+}
+.faq-item summary::-webkit-details-marker { display: none; }
+.faq-item summary:hover { background: rgba(59, 49, 43, .04); }
+.faq-item summary:active { transform: translateY(1px); }
+.faq-item summary .icon { width: 20px; height: 20px; color: var(--ink-soft); transition: transform 500ms var(--ease); }
+.faq-item[open] summary .icon { transform: rotate(180deg); }
+.faq-a { padding: 0 var(--s300) var(--s300); }
+.faq-a p { max-width: 640px; }
+@media (max-width: 767px) { .faq-item summary { font-size: 16px; line-height: 24px; padding: var(--s200); } .faq-a { padding: 0 var(--s200) var(--s200); } }
 
-@media (max-width: 960px) {
-  .bits { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* ---------- final CTA ---------- */
+.final {
+  text-align: center; display: flex; flex-direction: column; align-items: center;
+  background: var(--card); border: var(--rim); border-radius: var(--r-4xl); box-shadow: var(--lift); padding: var(--s800) var(--s300);
 }
-@media (max-width: 860px) {
-  .hero { grid-template-columns: 1fr; text-align: center; gap: 12px; }
-  .hero-icon { margin: 0 auto 16px; }
-  .hero .lede { margin-left: auto; margin-right: auto; }
-  .hero-cta { justify-content: center; flex-direction: column; }
-  .hero-media .phone { --w: min(44vw, 230px); }
-  .feature { grid-template-columns: 1fr; }
-  .feature.flip .feature-copy { order: 0; }
-  .feature-copy { padding: 30px 24px 26px; }
-  .feature-media { padding: 30px 16px 34px; }
-  .feature-media .phone { --w: min(56vw, 240px); }
-  .feature-media.pair { gap: 12px; }
-  .feature-media.pair .phone { --w: min(38vw, 200px); }
-  .sticker { width: min(22vw, 104px); }
-  .sticker.s1 { left: 4%; }
-  .sticker.s2 { right: 3%; }
-  .sticker.s3 { left: 5%; }
-  .strip .phone { --w: min(52vw, 210px); }
-}
-@media (max-width: 640px) {
-  .promo-frame { border-radius: 22px; }
-  .promo-icon { width: 66px; height: 66px; border-width: 3px; }
-  .promo-icon svg { width: 30px; height: 30px; margin-left: 4px; }
-  .bits { grid-template-columns: 1fr; }
-  .bit { padding: 24px; }
-  .bit.story { flex-direction: column; align-items: flex-start; gap: 12px; }
-  .bit.story img { width: 96px; }
+.final h2 { font-size: 48px; line-height: 1; letter-spacing: -.03em; max-width: 680px; }
+.final p { font-size: 18px; line-height: 28px; max-width: 560px; margin: var(--s300) 0 var(--s400); }
+@media (max-width: 767px) {
+  .final { padding: var(--s600) var(--s300); border-radius: var(--r-3xl); }
+  .final h2 { font-size: 30px; line-height: 36px; }
+  .final h2 br { display: none; }
+  .final p { font-size: 16px; line-height: 24px; }
 }
 
-/* ---------- privacy and help ---------- */
-.prose { max-width: 740px; margin: 18px auto 56px; padding: clamp(26px, 5vw, 48px) clamp(22px, 5vw, 52px); }
-.prose h1 { margin-bottom: 8px; }
-.prose h2 { font: 850 21px/27px var(--round); letter-spacing: -.01em; margin: 32px 0 0; }
-.prose p, .prose li { font: 400 16.5px/26px var(--sans); color: var(--body); }
-.prose p { margin-top: 12px; }
-.prose .lede { font-size: 17.5px; line-height: 27px; max-width: none; }
-.prose ul { padding-left: 22px; margin-top: 12px; }
-.prose li + li { margin-top: 8px; }
+/* ---------- footer ---------- */
+.footer { padding: var(--s900) var(--s300) var(--s600); }
+.footer-inner { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; gap: var(--s200); text-align: center; }
+.footer p { font-size: 14px; line-height: 20px; color: var(--ink-soft); max-width: 480px; }
+.footer nav { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--s75) var(--s300); }
+.footer nav a { font-size: 14px; line-height: 20px; font-weight: 600; color: var(--ink-soft); text-decoration: none; }
+.footer nav a:hover, .footer nav a[aria-current="page"] { color: var(--burnt-d); }
+
+/* ---------- Help and Privacy ---------- */
+.prose {
+  max-width: 768px; margin: var(--s900) auto 0; padding: var(--s600);
+  background: var(--card); border: var(--rim); border-radius: var(--r-4xl); box-shadow: var(--lift);
+}
+.prose h1 { font-size: 48px; line-height: 1; letter-spacing: -.03em; padding-bottom: var(--s75); }
+.prose h2 { font-size: 24px; line-height: 32px; letter-spacing: -.01em; margin-top: var(--s500); }
+.prose p, .prose li { font-size: 16px; line-height: 24px; }
+.prose p { margin-top: var(--s100); }
+.prose .lede { font-size: 18px; line-height: 28px; margin-top: var(--s200); }
+.prose .meta { font-size: 14px; line-height: 20px; font-weight: 500; color: var(--ink-soft); }
+.prose ul { padding-left: var(--s300); margin-top: var(--s100); }
+.prose li + li { margin-top: var(--s75); }
 .prose li::marker { color: var(--burnt); }
-.prose b { color: var(--ink); font-weight: 650; }
-.prose .meta { font: 500 15px/21px var(--sans); color: var(--ink-soft); }
-@media (max-width: 600px) { .prose { margin: 12px 14px 40px; border-radius: 22px; } }
+.prose b { color: var(--ink); font-weight: 600; }
+@media (max-width: 767px) {
+  .prose { margin: var(--s900) var(--s200) 0; padding: var(--s400) var(--s300); border-radius: var(--r-3xl); }
+  .prose h1 { font-size: 36px; line-height: 40px; letter-spacing: -.02em; }
+  .prose h2 { font-size: 20px; line-height: 28px; margin-top: var(--s400); }
+}
+
+/* ---------- scroll reveals: rise 32px and fade in, once ---------- */
+.js [data-reveal] { opacity: 0; transform: translateY(var(--s400)); transition: opacity 700ms var(--ease), transform 700ms var(--ease); }
+.js [data-reveal].in { opacity: 1; transform: none; }
+/* Reduced motion: plain opacity changes, no movement anywhere. */
+@media (prefers-reduced-motion: reduce) {
+  .js [data-reveal] { transform: none; }
+  .menu > * { transform: none; }
+  .nav-toggle span, .btn, .appstore, .promo-icon, .skip { transition-property: opacity, background-color, color; }
+}

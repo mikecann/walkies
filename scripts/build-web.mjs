@@ -6,7 +6,7 @@
 //
 // Pages can use {{phone <name>}} for a screenshot in a phone (add "hero" for one that
 // loads straight away, "first" for the one to fetch first), {{gallery}} for the row of
-// every screenshot, {{appStoreBadge}} and {{promoVideo}}. The screenshots are
+// every screenshot, {{appStoreBadge}}, {{promoVideo}} and {{icon <name>}} for an icon from web/icons. The screenshots are
 // web/public/screens/*.webp, made by scripts/make-web-screens.mjs.
 import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -138,10 +138,35 @@ function structuredData() {
 
 const escape = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-/** Fills {{name}} from `values`, and {{phone name flags}} with a phone. */
+/**
+ * A Phosphor icon (web/icons/, copied from @phosphor-icons/core, MIT), inlined so it takes
+ * the text colour and costs no request.
+ */
+function icon(name) {
+  const svg = readFileSync(join(root, "web/icons", `${name}.svg`), "utf8").trim();
+  return svg.replace("<svg ", '<svg class="icon" aria-hidden="true" focusable="false" ');
+}
+
+/**
+ * FAQPage structured data, read back out of the home page's <details class="faq-item">
+ * so the questions only live in one place.
+ */
+function faqData(html) {
+  const text = (s) => s.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").replace(/&amp;/g, "&").trim();
+  const items = [...html.matchAll(/<details class="faq-item">\s*<summary>([\s\S]*?)<\/summary>\s*<div class="faq-a">([\s\S]*?)<\/div>\s*<\/details>/g)];
+  if (!items.length) return "";
+  const data = {
+    "@context": "https://schema.org", "@type": "FAQPage",
+    mainEntity: items.map(([, q, a]) => ({ "@type": "Question", name: text(q), acceptedAnswer: { "@type": "Answer", text: text(a) } })),
+  };
+  return `<script type="application/ld+json">${JSON.stringify(data).replace(/</g, "\\u003c")}</script>`;
+}
+
+/** Fills {{name}} from `values`, {{phone name flags}} with a phone and {{icon name}} with an icon. */
 function fill(template, values) {
   return template.replace(/\{\{(\w+)((?: [\w-]+)*)\}\}/g, (match, key, args) => {
     if (key === "phone") return phone(...args.trim().split(" "));
+    if (key === "icon") return icon(args.trim());
     return key in values ? values[key] : match;
   });
 }
@@ -167,13 +192,15 @@ for (const file of pages) {
   if (!match) throw new Error(`${file} needs a <!--page {...} --> line first`);
   const page = JSON.parse(match[1]);
   const name = file.replace(/\.html$/, "");
+  const content = fill(html.slice(match[0].length), shared).trimEnd();
   const out = fill(layout, {
     ...shared,
     title: escape(page.title), description: escape(page.description), url: SITE_URL + page.path, page: name,
+    homeCurrent: name === "index" ? ' aria-current="page"' : "",
     supportCurrent: name === "support" ? ' aria-current="page"' : "",
     privacyCurrent: name === "privacy" ? ' aria-current="page"' : "",
-    structuredData: name === "index" ? structuredData() : "",
-    content: fill(html.slice(match[0].length), shared).trimEnd(),
+    structuredData: name === "index" ? structuredData() + faqData(content) : "",
+    content,
   });
   if (/\{\{[\w ]+\}\}/.test(out)) throw new Error(`${file} has a {{placeholder}} left over: ${out.match(/\{\{[\w ]+\}\}/)[0]}`);
   // Em and en dashes read as written by a machine, so they never go out.
