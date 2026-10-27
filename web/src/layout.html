@@ -105,6 +105,9 @@
         toggle.setAttribute("aria-expanded", String(open));
         toggle.setAttribute("aria-label", open ? "Close the menu" : "Open the menu");
         root.classList.toggle("menu-open", open);
+        // The panel covers the page, so take the page out of the tab order (and away from
+        // screen readers) while it's open, leaving just the nav bar and the menu.
+        for (const el of document.body.children) if (el.tagName !== "HEADER" && el.tagName !== "SCRIPT") el.inert = open;
         if (open) { menu.hidden = false; requestAnimationFrame(() => requestAnimationFrame(() => menu.classList.add("open"))); }
         else { menu.classList.remove("open"); setTimeout(() => { if (!menu.classList.contains("open")) menu.hidden = true; }, 500); }
       };
