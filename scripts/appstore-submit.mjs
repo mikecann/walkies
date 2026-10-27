@@ -50,6 +50,21 @@ if (!submit) {
 }
 
 // 3. Submit.
+// After a rejection the version stays in the rejected submission (UNRESOLVED_ISSUES). App Review
+// only takes it back through that one: a new submission 409s with "Version is not ready to be
+// submitted yet" (2026-10-27). So mark its rejected items resolved and resubmit it.
+const unresolved = (await api("GET", `/v1/reviewSubmissions?filter[app]=${APP_ID}&filter[state]=UNRESOLVED_ISSUES&limit=1`)).data[0];
+if (unresolved) {
+  const rejected = await api("GET", `/v1/reviewSubmissions/${unresolved.id}/items`);
+  for (const item of rejected.data.filter((i) => i.attributes.state === "REJECTED")) {
+    await api("PATCH", `/v1/reviewSubmissionItems/${item.id}`, { data: { type: "reviewSubmissionItems", id: item.id, attributes: { resolved: true } } });
+  }
+  const done = await api("PATCH", `/v1/reviewSubmissions/${unresolved.id}`, {
+    data: { type: "reviewSubmissions", id: unresolved.id, attributes: { submitted: true } },
+  });
+  console.log(`Resubmitted for review: ${done.data.attributes.state}`);
+  process.exit(0);
+}
 const open = await api("GET", `/v1/reviewSubmissions?filter[app]=${APP_ID}&filter[state]=READY_FOR_REVIEW&limit=1`);
 let submission = open.data[0];
 if (!submission) {
