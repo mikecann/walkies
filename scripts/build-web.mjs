@@ -138,10 +138,36 @@ function structuredData() {
 
 const escape = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-/** Fills {{name}} from `values`, and {{phone name flags}} with a phone. */
+/**
+ * A Phosphor icon (web/icons/, copied from @phosphor-icons/core, MIT), inlined so it takes
+ * the text colour and costs no request. Used by the landing page, after the Elaya
+ * landing-page-design skill's "icons from Phosphor, Solar or Iconamoon" rule.
+ */
+function icon(name) {
+  const svg = readFileSync(join(root, "web/icons", `${name}.svg`), "utf8").trim();
+  return svg.replace("<svg ", '<svg class="icon" aria-hidden="true" focusable="false" ');
+}
+
+/**
+ * FAQPage structured data, read back out of the landing page's <details class="faq-item">
+ * so the questions only live in one place.
+ */
+function faqData(html) {
+  const text = (s) => s.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").replace(/&amp;/g, "&").trim();
+  const items = [...html.matchAll(/<details class="faq-item">\s*<summary>([\s\S]*?)<\/summary>\s*<div class="faq-a">([\s\S]*?)<\/div>\s*<\/details>/g)];
+  if (!items.length) return "";
+  const data = {
+    "@context": "https://schema.org", "@type": "FAQPage",
+    mainEntity: items.map(([, q, a]) => ({ "@type": "Question", name: text(q), acceptedAnswer: { "@type": "Answer", text: text(a) } })),
+  };
+  return `<script type="application/ld+json">${JSON.stringify(data).replace(/</g, "\\u003c")}</script>`;
+}
+
+/** Fills {{name}} from `values`, {{phone name flags}} with a phone and {{icon name}} with an icon. */
 function fill(template, values) {
   return template.replace(/\{\{(\w+)((?: [\w-]+)*)\}\}/g, (match, key, args) => {
     if (key === "phone") return phone(...args.trim().split(" "));
+    if (key === "icon") return icon(args.trim());
     return key in values ? values[key] : match;
   });
 }
@@ -150,7 +176,10 @@ rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 cpSync(join(root, "web/public"), dist, { recursive: true });
 
-const layout = readFileSync(join(src, "layout.html"), "utf8");
+// A page can pick its layout with "layout" in its <!--page --> line. The landing page uses
+// layout-landing.html (the Elaya skill experiment); the others keep layout.html.
+const layouts = {};
+const layoutFor = (name) => (layouts[name] ??= readFileSync(join(src, `${name}.html`), "utf8"));
 const version = Date.now().toString(36);
 const appId = APP_STORE_URL.match(/id(\d+)/)?.[1];
 const shared = {
@@ -159,7 +188,7 @@ const shared = {
   // Safari's Smart App Banner. It shows "View" until the app's out, then "Open" or "Get".
   appStoreMeta: appId ? `<meta name="apple-itunes-app" content="app-id=${appId}">` : "",
 };
-const pages = readdirSync(src).filter((f) => f.endsWith(".html") && f !== "layout.html");
+const pages = readdirSync(src).filter((f) => f.endsWith(".html") && !f.startsWith("layout"));
 const paths = [];
 for (const file of pages) {
   const html = readFileSync(join(src, file), "utf8");
@@ -167,13 +196,14 @@ for (const file of pages) {
   if (!match) throw new Error(`${file} needs a <!--page {...} --> line first`);
   const page = JSON.parse(match[1]);
   const name = file.replace(/\.html$/, "");
-  const out = fill(layout, {
+  const content = fill(html.slice(match[0].length), shared).trimEnd();
+  const out = fill(layoutFor(page.layout ?? "layout"), {
     ...shared,
     title: escape(page.title), description: escape(page.description), url: SITE_URL + page.path, page: name,
     supportCurrent: name === "support" ? ' aria-current="page"' : "",
     privacyCurrent: name === "privacy" ? ' aria-current="page"' : "",
-    structuredData: name === "index" ? structuredData() : "",
-    content: fill(html.slice(match[0].length), shared).trimEnd(),
+    structuredData: name === "index" ? structuredData() + faqData(content) : "",
+    content,
   });
   if (/\{\{[\w ]+\}\}/.test(out)) throw new Error(`${file} has a {{placeholder}} left over: ${out.match(/\{\{[\w ]+\}\}/)[0]}`);
   // Em and en dashes read as written by a machine, so they never go out.
@@ -182,6 +212,7 @@ for (const file of pages) {
   paths.push(page.path);
 }
 cpSync(join(src, "styles.css"), join(dist, "styles.css"));
+cpSync(join(src, "landing.css"), join(dist, "landing.css"));
 const urls = paths.sort().map((p) => `  <url><loc>${SITE_URL}${p}</loc></url>`).join("\n");
 writeFileSync(join(dist, "sitemap.xml"), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`);
 console.log(`Built ${pages.length} pages into web/dist.`);

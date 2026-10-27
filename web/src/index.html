@@ -1,15 +1,21 @@
-<!--page {"title": "Walkies · A walking app for iPhone", "description": "A free iPhone app I made where your suburb starts under clouds on a satellite map, and the clouds clear off the tiles you walk through. The idea is to try and walk every street.", "path": "/"} -->
-<!-- Every claim here is checked against the app (Walkies/, README.md, design/*.md).
-     Change the copy when the app changes. -->
-    <section class="hero">
+<!--page {"title": "Walkies · Explore your suburb on the daily dog walk", "description": "Walkies is a free iPhone app with no ads. Your suburb starts under clouds on a satellite map and they clear off every street you walk, with 136 secrets to find around Busselton, WA.", "path": "/", "layout": "layout-landing"} -->
+<!-- The landing page, redone by following Elaya's landing-page-design skill (commit 5e57840
+     of github.com/elayadesign/ai-design-skills) as the only brief. An experiment, not shipped.
+     Every claim is still checked against the app (Walkies/, README.md, design/*.md). -->
+
+    <!-- Hero (A2 1 to 5): headline, subheadline, one CTA, one proof signal, the product. -->
+    <section class="hero container" aria-labelledby="hero-title">
       <div class="hero-copy">
-        <img class="hero-icon" src="/img/icon-192.png" alt="" width="76" height="76">
-        <h1>I built this to make walking the dog a bit more interesting</h1>
-        <p class="lede">Your suburb starts off under clouds on a satellite map and they clear off the tiles as you walk through them, so the idea is to try and get it all to 100%. There's secrets hidden under some of the tiles too, so I get to learn a little bit about my neighbourhood as I go (they're only around Busselton in WA for now). And I've gamified it a bit with shells and a shop and things like that. Hopefully you like it too!</p>
+        <h1 id="hero-title" class="hero-title">Explore your suburb<br> on the daily dog walk</h1>
+        <p class="hero-sub">Walkies is a free iPhone app. Your suburb starts under clouds on a satellite map, and they clear off every street you walk, so there's always somewhere new to go.</p>
         <div class="hero-cta">
           {{appStoreBadge}}
-          <p class="muted">It's free on iPhone, and there's no ads.</p>
         </div>
+        <ul class="proof-line" aria-label="Good to know">
+          <li>{{icon check-circle}}Free, with no ads</li>
+          <li>{{icon check-circle}}136 secrets hidden around Busselton, WA</li>
+          <li>{{icon check-circle}}iOS 18 or later</li>
+        </ul>
       </div>
       <div class="hero-media">
         {{phone map hero back}}
@@ -17,18 +23,32 @@
       </div>
     </section>
 
-    {{promoVideo}}
+    <div class="container" data-reveal>
+      {{promoVideo}}
+    </div>
 
-    <section class="features" aria-labelledby="features-title">
-      <h2 id="features-title" class="section-title">What it does</h2>
+    <!-- Problem to solution (A2 6), in Mike's words. -->
+    <section class="section container problem" aria-labelledby="problem-title" data-reveal>
+      <div class="problem-copy">
+        <h2 id="problem-title">The same loop every day gets old fast</h2>
+        <p>I built Walkies to make walking Sammy, my chocolate lab, a bit more interesting. My mate James, the CTO at Convex, told me about an app he was making where you try to walk every street in your city. I never got to see it, so I built my own.</p>
+        <p>Walkies puts your whole suburb under clouds and clears them off the streets you actually walk. The streets you haven't been down yet are drawn across the clouds as dotted lines, so there's always a reason to turn left instead of right.</p>
+        <p class="sign">Mike Cann, who made Walkies</p>
+      </div>
+      <img class="problem-art" src="/img/badge-walk.png" alt="" width="200" height="200" loading="lazy" decoding="async">
+    </section>
 
-      <article class="feature secrets">
-        <div class="feature-copy">
-          <h3>Secrets hidden under the tiles</h3>
-          <p>Around Busselton in WA there's 136 secrets hidden under the tiles, spread across about 30 suburbs. Most are little bits of local history, with some Wardandi Noongar heritage and nature mixed in, and some have photos too. You don't know where they are, so you've got to go out and explore, and when you walk over one it pops up (or you get a notification if your phone's in your pocket) and goes in your secrets book with its own sticker.</p>
-          <p>If you live somewhere else you still get the clouds and the tiles, just no secrets yet. Hopefully I can add some more places over time.</p>
+    <!-- Benefits (A2 7): bold benefit first, then the detail. -->
+    <section class="section container" aria-labelledby="benefits-title">
+      <h2 id="benefits-title" class="section-title" data-reveal>Three reasons to take the long way round</h2>
+
+      <article class="benefit" data-reveal>
+        <div class="benefit-copy">
+          <h3>Learn the stories behind your streets</h3>
+          <p>Around Busselton in WA there are 136 secrets hidden under the tiles, spread across about 30 suburbs. Most are little bits of local history, with some Wardandi Noongar heritage and nature mixed in. Nothing on the map gives them away, so you find them by walking. Walk over one and it pops up, or you get a notification if your phone's in your pocket, and it goes in your secrets book with its own sticker.</p>
+          <p>Live somewhere else? You still get the clouds and the tiles, just no secrets yet.</p>
         </div>
-        <div class="feature-media">
+        <div class="benefit-media tint-orange">
           <img class="sticker s1" src="/img/sticker-a-rest-stop-for-whales.png" alt="" width="140" height="140" loading="lazy" decoding="async">
           {{phone secrets}}
           <img class="sticker s2" src="/img/sticker-the-windmill-that-waited.png" alt="" width="140" height="140" loading="lazy" decoding="async">
@@ -36,69 +56,139 @@
         </div>
       </article>
 
-      <article class="feature flip">
-        <div class="feature-copy">
-          <h3>Watch your walks back</h3>
-          <p>When you finish a walk it plays back over the map, with your route drawing itself and the clouds popping off each new tile, then it has a guess at how many more walks like it you'll need to finish the suburb. Every walk is kept with its route, distance, time and steps, so you can go back through them and watch any of them again.</p>
-          <p>It's all saved on your phone first so it works without signal, then it backs up to your account (you sign in with Apple or Google) whenever it can. So if you get a new phone you just sign in and everything comes back.</p>
+      <article class="benefit flip" data-reveal>
+        <div class="benefit-copy">
+          <h3>See every walk play back</h3>
+          <p>When you finish a walk it plays back over the map, with your route drawing itself and the clouds popping off each new tile. Then it guesses how many more walks like it you'll need to finish the suburb. Every walk is kept with its route, distance, time and steps.</p>
+          <p>It all saves on your phone first, so it works without signal, then backs up to your account when it can.</p>
         </div>
-        <div class="feature-media">{{phone walks}}</div>
+        <div class="benefit-media tint-teal">{{phone walks}}</div>
       </article>
 
-      <article class="feature">
-        <div class="feature-copy">
-          <h3>Shells, levels and quests</h3>
-          <p>You get a shell for every new tile you clear, and more for finding secrets, walking a few days in a row, getting a place to milestones like 50%, and doing the three quests you get each week. They add up to levels too, and every level lets you pick a reward.</p>
-          <p>In the Shop you can spend them on things like a different marker for you on the map (a sneaker, a paper boat, an explorer hat or a little lighthouse), cloud colours, a trail for your walks, a cover for your secrets book, or a spyglass, which puts a ring on the map for three hours somewhere around a secret you haven't found yet.</p>
+      <article class="benefit" data-reveal>
+        <div class="benefit-copy">
+          <h3>Get something back for going further</h3>
+          <p>You earn a shell for every new tile, and more for finding secrets, walking a few days in a row, reaching milestones like 50% of a suburb and finishing the three quests you get each week. Shells add up to levels, and every level lets you pick a reward.</p>
+          <p>Spend them in the shop on a new map marker, cloud colours, a trail for your walks, or a spyglass, which puts a ring on the map for three hours somewhere around a secret you haven't found yet.</p>
         </div>
-        <div class="feature-media pair">
+        <div class="benefit-media tint-sand pair">
           {{phone progress}}
           {{phone quests}}
         </div>
       </article>
+    </section>
 
-      <div class="bits">
-        <article class="bit">
-          <h3>Only the streets count</h3>
-          <p>The tiles are about 87 metres across around Perth and Busselton, and only the ones with a street or path you can walk on count towards your 100%, so you're never stuck needing to swim across a lake. Patches with no path, like bush or wetland, clear all at once when you walk a tile next to them.</p>
-        </article>
-        <article class="bit">
-          <h3>Walking only</h3>
-          <p>Bikes and cars don't count, so no clearing your suburb from the car window. Walking and jogging do as long as you're under about 12 km/h, and if the phone's motion chip reckons you're cycling or driving it doesn't count however slow you're going.</p>
-        </article>
-        <article class="bit">
-          <h3>Always on</h3>
-          <p>If you give Walkies "Always" location access, it notices when you head out on foot and records the walk by itself, then ends it once you've stopped for ten minutes. You can switch it off in Settings and just press Start walk when you go.</p>
-        </article>
-        <article class="bit">
-          <h3>Tiles go misty</h3>
-          <p>If you haven't walked through a tile for two months it goes a bit misty, so you can see which bits you haven't been back to in a while. It doesn't take anything off your % or your shells, and walking through it again clears it.</p>
-        </article>
-        <article class="bit">
-          <h3>The suburb next door</h3>
-          <p>When you zoom out, the suburbs around yours have a little + button so you can add them too. Every place uses the same grid so the tiles line up across the border, and any walks you've already done there count straight away.</p>
-        </article>
-        <article class="bit">
-          <h3>Teams</h3>
-          <p>You can start a team with up to eight people and send them an invite link. Right now a team is just who's in it, with everyone's name and colour, and your clouds and secrets stay your own.</p>
-        </article>
-        <article class="bit story">
-          <img src="/img/badge-walk.png" alt="" width="200" height="200" loading="lazy" decoding="async">
-          <div>
-            <h3>Where the idea came from</h3>
-            <p>My mate James, who's the CTO at Convex, told me about a walking app he'd been working on where you try and walk every single street in your city. I never actually got to see it, and he said he was going to open source it, but I got too impatient and decided I could build my own.</p>
-          </div>
-        </article>
+    <!-- The skill's mandatory tagline reveal (B11): each word lights up as it scrolls past. -->
+    <section class="tagline container" aria-label="The idea">
+      <p class="tagline-text">Walk a new street.<br> Watch the clouds lift.<br> Do it again tomorrow.</p>
+    </section>
+
+    <!-- How it works (A2 8): three steps. -->
+    <section class="section container" id="how" aria-labelledby="how-title">
+      <h2 id="how-title" class="section-title" data-reveal>How it works</h2>
+      <ol class="steps" data-reveal>
+        <li class="step">
+          <span class="step-icon">{{icon map-trifold}}</span>
+          <h3>Open it near home</h3>
+          <p>Your suburb adds itself from where you are and disappears under clouds on Apple's satellite map. Only tiles with a street or path count, so you never need to swim a lake.</p>
+        </li>
+        <li class="step">
+          <span class="step-icon">{{icon sneaker-move}}</span>
+          <h3>Go for a walk</h3>
+          <p>With Always on, Walkies notices when you head out on foot and records the walk by itself, phone in your pocket. Or switch that off and press Start walk.</p>
+        </li>
+        <li class="step">
+          <span class="step-icon">{{icon cloud}}</span>
+          <h3>Watch the clouds clear</h3>
+          <p>Every tile you walk through clears, your suburb's percentage goes up and you earn shells. When it's done, add the suburb next door and keep going.</p>
+        </li>
+      </ol>
+    </section>
+
+    <!-- Proof (A2 9). The skill wants testimonials, logos and user numbers here, but Walkies
+         isn't out yet, so none are made up.
+         PROOF GAP: swap in real App Store reviews and ratings once there are some. -->
+    <section class="section container" aria-labelledby="proof-title">
+      <h2 id="proof-title" class="section-title" data-reveal>Built in the open</h2>
+      <p class="section-sub" data-reveal>Walkies isn't out yet, so there are no reviews to show. Here's what you can check for yourself.</p>
+      <ul class="proofs" data-reveal>
+        <li class="proof">
+          <span class="step-icon">{{icon github-logo}}</span>
+          <h3>All the code is public</h3>
+          <p>The app, the server and this website are on <a href="{{github}}">GitHub</a>, so you can see exactly what it does with your location.</p>
+        </li>
+        <li class="proof">
+          <span class="step-icon">{{icon book-open-text}}</span>
+          <h3>136 researched secrets</h3>
+          <p>Every secret around Busselton comes from a real source, and the research notes are in the repo next to them.</p>
+        </li>
+        <li class="proof">
+          <span class="step-icon">{{icon envelope-simple}}</span>
+          <h3>One person you can email</h3>
+          <p>It's just me making it. Write to <a href="mailto:{{email}}">{{email}}</a> or tap Suggest a feature in Settings.</p>
+        </li>
+      </ul>
+      <div class="gallery" data-reveal>
+        {{gallery}}
       </div>
     </section>
 
-    <section class="gallery" aria-labelledby="gallery-title">
-      <h2 id="gallery-title" class="section-title">Have a look around</h2>
-      {{gallery}}
+    <!-- FAQ (A2 10), in plain question and answer form so it can go in FAQPage data (A7). -->
+    <section class="section container faq" id="faq" aria-labelledby="faq-title">
+      <h2 id="faq-title" class="section-title" data-reveal>Questions</h2>
+      <div class="faq-list" data-reveal>
+        <details class="faq-item">
+          <summary>Is Walkies free?{{icon caret-down}}</summary>
+          <div class="faq-a"><p>Yes. It's free on iPhone and there are no ads. The shells you spend in the shop are earned by walking.</p></div>
+        </details>
+        <details class="faq-item">
+          <summary>What do I need to use it?{{icon caret-down}}</summary>
+          <div class="faq-a"><p>An iPhone on iOS 18 or later. You sign in with Apple or Google so your walks back up to your account.</p></div>
+        </details>
+        <details class="faq-item">
+          <summary>Does it work where I live?{{icon caret-down}}</summary>
+          <div class="faq-a"><p>The clouds and tiles work in suburbs OpenStreetMap has a boundary for, and it's been tuned for Australia and England. The 136 secrets are only around Busselton in WA for now.</p></div>
+        </details>
+        <details class="faq-item">
+          <summary>Do bike rides or drives count?{{icon caret-down}}</summary>
+          <div class="faq-a"><p>No, so there's no clearing your suburb from the car window. Walking and jogging count as long as you're under about 12 km/h, and if the phone's motion chip reckons you're cycling or driving it doesn't count however slow you go.</p></div>
+        </details>
+        <details class="faq-item">
+          <summary>Why is there still cloud over the bush or the water?{{icon caret-down}}</summary>
+          <div class="faq-a"><p>Only tiles with a street or path count towards your 100%, so bush, wetland and water never stop you finishing. Those patches clear all at once when you walk a tile next to them.</p></div>
+        </details>
+        <details class="faq-item">
+          <summary>Will it flatten my battery?{{icon caret-down}}</summary>
+          <div class="faq-a"><p>Always on keeps an eye on your location in the background, so it uses some battery, but GPS pauses while you're sitting still. If you'd rather it didn't run between walks, switch Always on off in Settings and press Start walk instead.</p></div>
+        </details>
+        <details class="faq-item">
+          <summary>Does it work without signal?{{icon caret-down}}</summary>
+          <div class="faq-a"><p>Yes. Everything saves on your phone first and backs up to your account whenever there's signal.</p></div>
+        </details>
+        <details class="faq-item">
+          <summary>What happens when I get a new phone?{{icon caret-down}}</summary>
+          <div class="faq-a"><p>Sign in with the same Apple or Google account and everything comes back.</p></div>
+        </details>
+        <details class="faq-item">
+          <summary>What if I don't walk a street again for a while?{{icon caret-down}}</summary>
+          <div class="faq-a"><p>After two months a tile goes a bit misty, so you can see which bits you haven't been back to. It doesn't take anything off your percentage or your shells, and walking through it again clears it.</p></div>
+        </details>
+        <details class="faq-item">
+          <summary>Can I walk with friends?{{icon caret-down}}</summary>
+          <div class="faq-a"><p>You can start a team of up to eight people and send them an invite link. For now a team is just who's in it, with everyone's name and colour. Your clouds and secrets stay your own.</p></div>
+        </details>
+        <details class="faq-item">
+          <summary>How do I delete my account?{{icon caret-down}}</summary>
+          <div class="faq-a"><p>In the app, go to Settings and tap Delete account. It deletes your account and everything in it from the server and clears the phone. The <a href="/privacy">privacy policy</a> has the details.</p></div>
+        </details>
+      </div>
     </section>
 
-    <section class="closing" aria-labelledby="closing-title">
-      <h2 id="closing-title">Give it a go</h2>
-      <p class="lede">Walkies is free on iPhone, for iOS 18 or later. If you find a bug or have an idea for it, drop me an email at <a href="mailto:{{email}}">{{email}}</a> or tap "Suggest a feature" in Settings.</p>
-      {{appStoreBadge}}
+    <!-- Risk reversal and the final CTA (A2 11 and 12), the same badge as the hero. -->
+    <section class="section container" id="download" aria-labelledby="download-title">
+      <div class="final" data-reveal>
+        <h2 id="download-title">Explore your suburb<br> on tomorrow's walk</h2>
+        <p>Free on iPhone, with no ads. If it's not for you, you can delete your account and everything in it from Settings.</p>
+        {{appStoreBadge}}
+      </div>
     </section>
