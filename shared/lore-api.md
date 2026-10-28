@@ -22,6 +22,8 @@ lore:forPlace({ osmId: number }) -> { status, version, entries }
 | `quiet` | Done, but there wasn't much to find (fewer than three secrets). Whatever was found is in `entries`. The server has one more look after 90 days. | Use `entries`, with friendly copy about a quiet suburb. |
 | `failed` | The run broke. The server retries once after a day. | Treat it like `none`. |
 
+The server keeps more detail than these seven words: a quiet or failed place waiting for its next look, and a place a walk queued that waited 30 days without starting, which is as if nobody had walked there. `lore:forPlace` reports those as `quiet`, `failed` and `none`, so the apps never see a word they don't know. The whole lifecycle is in [docs/machines.md](../docs/machines.md).
+
 `version` goes up whenever the live secrets change: a run finishing, Mike approving one, or Mike hiding one. Cache the answer and the sticker PNGs in Application Support, and only fetch the stickers again when `version` changes. A secret can disappear from `entries` (hidden later), so replace the cached list rather than merging it.
 
 Only live secrets come back. Ones waiting for Mike's review, hidden ones, and ones the checks dropped never do.
@@ -80,6 +82,9 @@ All of these are internal, so only `npx convex run` (or the dashboard) can call 
 | `npx convex run lore:hide '{"entryId": "osm123-..."}'` | Takes one down, and deletes its sticker art |
 | `npx convex run lore:resume '{"osmId": 123, "from": "lorePipeline:write"}'` | Runs a finished run again from one of its steps, keeping what the earlier steps found and paid for (see below). `from` is required |
 | `npx convex run lore:readPage '{"url": "https://..."}'` | Reads a page the way the pipeline does, or says why it won't |
+| `npx convex run lore:machines` | How many places and secrets are in each state, and any timers whose step failed |
+| `npx convex run lore:history '{"osmId": 123}'` | A place's research step by step: every event, who sent it, and where it went |
+| `npx convex run machines:failedTimers` | Timers (a retry, the queue's expiry) whose step threw. They stay pending until `machines:rearmTimer` |
 
 ### Resuming a run
 
@@ -95,4 +100,4 @@ All of these are internal, so only `npx convex run` (or the dashboard) can call 
 
 Every paid OpenRouter call books a hold before it's sent: the most it could cost, from its prompt size, its `max_tokens` and the prices in `convex/loreConfig.ts`. A call is refused if its hold could take the run's segment past $6, the UTC day past $15 or the month past $50. After the call the hold is settled to OpenRouter's `usage.cost`. A call that never answers, can't be read, or has no `usage.cost` keeps its whole hold as spent (`unpriced` in `loreSpend`); a hold still open after an hour is kept the same way. `lore:status` counts holds in today's and this month's totals.
 
-Walks only start research when the deployment's `LORE_AUTO` environment variable is exactly `1`. It's unset on dev and prod. A walk only starts one when the server agrees: the relation is an admin boundary between 0.1 and 400 km², one of the person's own saved walks has at least three good GPS fixes inside it, and they haven't started three suburbs today or six this month. A place a walk queued that hasn't started after 30 days leaves the queue.
+Walks only start research when the deployment's `LORE_AUTO` environment variable is exactly `1`; with anything else, only `lore:research` and `lore:resume` start runs, and a quiet or failed place's next look waits a day at a time until it's on. A walk only starts one when the server agrees: the relation is an admin boundary between 0.1 and 400 km², one of the person's own saved walks has at least three good GPS fixes inside it, and they haven't started three suburbs today or six this month. A place a walk queued that hasn't started after 30 days leaves the queue.

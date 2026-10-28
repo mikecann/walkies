@@ -1,12 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-
-export const vLoreStatus = v.union(
-  v.literal("queued"), v.literal("researching"), v.literal("ready"), v.literal("quiet"), v.literal("failed"),
-);
-export const vLoreReview = v.union(
-  v.literal("checking"), v.literal("dropped"), v.literal("auto"), v.literal("pending"), v.literal("approved"), v.literal("hidden"),
-);
+import { machineTimers } from "@convex-dev/state-machines";
+import { loreEntryState, lorePlaceState } from "./loreStates";
 
 // The server keeps a copy of what each phone has. The phone is the source of truth
 // and works offline; it pushes what it has whenever it can. Nothing here is ever
@@ -139,45 +134,36 @@ export default defineSchema({
   lorePlaces: defineTable({
     osmId: v.number(),
     name: v.string(),
-    status: vLoreStatus,
+    /** Where its research is: queued, researching, then ready, quiet or failed, perhaps waiting for
+     * another look (loreStates.ts, loreMachines.ts). Only the lorePlace machine changes it. */
+    state: lorePlaceState,
+    /** The machine's pending timers: the queue's expiry and the retries. */
+    stateTimers: machineTimers,
     /** Bumped whenever the live secrets change, so the phones know to fetch them again. */
     version: v.number(),
-    /** Asked for with lore:research or lore:resume rather than by someone's walk, so it
-     * runs with LORE_AUTO off. Cleared when that run finishes, so its retries don't. */
-    manual: v.optional(v.boolean()),
-    /** Whose walk queued it, while it's queued or running, so the queue takes turns between people. */
-    requestedBy: v.optional(v.id("users")),
-    /** What it was before a retry put it back on the queue, for when the wait runs out. */
-    requeuedFrom: v.optional(v.union(v.literal("ready"), v.literal("quiet"), v.literal("failed"))),
-    /** Set by lore:resume: the step the queued run restarts from, in the same journal. */
-    resumeFrom: v.optional(v.string()),
     /** Budget segments so far: each start or resume gets its own caps.perRun (runCost). */
-    segment: v.optional(v.number()),
+    segment: v.number(),
     /** From Nominatim when the run starts: "Porlock, Somerset, England, United Kingdom",
      * "England" and "gb". */
+    // eslint-disable-next-line machines/no-optional-on-machine-tables -- the run's first step reads it from Nominatim, and it stays the same in every state after
     displayName: v.optional(v.string()),
+    // eslint-disable-next-line machines/no-optional-on-machine-tables -- as displayName
     region: v.optional(v.string()),
+    // eslint-disable-next-line machines/no-optional-on-machine-tables -- as displayName
     country: v.optional(v.string()),
     /** Runs so far. Each run's entries and notes carry its number. */
     attempts: v.number(),
-    queuedAt: v.number(),
-    /** Why a queued place hasn't started: "daily cap" or "monthly cap". */
-    held: v.optional(v.string()),
-    startedAt: v.optional(v.number()),
-    finishedAt: v.optional(v.number()),
-    /** When a quiet or failed place goes back on the queue. */
-    retryAt: v.optional(v.number()),
-    workflowId: v.optional(v.string()),
-    /** When the finished run's journal is deleted (lore.tick). Until then lore:resume can use it. */
-    journalUntil: v.optional(v.number()),
     /** US dollars from OpenRouter, for every run and for this budget segment, counting
      * holds on calls still going at their most (loreRun.reserve). */
     cost: v.number(),
     runCost: v.number(),
-    /** Why the last run failed. */
-    error: v.optional(v.string()),
-  }).index("by_osm", ["osmId"]).index("by_status", ["status", "queuedAt"]).index("by_retry", ["retryAt"])
-    .index("by_journal", ["journalUntil"]).index("by_requester", ["requestedBy"]),
+  }).index("by_osm", ["osmId"]).index("by_state", ["state.kind", "state.queuedAt"])
+    .index("by_requester", ["state.requestedBy"]),
+
+  // A finished run's workflow journal, kept for `journalKeep` so lore:resume can restart it
+  // from a step. lore.tick deletes old ones, and a new run or a resume takes its place's.
+  loreJournals: defineTable({ osmId: v.number(), run: v.number(), workflowId: v.string(), until: v.number() })
+    .index("by_osm", ["osmId"]).index("by_until", ["until"]),
 
   // What the research agents found, one fact per row with the page and the exact words.
   loreNotes: defineTable({
@@ -199,6 +185,7 @@ export default defineSchema({
     title: v.string(),
     body: v.string(),
     category: v.string(),
+    // eslint-disable-next-line machines/no-optional-on-machine-tables -- the writer's pin, which a check can remove in any state, so the story is scattered instead
     place: v.optional(v.object({ name: v.string(), lat: v.number(), lon: v.number() })),
     /** What the sticker shows. */
     sticker: v.string(),
@@ -209,24 +196,25 @@ export default defineSchema({
       url: v.string(),
       quote: v.string(),
       /** Set by the quote check: the words are on the page. */
+      // eslint-disable-next-line machines/no-optional-on-machine-tables -- one claim's quote-check result, unset until the check has read its page, whatever the secret's state
       found: v.optional(v.boolean()),
       /** The page text around the quote, for the fact-checker. */
+      // eslint-disable-next-line machines/no-optional-on-machine-tables -- as found: the quote check's, for a claim whose page it read
       context: v.optional(v.string()),
     })),
     /** Why it waits for Mike: "first-nations", "death-or-crime", "living-people". */
     sensitive: v.array(v.string()),
-    /** checking (in the pipeline), dropped, then auto (live), pending, approved or hidden. */
-    review: vLoreReview,
-    /** The check that dropped it. "run stopped", "budget" and "not checked" weren't the
-     * secret's fault, so lore:resume brings those back. */
-    droppedBy: v.optional(v.string()),
+    /** checking (in the pipeline), dropped, then auto (live), pending, approved or hidden
+     * (loreStates.ts). Only the loreEntry machine changes it. */
+    state: loreEntryState,
     /** The fact-check has passed it (perhaps after revising), so a retried check skips it.
      * A secret is never published without this. */
-    factChecked: v.optional(v.boolean()),
+    factChecked: v.boolean(),
     /** What each check found or changed, in plain words. */
     checkNotes: v.array(v.string()),
+    // eslint-disable-next-line machines/no-optional-on-machine-tables -- drawn near the end of a run, or later by lore:resume from "stickers", and some secrets never get one
     stickerFile: v.optional(v.id("_storage")),
-  }).index("by_osm_review", ["osmId", "review"]).index("by_review", ["review"]).index("by_entry", ["entryId"])
+  }).index("by_osm_review", ["osmId", "state.kind"]).index("by_review", ["state.kind"]).index("by_entry", ["entryId"])
     .index("by_osm_run", ["osmId", "run"]),
 
   // OpenRouter spend in US dollars, by UTC day, place and step, for the caps. `cost`

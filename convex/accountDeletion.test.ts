@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import { convexTest } from "convex-test";
 import feedbackTest from "@convex-dev/feedback/test";
+import { register } from "@convex-dev/state-machines/test";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { api, components, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -22,6 +23,8 @@ async function setup() {
   vi.useFakeTimers();
   const t = convexTest(schema, modules);
   feedbackTest.register(t);
+  // The research machines' history, which forgetting who queued a place writes to.
+  register(t);
   const [aliceId, bobId] = await t.run(async (ctx) => Promise.all([
     ctx.db.insert("users", { name: "Alice", email: "alice@example.com", emailVerified: true, picture: "https://example.com/a.png" }),
     ctx.db.insert("users", { name: "Bob", email: "bob@example.com", emailVerified: true }),
@@ -50,6 +53,12 @@ async function seed(t: T, userId: Id<"users">, n = 2) {
     await ctx.db.insert("placeCalls", { userId, windowStart: 0, count: 1 });
     await ctx.db.insert("loreCalls", { userId, windowStart: 0, count: 1 });
     await ctx.db.insert("loreRequests", { userId, osmId: 1, at: 0 });
+    // A suburb their walk queued, waiting for the research queue.
+    await ctx.db.insert("lorePlaces", {
+      osmId: 1000 + (await ctx.db.query("lorePlaces").collect()).length, name: "Somewhere",
+      state: { kind: "queued", queuedAt: 0, manual: false, requestedBy: userId }, stateTimers: [],
+      version: 0, segment: 0, attempts: 0, cost: 0, runCost: 0,
+    });
     await ctx.runMutation(components.feedback.items.create, { userId, title: "Dark mode", description: "Please" });
     return files;
   });
@@ -111,6 +120,12 @@ describe("account deletion", { timeout: 60_000 }, () => {
       const deletion = await ctx.db.query("accountDeletions").first();
       expect(deletion).toMatchObject({ userId: aliceId, stage: "done", finishedAt: expect.any(Number) });
     });
+    // Her queued suburb stays queued (it's everyone's), but forgets she asked. Bob's doesn't.
+    const queued = await t.run((ctx) => ctx.db.query("lorePlaces").collect());
+    expect(queued.map((row) => row.state)).toEqual([
+      { kind: "queued", queuedAt: 0, manual: false },
+      { kind: "queued", queuedAt: 0, manual: false, requestedBy: bobId },
+    ]);
     expect((await bob.query(api.teams.myTeams))[0]).toMatchObject({ teamId, createdBy: bobId, members: [{ name: "Bob" }] });
     expect((await bob.query(api.sync.snapshot, {})).walks).toHaveLength(2);
   });

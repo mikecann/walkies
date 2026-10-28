@@ -8,6 +8,7 @@ import feedback from "@convex-dev/feedback/convex.config.js";
 import staticHosting from "@convex-dev/static-hosting/convex.config.js";
 import workflow from "@convex-dev/workflow/convex.config.js";
 import agent from "@convex-dev/agent/convex.config.js";
+import stateMachines from "@convex-dev/state-machines/convex.config.js";
 
 const app = defineApp({
   env: {
@@ -24,8 +25,8 @@ const app = defineApp({
     AUTH_GOOGLE_CLIENT_SECRET: v.string(),
     // Unset on production. Only an explicit "1" enables simulator test accounts.
     WALKIES_TEST_SIGNIN: v.optional(v.string()),
-    // Unset everywhere until we choose to turn it on. Only an explicit "1" lets walks
-    // start paid research runs for new suburbs (lore.ts).
+    // The switch for research from walks. Only an explicit "1" lets walks start paid
+    // research runs for new suburbs, and quiet or failed ones go back on the queue (lore.ts).
     LORE_AUTO: v.optional(v.string()),
     // For the research, writing, fact-checking and sticker calls. Only read in actions.
     OPENROUTER_API_KEY: v.optional(v.string()),
@@ -70,5 +71,8 @@ app.use(staticHosting);
 // threads its research agents keep their searches and pages in.
 app.use(workflow);
 app.use(agent);
+
+// The history of the research's state machines (machines.ts, loreMachines.ts).
+app.use(stateMachines);
 
 export default app;

@@ -15,7 +15,7 @@ import { caps, entries as wanted, holds, maxPinToStreet, models, research as lim
 import {
   angles, categories, checkerInstructions, researchInstructions, reviserInstructions, untrusted, writerInstructions, type Angle, type PlaceBrief,
 } from "./lorePrompts";
-import { workflow } from "./lore";
+import { workflow } from "./loreWorkflow";
 import { budgetMessage } from "./loreRun";
 import type { PlaceData } from "./placeData";
 import { cachedFile, nominatim } from "./places";

@@ -1,21 +1,19 @@
 // The database side of a research run: spend, notes, drafts and what the checks
 // decided, called by the steps in lorePipeline.ts. Nothing here talks to the web.
+import type { AppCtx } from "@convex-dev/state-machines";
 import { v } from "convex/values";
-import type { Doc } from "./_generated/dataModel";
-import { internalMutation, internalQuery, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { caps, entries as wanted, firstNationsSources, holds as holdRules, quietRetry } from "./loreConfig";
+import type { DataModel, Doc } from "./_generated/dataModel";
+import type { QueryCtx } from "./_generated/server";
+import { caps, entries as wanted, firstNationsSources, holds as holdRules } from "./loreConfig";
 import { overBudget } from "./loreBudget";
 import { leadOnlyProblem, onDomains, sensitiveWords } from "./loreChecks";
+import { bumpVersion, deleteSticker, placeRow } from "./loreMachines";
+import { insertPlain, loreEntry, lorePlace, machines } from "./machines";
 
-export async function placeRow(ctx: QueryCtx, osmId: number) {
-  return await ctx.db.query("lorePlaces").withIndex("by_osm", (q) => q.eq("osmId", osmId)).unique();
-}
-
-/** The live secrets changed, so the phones should fetch them again. */
-export async function bumpVersion(ctx: MutationCtx, osmId: number) {
-  const row = await placeRow(ctx, osmId);
-  if (row) await ctx.db.patch("lorePlaces", row._id, { version: row.version + 1 });
-}
+// The catalog's builders (machines.ts): their db can't write a machine's state, and
+// the internal one can send the machines' `server` events.
+const { internalMutation, internalQuery } = machines;
+type MutationCtx = AppCtx<DataModel>;
 
 /** A UTC day, "2026-10-24". The caps count by these. */
 export const dayKey = (ms: number) => new Date(ms).toISOString().slice(0, 10);
@@ -45,7 +43,7 @@ async function addSpend(ctx: MutationCtx, day: string, osmId: number, step: stri
       ...(change.unpriced ? { unpriced: (row.unpriced ?? 0) + change.unpriced } : {}),
     });
   } else {
-    await ctx.db.insert("loreSpend", {
+    await insertPlain(ctx, "loreSpend", {
       day, osmId, step, cost: change.cost, calls: change.calls ?? 0, held: change.held, ...(change.unpriced ? { unpriced: change.unpriced } : {}),
     });
   }
@@ -90,7 +88,7 @@ async function release(ctx: MutationCtx, hold: Doc<"loreHolds">, cost: number | 
   const place = await placeRow(ctx, hold.osmId);
   if (place && change !== 0) {
     // A late answer from before a resume belongs to the old segment, not the new one's budget.
-    const sameSegment = (place.segment ?? 0) === hold.segment;
+    const sameSegment = place.segment === hold.segment;
     await ctx.db.patch("lorePlaces", place._id, { cost: tidy(place.cost + change), ...(sameSegment ? { runCost: tidy(place.runCost + change) } : {}) });
   }
   await ctx.db.delete("loreHolds", hold._id);
@@ -136,11 +134,6 @@ export const saveThread = internalMutation({
   },
 });
 
-/** Deletes a secret's sticker file, for one that's dropped, hidden or replaced. */
-export async function deleteSticker(ctx: MutationCtx, entry: Doc<"loreEntries">) {
-  if (entry.stickerFile && await ctx.db.system.get("_storage", entry.stickerFile)) await ctx.storage.delete(entry.stickerFile);
-}
-
 const vPlaceInfo = { name: v.string(), displayName: v.string(), region: v.string(), country: v.string() };
 
 /** What a step needs to know about the place it's researching. */
@@ -173,7 +166,7 @@ export const saveNote = internalMutation({
   args: { osmId: v.number(), run: v.number(), angle: v.string(), fact: v.string(), url: v.string(), quote: v.string(), spot: v.optional(vSpot) },
   returns: v.object({ saved: v.number(), others: v.array(v.string()) }),
   handler: async (ctx, note) => {
-    await ctx.db.insert("loreNotes", note);
+    await insertPlain(ctx, "loreNotes", note);
     const all = await ctx.db.query("loreNotes").withIndex("by_osm_run", (q) => q.eq("osmId", note.osmId).eq("run", note.run)).collect();
     return {
       saved: all.filter((n) => n.angle === note.angle).length,
@@ -191,7 +184,7 @@ export const notes = internalQuery({
   },
 });
 
-const published = (e: Doc<"loreEntries">) => e.review !== "checking" && e.review !== "dropped";
+const published = (e: Doc<"loreEntries">) => e.state.kind !== "checking" && e.state.kind !== "dropped";
 /** Lower case letters and digits, so two titles for the same story compare equal. */
 const titleKey = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, "");
 
@@ -225,7 +218,8 @@ export const saveDrafts = internalMutation({
     const all = await ctx.db.query("loreEntries").withIndex("by_osm_run", (q) => q.eq("osmId", osmId)).collect();
     for (const row of all.filter((e) => e.run === run && !published(e))) {
       await deleteSticker(ctx, row);
-      await ctx.db.delete("loreEntries", row._id);
+      // A draft that's being replaced, from whatever state it got to.
+      await loreEntry.purge(ctx, row._id, { force: true });
     }
     const out = all.filter(published);
     const titles = new Set(out.map((e) => titleKey(e.title)));
@@ -239,9 +233,9 @@ export const saveDrafts = internalMutation({
       let entryId = base;
       for (let n = 2; await ctx.db.query("loreEntries").withIndex("by_entry", (q) => q.eq("entryId", entryId)).first(); n++) entryId = `${base}-${n}`;
       const { slug: _slug, ...fields } = draft;
-      await ctx.db.insert("loreEntries", {
-        ...fields, osmId, run, entryId, suburb, sources: [...new Set(draft.claims.map((c) => c.url))], review: "checking", checkNotes: [],
-      });
+      await loreEntry.create(ctx, {
+        ...fields, osmId, run, entryId, suburb, sources: [...new Set(draft.claims.map((c) => c.url))], factChecked: false, checkNotes: [],
+      }, { type: "DRAFTED" });
       ids.push(entryId);
     }
     return ids;
@@ -260,7 +254,7 @@ export const checking = internalQuery({
   args: { osmId: v.number(), run: v.number() }, returns: v.array(vStoredEntry),
   handler: async (ctx, { osmId, run }) => {
     const rows = await ctx.db.query("loreEntries").withIndex("by_osm_run", (q) => q.eq("osmId", osmId).eq("run", run)).collect();
-    return rows.filter((e) => e.review === "checking").map((e) => ({
+    return rows.filter((e) => e.state.kind === "checking").map((e) => ({
       entryId: e.entryId, title: e.title, body: e.body, category: e.category, ...(e.place ? { place: e.place } : {}),
       sticker: e.sticker, claims: e.claims, sensitive: e.sensitive, checkNotes: e.checkNotes, ...(e.stickerFile ? { stickerFile: e.stickerFile } : {}),
       ...(e.factChecked ? { factChecked: true } : {}),
@@ -294,7 +288,7 @@ export const updateEntry = internalMutation({
   returns: v.null(),
   handler: async (ctx, { entryId, title, body, claims, sensitive, place, stickerFile, factChecked, notes, drop }) => {
     const row = await entryRow(ctx, entryId);
-    const patch: Partial<Doc<"loreEntries">> = { checkNotes: [...row.checkNotes, ...(notes ?? [])] };
+    const patch: Partial<Omit<Doc<"loreEntries">, "_id" | "_creationTime" | "state">> = { checkNotes: [...row.checkNotes, ...(notes ?? [])] };
     if (title !== undefined) patch.title = title;
     if (body !== undefined) patch.body = body;
     if (claims) {
@@ -306,23 +300,19 @@ export const updateEntry = internalMutation({
     if (factChecked) patch.factChecked = true;
     if (stickerFile) {
       // Dropped or hidden while it was being drawn: nobody will ever see this one.
-      if (row.review === "dropped" || row.review === "hidden") {
+      if (row.state.kind === "dropped" || row.state.kind === "hidden") {
         await ctx.storage.delete(stickerFile);
       } else {
         await deleteSticker(ctx, row);
         patch.stickerFile = stickerFile;
         // A sticker drawn later for a secret that's already live (lore:resume from
         // "stickers") is a change the phones should fetch.
-        if (row.review === "auto" || row.review === "approved") await bumpVersion(ctx, row.osmId);
+        if (row.state.kind === "auto" || row.state.kind === "approved") await bumpVersion(ctx, row.osmId);
       }
     }
-    if (drop && row.review === "checking") {
-      patch.review = "dropped";
-      patch.droppedBy = drop;
-      await deleteSticker(ctx, row);
-      patch.stickerFile = undefined;
-    }
     await ctx.db.patch("loreEntries", row._id, patch);
+    // The drop deletes its sticker, whichever it has by now.
+    if (drop && row.state.kind === "checking") await loreEntry.send(ctx, row._id, { type: "DROPPED", by: drop });
     return null;
   },
 });
@@ -336,9 +326,9 @@ export const applyRules = internalMutation({
   args: { osmId: v.number(), run: v.number(), wa: v.boolean() }, returns: v.null(),
   handler: async (ctx, { osmId, run, wa }) => {
     const rows = await ctx.db.query("loreEntries").withIndex("by_osm_run", (q) => q.eq("osmId", osmId).eq("run", run)).collect();
-    for (const row of rows.filter((e) => e.review === "checking")) {
+    for (const row of rows.filter((e) => e.state.kind === "checking")) {
       const sensitive = [...new Set([...row.sensitive, ...sensitiveWords(`${row.title}\n${row.body}`), ...(row.category === "first-nations" ? ["first-nations"] : [])])].sort();
-      const patch: Partial<Doc<"loreEntries">> = { sensitive };
+      const patch: Partial<Omit<Doc<"loreEntries">, "_id" | "_creationTime" | "state">> = { sensitive };
       let reason: string | null = null;
       if (sensitive.includes("first-nations")) {
         const outside = row.sources.filter((url) => !onDomains(url, firstNationsSources));
@@ -347,13 +337,11 @@ export const applyRules = internalMutation({
       }
       // The quote check already treats these as unsourced; this catches anything that got past it.
       reason ??= leadOnlyProblem(row.claims.filter((c) => c.found !== false).map((c) => c.url));
-      if (reason) {
-        Object.assign(patch, { review: "dropped", droppedBy: "rules", checkNotes: [...row.checkNotes, reason], stickerFile: undefined });
-        await deleteSticker(ctx, row);
-      }
+      if (reason) patch.checkNotes = [...row.checkNotes, reason];
       // The style guide has no em dashes. A comma reads the same in these.
-      if (patch.review === undefined && row.body.includes("—")) patch.body = row.body.replace(/\s*—\s*/g, ", ");
+      else if (row.body.includes("—")) patch.body = row.body.replace(/\s*—\s*/g, ", ");
       await ctx.db.patch("loreEntries", row._id, patch);
+      if (reason) await loreEntry.send(ctx, row._id, { type: "DROPPED", by: "rules" });
     }
     return null;
   },
@@ -361,44 +349,30 @@ export const applyRules = internalMutation({
 
 /**
  * The last step. Sensitive secrets wait for Mike; the rest go live. A place with
- * fewer than `entries.enough` secrets in all is quiet, and gets one more look later.
+ * fewer than `entries.enough` secrets in all is quiet (the lorePlace machine decides
+ * whether it gets one more look later).
  */
 export const publish = internalMutation({
   args: { osmId: v.number(), run: v.number() },
   returns: v.object({ live: v.number(), pending: v.number(), dropped: v.number(), status: v.string() }),
   handler: async (ctx, { osmId, run }) => {
+    const place = await placeRow(ctx, osmId);
+    // A run its place has moved on from publishes nothing.
+    if (place === null || place.attempts !== run || place.state.kind !== "researching") return { live: 0, pending: 0, dropped: 0, status: "stale" };
     const rows = await ctx.db.query("loreEntries").withIndex("by_osm_run", (q) => q.eq("osmId", osmId).eq("run", run)).collect();
     let live = 0, pending = 0, unchecked = 0;
-    for (const row of rows.filter((e) => e.review === "checking")) {
-      // Never published without passing the fact-check: one the run couldn't afford to
-      // check, say, or one lore:resume brought back without checking again.
-      if (!row.factChecked) {
-        await deleteSticker(ctx, row);
-        await ctx.db.patch("loreEntries", row._id, {
-          review: "dropped", droppedBy: "not checked", stickerFile: undefined,
-          checkNotes: [...row.checkNotes, "It hadn't been fact-checked when the run published, so it's left out."],
-        });
-        unchecked++;
-        continue;
-      }
-      const review = row.sensitive.length > 0 ? "pending" : "auto";
-      await ctx.db.patch("loreEntries", row._id, { review });
-      if (review === "auto") live++;
-      else pending++;
+    for (const row of rows.filter((e) => e.state.kind === "checking")) {
+      const result = await loreEntry.send(ctx, row._id, { type: "PUBLISH" });
+      if (result.status !== "done") throw new Error(`Couldn't publish ${row.entryId}: ${result.reasons.join(" ")}`);
+      if (result.to === "auto") live++;
+      else if (result.to === "pending") pending++;
+      else unchecked++;
     }
+    if (live > 0) await ctx.db.patch("lorePlaces", place._id, { version: place.version + 1 });
     const all = await ctx.db.query("loreEntries").withIndex("by_osm_review", (q) => q.eq("osmId", osmId)).collect();
-    const kept = all.filter((e) => ["auto", "approved", "pending"].includes(e.review)).length;
-    const place = await placeRow(ctx, osmId);
-    const quiet = kept < wanted.enough;
-    if (place) {
-      const now = Date.now();
-      await ctx.db.patch("lorePlaces", place._id, {
-        status: quiet ? "quiet" : "ready", finishedAt: now, version: place.version + (live > 0 ? 1 : 0),
-        // Only the first quiet run gets a second look.
-        retryAt: quiet && place.attempts < 2 ? now + quietRetry : undefined,
-      });
-    }
-    return { live, pending, dropped: rows.filter((e) => e.review === "dropped").length + unchecked, status: quiet ? "quiet" : "ready" };
+    const quiet = all.filter((e) => ["auto", "approved", "pending"].includes(e.state.kind)).length < wanted.enough;
+    await lorePlace.send(ctx, place._id, { type: "PUBLISHED", run });
+    return { live, pending, dropped: rows.filter((e) => e.state.kind === "dropped").length + unchecked, status: quiet ? "quiet" : "ready" };
   },
 });
 
@@ -412,7 +386,7 @@ export const needStickers = internalQuery({
   returns: v.array(v.object({ entryId: v.string(), sticker: v.string() })),
   handler: async (ctx, { osmId, run }) => {
     const rows = await ctx.db.query("loreEntries").withIndex("by_osm_run", (q) => q.eq("osmId", osmId).eq("run", run)).collect();
-    return rows.filter((e) => ["checking", "auto", "pending", "approved"].includes(e.review) && !e.stickerFile)
+    return rows.filter((e) => ["checking", "auto", "pending", "approved"].includes(e.state.kind) && !e.stickerFile)
       .map((e) => ({ entryId: e.entryId, sticker: e.sticker }));
   },
 });
