@@ -15,6 +15,8 @@ nonisolated struct StationaryFence {
 
     /// Where the fence is now, if there is one.
     var center: Coordinate?
+    /// The last fix settled you back inside the fence where it already is, so it didn't move.
+    private(set) var settledInPlace = false
     private var settling: (point: Coordinate, time: TimeInterval)?
 
     init(center: Coordinate? = nil) {
@@ -26,6 +28,7 @@ nonisolated struct StationaryFence {
     ///   - stationary: iOS says you've stopped moving.
     ///   - walking: a walk is in progress, so the first fix isn't necessarily where you'll stop.
     mutating func add(_ point: Coordinate, time: TimeInterval, accuracy: Double, stationary: Bool, walking: Bool) -> Coordinate? {
+        settledInPlace = false
         guard accuracy >= 0, accuracy <= Self.worstAccuracy else { return nil }
         if let settling, settling.point.distance(to: point) <= Self.settleRadius, time >= settling.time {
             // Still here.
@@ -34,7 +37,10 @@ nonisolated struct StationaryFence {
         }
         let stayed = settling.map { time - $0.time >= Self.settleTime } ?? false
         guard stationary || stayed || (center == nil && !walking) else { return nil }
-        if let center, center.distance(to: point) <= Self.settleRadius { return nil }
+        if let center, center.distance(to: point) <= Self.settleRadius {
+            settledInPlace = true
+            return nil
+        }
         center = point
         return point
     }
@@ -105,8 +111,11 @@ final class MonitorFence: Geofence {
         self.monitor = monitor
         events = Task { [weak self] in
             let monitor = await monitor.value
-            let condition = await monitor.record(for: Self.identifier)?.condition as? CLMonitor.CircularGeographicCondition
-            self?.onOpen?(condition.map { Coordinate($0.center) })
+            let record = await monitor.record(for: Self.identifier)
+            let condition = record?.condition as? CLMonitor.CircularGeographicCondition
+            // Already left it: there's no fence to be inside until you settle somewhere new.
+            let left = record?.lastEvent.state == .unsatisfied
+            self?.onOpen?(left ? nil : condition.map { Coordinate($0.center) })
             do {
                 for try await event in await monitor.events {
                     guard event.identifier == Self.identifier else { continue }

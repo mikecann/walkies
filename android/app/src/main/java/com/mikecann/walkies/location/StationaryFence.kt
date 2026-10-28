@@ -11,6 +11,9 @@ class StationaryFence(center: Coordinate? = null) {
     /** Where the fence is now, if there is one. */
     var center: Coordinate? = center
         private set
+    /** The last fix settled you back inside the fence where it already is, so it didn't move. */
+    var settledInPlace = false
+        private set
     private var settlingPoint: Coordinate? = null
     private var settlingTime = 0.0
 
@@ -20,6 +23,7 @@ class StationaryFence(center: Coordinate? = null) {
      * progress, so the first fix isn't necessarily where you'll stop.
      */
     fun add(point: Coordinate, time: Double, accuracy: Double, stationary: Boolean, walking: Boolean): Coordinate? {
+        settledInPlace = false
         if (accuracy < 0 || accuracy > WORST_ACCURACY) return null
         val settling = settlingPoint
         if (settling == null || settling.distance(point) > SETTLE_RADIUS || time < settlingTime) {
@@ -28,7 +32,12 @@ class StationaryFence(center: Coordinate? = null) {
         }
         val stayed = time - settlingTime >= SETTLE_TIME
         if (!stationary && !stayed && !(center == null && !walking)) return null
-        center?.let { if (it.distance(point) <= SETTLE_RADIUS) return null }
+        center?.let {
+            if (it.distance(point) <= SETTLE_RADIUS) {
+                settledInPlace = true
+                return null
+            }
+        }
         center = point
         return point
     }

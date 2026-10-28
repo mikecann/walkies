@@ -49,6 +49,8 @@ class AlwaysOnTracking(
     private var lastFix: TrackPoint? = null
     /** After leaving the fence or starting to move, the GPS stays up until then, whatever else says. */
     private var awakeUntil = Double.NEGATIVE_INFINITY
+    /** You've left the fence and haven't settled anywhere since. */
+    private var outside = false
 
     val fenceCenter: Coordinate? get() = fence.center
 
@@ -73,8 +75,11 @@ class AlwaysOnTracking(
             return
         }
         val center = fence.center
-        // Out past the fence, even if the fence itself hasn't said so yet.
-        if (center != null && center.distance(point.coordinate) > StationaryFence.RADIUS) wake()
+        // Out past the fence, even if the fence itself hasn't said so yet. Only if even the near
+        // edge of the fix's accuracy circle is outside, so a vague Wi-Fi fix at home doesn't count.
+        // Only the first one: each wake starts the settling clock again, so waking on every fix
+        // out there meant you could only settle somewhere new by putting the phone down.
+        if (!outside && center != null && center.distance(point.coordinate) - point.accuracy.coerceAtLeast(0.0) > StationaryFence.RADIUS) leave()
         // Not a cached fix from wherever you were when updates started.
         if (clock() - point.time <= 10) {
             lastFix = point
@@ -92,14 +97,26 @@ class AlwaysOnTracking(
 
     /** An Activity Recognition transition. */
     fun motionChanged(activity: MotionActivity, entered: Boolean) {
-        if (motion.transition(activity, entered)) wake()
+        if (motion.transition(activity, entered)) {
+            // Moving about inside the fence (round the house, picking the phone up) only needs a
+            // light watch: leaving it is what brings the GPS up.
+            if (insideFence) fence.unsettle() else wake()
+        }
         apply()
     }
 
     /** You've left where you settled. */
     fun leftFence() {
-        wake()
+        leave()
         apply()
+    }
+
+    /** Without the motion chip there's nothing to say you've stopped again, so this only counts with it. */
+    private val insideFence get() = fence.center != null && !outside && motion.known
+
+    private fun leave() {
+        outside = true
+        wake()
     }
 
     private fun wake() {
@@ -109,7 +126,12 @@ class AlwaysOnTracking(
 
     private fun settle(point: TrackPoint, time: Double) {
         val center = fence.add(point.coordinate, time, point.accuracy, stationary = motion.known && motion.still, walking = walk != WalkState.None)
-            ?: return
+        if (center == null) {
+            // Back where you were (home after a walk, say): inside again, though the fence stays put.
+            if (fence.settledInPlace) outside = false
+            return
+        }
+        outside = false
         geofence.place(center, StationaryFence.RADIUS)
         onFenceMoved(center)
     }
@@ -117,6 +139,7 @@ class AlwaysOnTracking(
     private fun removeFence() {
         val had = fence.center != null
         fence.reset()
+        outside = false
         lastFix = null
         awakeUntil = Double.NEGATIVE_INFINITY
         geofence.remove()
@@ -134,6 +157,7 @@ class AlwaysOnTracking(
             onWheels = motion.onWheels,
             settled = fence.center != null && fence.settled(now),
             awake = now < awakeUntil,
+            insideFence = insideFence,
         )
         if (gps.mode != mode) gps.mode = mode
     }
@@ -151,6 +175,7 @@ class AlwaysOnTracking(
             onWheels: Boolean,
             settled: Boolean,
             awake: Boolean,
+            insideFence: Boolean = false,
         ): GpsMode = when {
             // The you-are-here dot, and walks you started yourself.
             onScreen || walk == WalkState.Walking -> GpsMode.High
@@ -161,6 +186,10 @@ class AlwaysOnTracking(
             // Sitting still: the motion chip says when you're off again. A pending walk
             // ends by itself after the gap.
             motionKnown && still -> GpsMode.Off
+            // Pottering about where you settled. Low still gets a fix every minute or so, and one
+            // past the fence (or the fence itself) wakes it. The first ~100 m of a walk from
+            // here is coarse, which Mike accepted for the battery (28 Oct 2026).
+            insideFence -> if (settled) GpsMode.Off else GpsMode.Low
             walk == WalkState.Pending -> GpsMode.High
             // Bikes and cars don't count, but notice when you get out.
             onWheels -> GpsMode.Low

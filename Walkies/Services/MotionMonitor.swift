@@ -12,6 +12,8 @@ final class MotionMonitor {
 
     private let manager = CMMotionActivityManager()
     @ObservationIgnored private var started = false
+    /// Called after each update, so always on can change how hard it works.
+    @ObservationIgnored var onChange: (() -> Void)?
 
     func start() {
         guard !started, CMMotionActivityManager.isActivityAvailable() else { return }
@@ -32,5 +34,6 @@ final class MotionMonitor {
             onWheels = true
         }
         // Stationary or unknown: keep the last answer. Sitting at the lights is still driving.
+        onChange?()
     }
 }

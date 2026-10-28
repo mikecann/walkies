@@ -25,7 +25,10 @@ final class AppModel {
     /// selection only follows you on a walk, so looking at another place sticks.
     @ObservationIgnored var placeYouOnNextFix = true
     private(set) var activeWalk: Walk? {
-        didSet { updateLiveSteps() }
+        didSet {
+            updateLiveSteps()
+            if (activeWalk == nil) != (oldValue == nil) { tracker.refreshWatch() }
+        }
     }
     /// Accepted fixes from the current walk, for drawing the line on the map.
     private(set) var activePath: [Coordinate] = []
@@ -73,7 +76,9 @@ final class AppModel {
 
     /// True while an always-on walk has started but you haven't gone far enough yet to
     /// be sure it's a real one. Nothing gets uncovered until it's sure.
-    private(set) var autoWalkPending = false
+    private(set) var autoWalkPending = false {
+        didSet { if autoWalkPending != oldValue { tracker.refreshWatch() } }
+    }
 
     let tracker = LocationTracker()
     let motion = MotionMonitor()
@@ -170,6 +175,11 @@ final class AppModel {
         tracker.onLocation = { [weak self] in self?.record($0) }
         tracker.onAuthorizationChange = { [weak self] in self?.authorizationChanged() }
         tracker.isWalking = { [weak self] in self?.activeWalk != nil }
+        tracker.isOnConfirmedWalk = { [weak self] in self.map { $0.activeWalk != nil && !$0.autoWalkPending } ?? false }
+        tracker.isOnScreen = { [weak self] in self?.inForeground ?? false }
+        tracker.isOnWheels = { [weak self] in self?.motion.onWheels ?? false }
+        tracker.isStill = { [weak self] in self?.motion.still ?? false }
+        motion.onChange = { [weak self] in self?.tracker.refreshWatch() }
         locked = waitForUnlock
         if !waitForUnlock { load(alwaysOn: alwaysOn) }
     }
@@ -1518,6 +1528,7 @@ final class AppModel {
         inForeground = active
         checkSpotOnNextFix = active
         if !active { spotToCheck = nil }
+        tracker.refreshWatch()
     }
 
     /// The first good fix after the app comes to the front, from GPS or the map's blue
