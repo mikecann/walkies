@@ -105,8 +105,11 @@ final class MonitorFence: Geofence {
         self.monitor = monitor
         events = Task { [weak self] in
             let monitor = await monitor.value
-            let condition = await monitor.record(for: Self.identifier)?.condition as? CLMonitor.CircularGeographicCondition
-            self?.onOpen?(condition.map { Coordinate($0.center) })
+            let record = await monitor.record(for: Self.identifier)
+            let condition = record?.condition as? CLMonitor.CircularGeographicCondition
+            // Already left it: there's no fence to be inside until you settle somewhere new.
+            let left = record?.lastEvent.state == .unsatisfied
+            self?.onOpen?(left ? nil : condition.map { Coordinate($0.center) })
             do {
                 for try await event in await monitor.events {
                     guard event.identifier == Self.identifier else { continue }

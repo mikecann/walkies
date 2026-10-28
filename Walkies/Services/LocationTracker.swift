@@ -13,6 +13,13 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored var onLocation: ((CLLocation) -> Void)?
     @ObservationIgnored var onAuthorizationChange: (() -> Void)?
     @ObservationIgnored var isWalking: () -> Bool = { false }
+    /// A walk that's past pending, so the GPS has to keep up with it.
+    @ObservationIgnored var isOnConfirmedWalk: () -> Bool = { false }
+    /// The app's on screen, for the you-are-here dot.
+    @ObservationIgnored var isOnScreen: () -> Bool = { false }
+    /// The motion chip's answers (MotionMonitor).
+    @ObservationIgnored var isOnWheels: () -> Bool = { false }
+    @ObservationIgnored var isStill: () -> Bool = { false }
 
     private let manager = CLLocationManager()
     @ObservationIgnored private var backgroundSession: CLBackgroundActivitySession?
@@ -25,6 +32,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         geofence.onOpen = { [weak self] center in
             guard let self, self.fence.center == nil else { return }
             self.fence.center = center
+            self.refreshWatch()
         }
         geofence.onExit = { [weak self] in self?.leftFence() }
         manager.delegate = self
@@ -42,6 +50,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     }
 
     func start() {
+        stopLight()
         backgroundSession = CLBackgroundActivitySession()
         manager.allowsBackgroundLocationUpdates = true
         manager.showsBackgroundLocationIndicator = true
@@ -61,6 +70,76 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored private let geofence: any Geofence
     @ObservationIgnored private var fence = StationaryFence()
     @ObservationIgnored private var lastLive: Date?
+    @ObservationIgnored private var alwaysOnRunning = false
+    /// You've left the fence and haven't settled anywhere since.
+    @ObservationIgnored private var outside = false
+    @ObservationIgnored private var lightOn = false
+
+    /// How hard always on works.
+    enum Watch: Equatable {
+        /// Live updates: GPS while you're moving.
+        case live
+        /// Wi-Fi and cell towers, every 25 m or so: enough to notice you've got out of the car.
+        case light
+        /// Nothing: the fence wakes the app when you leave.
+        case idle
+    }
+
+    /// Always on used to run live updates whenever you were moving, which meant the GPS ran
+    /// for whole drives and every time you walked round the house (28 Oct 2026). The first
+    /// ~100 m of a walk from where you settled is missed, which Mike accepted for the battery.
+    nonisolated static func watch(confirmedWalk: Bool, onScreen: Bool, onWheels: Bool, insideFence: Bool) -> Watch {
+        if confirmedWalk || onScreen { return .live }
+        if insideFence { return .idle }
+        // Cars and bikes don't count, but notice when you get out.
+        if onWheels { return .light }
+        return .live
+    }
+
+    var watch: Watch {
+        Self.watch(confirmedWalk: isOnConfirmedWalk(), onScreen: isOnScreen(), onWheels: isOnWheels(),
+                   insideFence: fence.center != nil && !outside)
+    }
+
+    /// Call when anything `watch` depends on changes.
+    func refreshWatch() {
+        guard alwaysOnRunning else { return }
+        let watch = watch
+        if watch == .live {
+            if liveTask == nil { startLiveUpdates() }
+        } else {
+            liveTask?.cancel()
+            liveTask = nil
+        }
+        if watch == .light { startLight() } else { stopLight() }
+    }
+
+    private func startLight() {
+        guard !lightOn else { return }
+        lightOn = true
+        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        manager.distanceFilter = 25
+        manager.allowsBackgroundLocationUpdates = true
+        manager.startUpdatingLocation()
+    }
+
+    private func stopLight() {
+        guard lightOn else { return }
+        lightOn = false
+        manager.stopUpdatingLocation()
+        manager.allowsBackgroundLocationUpdates = false
+        manager.desiredAccuracy = kCLLocationAccuracyBest
+        manager.distanceFilter = 5
+    }
+
+    /// A fix plainly outside the fence (even the near edge of its accuracy circle) means
+    /// you've left, even if the fence hasn't said so yet.
+    private func noteOutside(_ location: CLLocation) {
+        guard !outside, let center = fence.center else { return }
+        if center.distance(to: Coordinate(location.coordinate)) - max(location.horizontalAccuracy, 0) > StationaryFence.radius {
+            outside = true
+        }
+    }
 
     var hasAlwaysPermission: Bool { authorization == .authorizedAlways }
 
@@ -75,16 +154,20 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     /// the stationary fence relaunches it in the background once you leave where you
     /// settled. Significant-change monitoring is the backstop for when there's no fence.
     func startAlwaysOn() {
-        guard liveTask == nil else { return }
+        guard !alwaysOnRunning else { return }
+        alwaysOnRunning = true
         backgroundSession = CLBackgroundActivitySession()
         manager.startMonitoringSignificantLocationChanges()
         geofence.open()
-        startLiveUpdates()
+        refreshWatch()
     }
 
     func stopAlwaysOn() {
+        alwaysOnRunning = false
+        outside = false
         liveTask?.cancel()
         liveTask = nil
+        stopLight()
         manager.stopMonitoringSignificantLocationChanges()
         backgroundSession?.invalidate()
         backgroundSession = nil
@@ -111,6 +194,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
                     last = update.location ?? last
                     self.lastLive = update.stationary ? nil : .now
                     if let location = update.location {
+                        self.noteOutside(location)
                         self.onLocation?(location)
                     }
                     if let last { self.settle(at: last, stationary: update.stationary) }
@@ -127,13 +211,17 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         guard stationary || location.timestamp.timeIntervalSinceNow > -10 else { return }
         let point = Coordinate(location.coordinate)
         guard let center = fence.add(point, time: location.timestamp.timeIntervalSince1970, accuracy: location.horizontalAccuracy, stationary: stationary, walking: isWalking()) else { return }
+        outside = false
         geofence.place(around: center, radius: StationaryFence.radius)
+        refreshWatch()
     }
 
     /// You've left where you settled. Live updates should pick up again by themselves,
     /// but start them afresh unless they're plainly already coming in.
     private func leftFence() {
-        guard liveTask != nil else { return }
+        guard alwaysOnRunning else { return }
+        outside = true
+        guard liveTask != nil else { return refreshWatch() }
         if let lastLive, Date.now.timeIntervalSince(lastLive) < 10 { return }
         startLiveUpdates()
     }
@@ -143,8 +231,15 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         MainActor.assumeIsolated {
             for location in locations {
+                // Light watch and significant-change fixes, while always on.
+                if alwaysOnRunning {
+                    noteOutside(location)
+                    // Not in a car: stopping at the lights isn't settling somewhere.
+                    if lightOn, !isOnWheels() { settle(at: location, stationary: isStill()) }
+                }
                 onLocation?(location)
             }
+            refreshWatch()
         }
     }
 

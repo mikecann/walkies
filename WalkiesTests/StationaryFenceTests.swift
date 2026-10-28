@@ -104,6 +104,38 @@ struct LocationTrackerFenceTests {
         #expect(fake.placed.isEmpty)
     }
 
+    @Test func watchesLightlyInsideTheFenceAndInCars() {
+        typealias T = LocationTracker
+        // Settled somewhere: nothing runs, the fence wakes the app.
+        #expect(T.watch(confirmedWalk: false, onScreen: false, onWheels: false, insideFence: true) == .idle)
+        #expect(T.watch(confirmedWalk: false, onScreen: false, onWheels: true, insideFence: true) == .idle)
+        // Left it: GPS on foot, a light watch in a car.
+        #expect(T.watch(confirmedWalk: false, onScreen: false, onWheels: false, insideFence: false) == .live)
+        #expect(T.watch(confirmedWalk: false, onScreen: false, onWheels: true, insideFence: false) == .light)
+        // A real walk, or the app on screen, always gets the GPS.
+        #expect(T.watch(confirmedWalk: true, onScreen: false, onWheels: true, insideFence: true) == .live)
+        #expect(T.watch(confirmedWalk: false, onScreen: true, onWheels: false, insideFence: true) == .live)
+    }
+
+    @Test func theFenceFromLastTimeMeansYouAreInsideIt() {
+        let fake = FakeFence()
+        let tracker = LocationTracker(geofence: fake)
+        #expect(tracker.watch == .live)
+        fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
+        #expect(tracker.watch == .idle)
+        tracker.isOnScreen = { true }
+        #expect(tracker.watch == .live)
+    }
+
+    @Test func settlingPutsYouInsideTheNewFence() {
+        let fake = FakeFence()
+        let tracker = LocationTracker(geofence: fake)
+        tracker.isOnWheels = { true }
+        #expect(tracker.watch == .light)
+        tracker.settle(at: fix(-33.65, 115.35), stationary: true)
+        #expect(tracker.watch == .idle)
+    }
+
     @Test func waitsWhileYouAreOnAWalk() {
         let fake = FakeFence()
         let tracker = LocationTracker(geofence: fake)

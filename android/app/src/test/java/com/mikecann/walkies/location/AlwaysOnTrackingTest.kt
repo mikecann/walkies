@@ -238,6 +238,49 @@ class AlwaysOnTrackingTest {
     }
 
     @Test
+    fun potteringAboutInsideTheFenceKeepsALightWatch() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
+        t.motionChanged(MotionActivity.Still, entered = true)
+        assertEquals(GpsMode.Off, gps.mode)
+        // Picking the phone up, then walking round the house with a pending walk.
+        t.motionChanged(MotionActivity.Still, entered = false)
+        assertEquals(GpsMode.Low, gps.mode)
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.Pending)
+        t.fix(fix(east(40.0)))
+        assertEquals(GpsMode.Low, gps.mode)
+        // A vague Wi-Fi fix that could still be inside doesn't count as leaving.
+        t.fix(fix(east(160.0), accuracy = 80.0))
+        assertEquals(GpsMode.Low, gps.mode)
+        // One that's plainly outside does.
+        t.fix(fix(east(130.0), accuracy = 15.0))
+        assertEquals(GpsMode.High, gps.mode)
+    }
+
+    @Test
+    fun leavingTheFenceOnFootGoesHighUntilYouSettleSomewhereNew() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        assertEquals(GpsMode.Low, gps.mode)
+        t.leftFence()
+        assertEquals(GpsMode.High, gps.mode)
+        // Still walking after the wake runs out: outside the fence, so it stays up.
+        now += AlwaysOnTracking.WAKE_TIME + 1
+        t.fix(fix(east(400.0)))
+        assertEquals(GpsMode.High, gps.mode)
+        // Settled at the shops: a new fence there, and a light watch again.
+        val shops = east(400.0)
+        now += StationaryFence.SETTLE_TIME
+        t.fix(fix(shops))
+        assertEquals(shops, t.fenceCenter)
+        assertEquals(GpsMode.Off, gps.mode)
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        assertEquals(GpsMode.Low, gps.mode)
+    }
+
+    @Test
     fun drivingAwayFromTheFenceKeepsALightWatch() {
         val t = tracking(home)
         t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
