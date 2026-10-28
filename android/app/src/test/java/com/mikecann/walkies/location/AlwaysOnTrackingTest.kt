@@ -238,6 +238,23 @@ class AlwaysOnTrackingTest {
     }
 
     @Test
+    fun drivingAwayFromTheFenceKeepsALightWatch() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
+        t.motionChanged(MotionActivity.InVehicle, entered = true)
+        // 20 minutes at 50 km/h, a fix every 30 s, every one of them outside the fence.
+        for (i in 1..40) {
+            now += 30
+            t.fix(fix(east(i * 420.0)))
+            t.tick()
+            assertEquals(GpsMode.Low, gps.mode)
+        }
+        // Getting out and walking brings it straight back.
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        assertEquals(GpsMode.High, gps.mode)
+    }
+
+    @Test
     fun drivingKeepsALightWatch() {
         val t = tracking()
         t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
