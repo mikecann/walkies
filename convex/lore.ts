@@ -3,33 +3,39 @@
 // the spending caps, and Mike's review. The run itself is lorePipeline.ts, and the
 // contract the apps build against is shared/lore-api.md.
 import { ConvexError, v } from "convex/values";
-import { restart, vResultValidator, vWorkflowId, WorkflowManager } from "@convex-dev/workflow";
+import { restart, vResultValidator, vWorkflowId } from "@convex-dev/workflow";
+import { paginationOptsValidator } from "convex/server";
 import { components, internal } from "./_generated/api";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { DataModel, Doc, Id } from "./_generated/dataModel";
 import {
-  env, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx, type MutationCtx, type QueryCtx,
+  env, internalAction, query, type ActionCtx, type MutationCtx as RawMutationCtx, type QueryCtx,
 } from "./_generated/server";
-import { overBudget } from "./loreBudget";
+import type { AppCtx, InternalCtx } from "@convex-dev/state-machines";
 import { boundaryArea, boundingBox, fetchPage, insideBoundary } from "./loreChecks";
 import {
-  bundledOsmIds, caps, checksPerUserPerDay, day, failedRetry, journalKeep, maxAttempts, maxRunning, minWalkedTiles, queueExpiry,
+  bundledOsmIds, caps, checksPerUserPerDay, day, journalKeep, maxRunning, minWalkedTiles,
   suburbArea, suburbsPerUserPerDay, suburbsPerUserPerMonth, walkCheck,
 } from "./loreConfig";
-import { bumpVersion, dayKey, deleteSticker, monthOf, placeRow, releaseStale, spentBetween } from "./loreRun";
+import { autoOn, journalOf, placeRow } from "./loreMachines";
+import { dayKey, monthOf, releaseStale, spentBetween } from "./loreRun";
+import { clientStatus, vLoreReview } from "./loreStates";
+import { workflow } from "./loreWorkflow";
+import { loreEntry, lorePlace, machines, vHistory } from "./machines";
 import { boundaryFromNominatim, type PlaceData } from "./placeData";
 import { nominatim } from "./places";
-import { vLoreReview } from "./schema";
 import { currentUserId } from "./users";
 
-/**
- * Runs lorePipeline.run: two runs of three research angles at once, plus room for
- * stickers. It lives here rather than in lorePipeline.ts so that sync.ts, which imports
- * this file, doesn't load the AI libraries on every sync.
- */
-export const workflow = new WorkflowManager(components.workflow, { workpoolOptions: { maxParallelism: 6 } });
+export { autoOn, workflow };
 
-/** The switch. Off unless LORE_AUTO is exactly "1", so prod never starts a paid run by itself. */
-export const autoOn = () => env.LORE_AUTO === "1";
+// The catalog's builders (machines.ts): their db can't write a machine's state, and the
+// internal ones can send the machines' `server` events. What the phones read and the
+// actions stay on Convex's own.
+const { mutation, internalMutation, internalQuery } = machines;
+/** A handler's ctx in the catalog's internalMutation, for the helpers it calls. */
+type MutationCtx = AppCtx<DataModel> & InternalCtx & Pick<RawMutationCtx, "runMutation" | "runQuery">;
+
+/** A place nobody's queue ever got to is as good as unknown: the next walk there can queue it again. */
+const known = (row: Doc<"lorePlaces"> | null) => row !== null && row.state.kind !== "expired";
 
 const vPlace = v.object({ name: v.string(), lat: v.number(), lon: v.number() });
 
@@ -72,7 +78,7 @@ export const forPlace = query({
     const live = [...await withReview(ctx, osmId, "auto"), ...await withReview(ctx, osmId, "approved")]
       .sort((a, b) => a.entryId.localeCompare(b.entryId));
     return {
-      status: row.status,
+      status: clientStatus(row.state),
       version: row.version,
       entries: await Promise.all(live.map(async (entry) => ({
         id: entry.entryId,
@@ -89,8 +95,8 @@ export const forPlace = query({
   },
 });
 
-async function withReview(ctx: QueryCtx, osmId: number, review: Doc<"loreEntries">["review"]) {
-  return await ctx.db.query("loreEntries").withIndex("by_osm_review", (q) => q.eq("osmId", osmId).eq("review", review)).collect();
+async function withReview(ctx: QueryCtx, osmId: number, review: Doc<"loreEntries">["state"]["kind"]) {
+  return await ctx.db.query("loreEntries").withIndex("by_osm_review", (q) => q.eq("osmId", osmId).eq("state.kind", review)).collect();
 }
 
 // What starts a run. The server only learns where someone walked when their phone
@@ -104,9 +110,9 @@ async function withReview(ctx: QueryCtx, osmId: number, review: Doc<"loreEntries
  * Called by sync:savePlace with the copy it kept. Reads the file in the background
  * unless this place has already been looked at, so most saves cost nothing.
  */
-export async function noticePlace(ctx: MutationCtx, place: Doc<"places">) {
+export async function noticePlace(ctx: RawMutationCtx, place: Doc<"places">) {
   if (!autoOn()) return;
-  if (place.osmId !== undefined && (bundledOsmIds.has(place.osmId) || place.loreNoSuburb || await placeRow(ctx, place.osmId) !== null)) return;
+  if (place.osmId !== undefined && (bundledOsmIds.has(place.osmId) || place.loreNoSuburb || known(await placeRow(ctx, place.osmId)))) return;
   await ctx.scheduler.runAfter(0, internal.lore.readPlace, { placeId: place._id });
 }
 
@@ -118,14 +124,14 @@ const placesPerWalk = 10;
  * person's first walk arrives after the place it was in was turned down for having no
  * walk; this looks at their places again now there is one.
  */
-export async function noticeWalk(ctx: MutationCtx, userId: Id<"users">, walkId: Id<"walks">) {
+export async function noticeWalk(ctx: RawMutationCtx, userId: Id<"users">, walkId: Id<"walks">) {
   if (!autoOn()) return;
   const places = await ctx.db.query("places").withIndex("by_user_client", (q) => q.eq("userId", userId)).collect();
   let looked = 0;
   for (const place of places) {
     if (looked >= placesPerWalk) break;
     if (place.walkedTiles !== undefined && place.walkedTiles < minWalkedTiles) continue;
-    if (place.osmId !== undefined && (bundledOsmIds.has(place.osmId) || place.loreNoSuburb || await placeRow(ctx, place.osmId) !== null)) continue;
+    if (place.osmId !== undefined && (bundledOsmIds.has(place.osmId) || place.loreNoSuburb || known(await placeRow(ctx, place.osmId)))) continue;
     await ctx.scheduler.runAfter(0, internal.lore.readPlace, { placeId: place._id, walkId });
     looked++;
   }
@@ -279,7 +285,7 @@ async function whyNot(ctx: MutationCtx, userId: Id<"users">, osmId: number, walk
   if (!autoOn()) return "off";
   if (bundledOsmIds.has(osmId)) return "bundled";
   // Someone else got here first. Whatever state it's in, this walk pays nothing.
-  if (await placeRow(ctx, osmId) !== null) return "known";
+  if (known(await placeRow(ctx, osmId))) return "known";
   if (place?.loreNoSuburb && place.osmId === osmId) return "not a suburb";
   if (walkedTiles < minWalkedTiles) return "not walked";
   // Past either limit nothing is saved, so a sync after it resets tries again.
@@ -340,24 +346,21 @@ export const noteWalked = internalMutation({
     const why = await whyNot(ctx, userId, osmId, walkedTiles, place);
     if (why !== null) return why;
     await ctx.db.insert("loreRequests", { userId, osmId, at: Date.now() });
-    await queue(ctx, osmId, name, { requestedBy: userId });
+    await queue(ctx, osmId, name, { manual: false, requestedBy: userId });
     await startQueued(ctx);
     return "queued";
   },
 });
 
-async function queue(ctx: MutationCtx, osmId: number, name: string, { manual, requestedBy }: { manual?: boolean; requestedBy?: Id<"users"> } = {}) {
+/** Puts a place on the queue: a new row, or one that's finished or expired back on it. */
+async function queue(ctx: MutationCtx, osmId: number, name: string, event: { manual: boolean; requestedBy?: Id<"users"> }) {
   const row = await placeRow(ctx, osmId);
-  const now = Date.now();
-  const who = { ...(manual ? { manual } : {}), ...(requestedBy ? { requestedBy } : {}) };
   if (row === null) {
-    await ctx.db.insert("lorePlaces", { osmId, name, status: "queued", version: 0, attempts: 0, queuedAt: now, cost: 0, runCost: 0, segment: 0, ...who });
-  } else {
-    await ctx.db.patch("lorePlaces", row._id, {
-      status: "queued", queuedAt: now, retryAt: undefined, held: undefined, ...who,
-      ...(row.status === "ready" || row.status === "quiet" || row.status === "failed" ? { requeuedFrom: row.status } : {}),
-    });
+    return await lorePlace.create(ctx, { osmId, name, version: 0, attempts: 0, cost: 0, runCost: 0, segment: 0 }, { type: "QUEUE", ...event });
   }
+  // An expired place someone walks again goes by the name their phone has now.
+  if (row.state.kind === "expired" && name !== "" && name !== row.name) await ctx.db.patch("lorePlaces", row._id, { name });
+  return await lorePlace.send(ctx, row._id, { type: "QUEUE", ...event });
 }
 
 // The queue. A run starts when a slot's free and it can't take today's or this
@@ -365,108 +368,127 @@ async function queue(ctx: MutationCtx, osmId: number, name: string, { manual, re
 // (which the holds on every call make the most it can spend). It takes turns between
 // people: Mike's own asks first, then everyone's oldest before anyone's second.
 
-/** Starts whatever can start now. Returns how many did. */
-export async function startQueued(ctx: MutationCtx): Promise<number> {
-  const running = await ctx.db.query("lorePlaces").withIndex("by_status", (q) => q.eq("status", "researching")).collect();
-  const queued = await ctx.db.query("lorePlaces").withIndex("by_status", (q) => q.eq("status", "queued")).collect();
-  if (queued.length === 0) return 0;
-  const now = Date.now();
-  const today = dayKey(now);
+/** What a pass over the queue did: the places it started, and why each place it couldn't start is held. */
+type QueuePass = { started: number[]; held: Map<number, string>; failed: Map<number, string> };
+
+/**
+ * Goes through the queue in its order, calling `begin` for each place that can start
+ * now, and says why the others are held by a cap. With no `begin` it only reads, as if
+ * each had started, for lore:status.
+ */
+async function passQueue(ctx: QueryCtx, begin?: (row: Doc<"lorePlaces">) => Promise<string | null>): Promise<QueuePass> {
+  const pass: QueuePass = { started: [], held: new Map(), failed: new Map() };
+  const running = await ctx.db.query("lorePlaces").withIndex("by_state", (q) => q.eq("state.kind", "researching")).collect();
+  const queued = await ctx.db.query("lorePlaces").withIndex("by_state", (q) => q.eq("state.kind", "queued")).collect();
+  if (queued.length === 0) return pass;
+  const today = dayKey(Date.now());
   const daily = await spentBetween(ctx, today, today);
   const monthly = await spentBetween(ctx, ...monthOf(today));
   // What the runs going now could still spend before their own limit stops them.
   let reserved = running.reduce((sum, row) => sum + Math.max(0, caps.perRun - row.runCost), 0);
   let slots = maxRunning - running.length;
   const turns = new Map<string, number>();
-  for (const row of running) if (row.requestedBy) turns.set(row.requestedBy, (turns.get(row.requestedBy) ?? 0) + 1);
+  const asked = (row: Doc<"lorePlaces">) => row.state.kind === "queued" || row.state.kind === "researching" ? row.state : null;
+  for (const row of running) {
+    const who = asked(row)?.requestedBy;
+    if (who) turns.set(who, (turns.get(who) ?? 0) + 1);
+  }
   const order = queued.map((row, index) => {
     // A retry nobody asked for takes its own turn.
-    const who = row.requestedBy ?? row._id;
+    const who = asked(row)?.requestedBy ?? row._id;
     const turn = turns.get(who) ?? 0;
     turns.set(who, turn + 1);
-    return { row, index, turn: row.manual ? -1 : turn };
+    return { row, index, turn: asked(row)?.manual ? -1 : turn };
   }).sort((a, b) => a.turn - b.turn || a.index - b.index);
-  let started = 0;
   for (const { row } of order) {
     // Rows a walk queued wait while the switch is off; ones Mike asked for don't.
-    if (!row.manual && !autoOn()) continue;
+    if (!asked(row)?.manual && !autoOn()) continue;
     const held = daily + reserved + caps.perRun > caps.daily ? "daily cap"
       : monthly + reserved + caps.perRun > caps.monthly ? "monthly cap" : undefined;
-    if (held !== undefined || slots <= 0) {
-      if (row.held !== held) await ctx.db.patch("lorePlaces", row._id, { held });
+    if (held !== undefined) pass.held.set(row.osmId, held);
+    if (held !== undefined || slots <= 0) continue;
+    const failure = begin ? await begin(row) : null;
+    if (failure !== null) {
+      pass.failed.set(row.osmId, failure);
       continue;
     }
-    if (!await begin(ctx, row, now)) continue;
+    pass.started.push(row.osmId);
     reserved += caps.perRun;
     slots--;
-    started++;
   }
-  return started;
+  return pass;
 }
 
-/** Starts a queued row's run, or restarts its journal for lore:resume, as a new budget segment. */
-async function begin(ctx: MutationCtx, row: Doc<"lorePlaces">, now: number): Promise<boolean> {
-  const fresh = { status: "researching" as const, held: undefined, startedAt: now, finishedAt: undefined, runCost: 0, segment: (row.segment ?? 0) + 1, error: undefined, journalUntil: undefined };
-  if (row.resumeFrom !== undefined && row.workflowId !== undefined) {
+/** Starts whatever can start now, and says what it did. */
+export async function startQueued(ctx: MutationCtx): Promise<QueuePass> {
+  return await passQueue(ctx, (row) => begin(ctx, row));
+}
+
+/**
+ * Starts a queued place's run, or restarts its journal for lore:resume, as a new budget
+ * segment. The workflow starts first, as the machine's state needs its id; a refusal
+ * throws, so the workflow's start rolls back with it. Returns why a resume couldn't
+ * start, or null.
+ */
+async function begin(ctx: MutationCtx, row: Doc<"lorePlaces">): Promise<string | null> {
+  if (row.state.kind !== "queued") throw new Error(`lore: ${row.osmId} isn't queued`);
+  const step = row.state.resume;
+  if (step !== undefined) {
+    const journal = await journalOf(ctx, row);
     try {
-      await restart(ctx, components.workflow, row.workflowId as never, { from: row.resumeFrom, startAsync: true });
+      if (journal === null) throw new Error("its journal has been deleted");
+      await restart(ctx, components.workflow, journal.workflowId as never, { from: step, startAsync: true });
     } catch (error) {
-      await ctx.db.patch("lorePlaces", row._id, {
-        status: row.requeuedFrom ?? "failed", error: `Couldn't resume: ${String(error).slice(0, 400)}`, resumeFrom: undefined, manual: undefined, held: undefined,
-      });
-      return false;
+      const why = `Couldn't resume: ${String(error).slice(0, 400)}`;
+      await lorePlace.send(ctx, row._id, { type: "RESUME_FAILED", error: why });
+      return why;
     }
-    await ctx.db.patch("lorePlaces", row._id, { ...fresh, resumeFrom: undefined });
-    return true;
+    await started(await lorePlace.send(ctx, row._id, { type: "RESUMED", workflowId: journal.workflowId }));
+    // The journal is the run's again until it finishes.
+    await ctx.db.delete("loreJournals", journal._id);
+    return null;
   }
   const run = row.attempts + 1;
   // The last run's journal won't be resumed now that there's a new run.
-  if (row.workflowId) await ctx.scheduler.runAfter(0, internal.lore.cleanUpRun, { osmId: row.osmId, run: row.attempts, workflowId: row.workflowId });
-  await ctx.db.patch("lorePlaces", row._id, { ...fresh, attempts: run, requeuedFrom: undefined, resumeFrom: undefined });
+  for (const journal of await ctx.db.query("loreJournals").withIndex("by_osm", (q) => q.eq("osmId", row.osmId)).collect()) {
+    await ctx.scheduler.runAfter(0, internal.lore.cleanUpRun, { osmId: row.osmId, run: journal.run, workflowId: journal.workflowId });
+    await ctx.db.delete("loreJournals", journal._id);
+  }
   const workflowId = await workflow.start(ctx, internal.lorePipeline.run, { osmId: row.osmId, run }, {
     onComplete: internal.lore.runFinished, context: { osmId: row.osmId, run },
   });
-  await ctx.db.patch("lorePlaces", row._id, { workflowId });
-  return true;
+  await started(await lorePlace.send(ctx, row._id, { type: "START", workflowId }));
+  return null;
 }
 
-/** Secrets the checks dropped for reasons that weren't theirs, which lore:resume brings back. */
-const notTheirFault = ["run stopped", "budget", "not checked"];
+function started(result: Awaited<ReturnType<typeof lorePlace.send>>) {
+  if (result.status !== "done") throw new Error(`lore: the place refused to start (${result.code}): ${result.reasons.join(" ")}`);
+}
 
 /**
  * When a run (or a resume of one) ends. A successful one has already published itself
- * (loreRun.publish). Either way its research threads are deleted now, and its journal
- * is kept for `journalKeep` in case it's resumed.
+ * (loreRun.publish); one that failed, or finished without publishing, fails now, unless
+ * its place has moved on to another run, which refuses it. Either way its research
+ * threads are deleted now, and its journal is kept for `journalKeep` in case it's resumed.
  */
 export const runFinished = internalMutation({
   args: { workflowId: vWorkflowId, result: vResultValidator, context: v.object({ osmId: v.number(), run: v.number() }) },
   returns: v.null(),
-  handler: async (ctx, { result, context: { osmId, run } }) => {
+  handler: async (ctx, { workflowId, result, context: { osmId, run } }) => {
     const row = await placeRow(ctx, osmId);
-    // A successful run's last step (loreRun.publish) has already moved it to ready or quiet.
-    const finishing = result.kind === "success" ? ["researching", "ready", "quiet"] : ["researching"];
-    if (row !== null && finishing.includes(row.status) && row.attempts === run) {
-      const now = Date.now();
-      // A manual run's retries respect LORE_AUTO like any other.
-      const done = { manual: undefined, requestedBy: undefined, journalUntil: now + journalKeep };
-      if (result.kind === "success") {
-        await ctx.db.patch("lorePlaces", row._id, done);
-      } else {
+    if (row !== null) {
+      if (result.kind !== "success") {
         const error = result.kind === "failed" ? result.error : "Cancelled";
-        // A run stopped at its spending limit would only spend it again, so Mike decides.
-        const retry = !error.includes(overBudget) && row.attempts < maxAttempts;
-        await ctx.db.patch("lorePlaces", row._id, {
-          ...done, status: "failed", error: error.slice(0, 500), finishedAt: now, retryAt: retry ? now + failedRetry : undefined,
-        });
-        const unfinished = await ctx.db.query("loreEntries").withIndex("by_osm_run", (q) => q.eq("osmId", osmId).eq("run", run)).collect();
-        for (const entry of unfinished.filter((e) => e.review === "checking")) {
-          await deleteSticker(ctx, entry);
-          await ctx.db.patch("loreEntries", entry._id, {
-            review: "dropped", droppedBy: "run stopped", stickerFile: undefined, checkNotes: [...entry.checkNotes, "The run stopped before it finished."],
-          });
-        }
+        // Refused if the place has moved on to another run: a stale report changes nothing.
+        await lorePlace.send(ctx, row._id, { type: "RUN_FAILED", run, error });
+      } else if (row.attempts === run && row.state.kind === "researching") {
+        await lorePlace.send(ctx, row._id, { type: "RUN_FAILED", run, error: "The run finished without publishing." });
       }
-      await ctx.scheduler.runAfter(0, internal.lore.cleanUpRun, { osmId, run });
+      const after = (await ctx.db.get("lorePlaces", row._id))!;
+      if (after.attempts === run && after.state.kind !== "queued" && after.state.kind !== "researching") {
+        await ctx.db.insert("loreJournals", { osmId, run, workflowId, until: Date.now() + journalKeep });
+        await ctx.scheduler.runAfter(0, internal.lore.cleanUpRun, { osmId, run });
+      }
     }
     await startQueued(ctx);
     return null;
@@ -488,38 +510,54 @@ export const cleanUpRun = internalMutation({
 });
 
 /**
- * Hourly (crons.ts): quiet and failed places due another look go back on the queue,
- * places a walk queued that haven't started in `queueExpiry` leave it, holds on calls
- * that never came back are kept as spent, old journals and request records go, and
- * anything a cap held starts once the day or month rolls over.
+ * Hourly (crons.ts): holds on calls that never came back are kept as spent, old
+ * journals and request records go, and anything a cap held starts once the day or
+ * month rolls over. The retries and the queue's expiry are the machine's own timers.
  */
 export const tick = internalMutation({
   args: {}, returns: v.null(),
   handler: async (ctx) => {
     const now = Date.now();
-    if (autoOn()) {
-      const due = await ctx.db.query("lorePlaces").withIndex("by_retry", (q) => q.gte("retryAt", 0).lte("retryAt", now)).collect();
-      for (const row of due) await queue(ctx, row.osmId, row.name);
-    }
-    const waited = await ctx.db.query("lorePlaces").withIndex("by_status", (q) => q.eq("status", "queued").lt("queuedAt", now - queueExpiry)).collect();
-    for (const row of waited.filter((r) => !r.manual)) {
-      // Never researched: it's as if nobody had walked there, so the next walk can queue it.
-      if (row.attempts === 0) await ctx.db.delete("lorePlaces", row._id);
-      else await ctx.db.patch("lorePlaces", row._id, { status: row.requeuedFrom ?? "failed", requeuedFrom: undefined, requestedBy: undefined, held: undefined });
-    }
     await releaseStale(ctx);
-    const journals = await ctx.db.query("lorePlaces").withIndex("by_journal", (q) => q.gte("journalUntil", 0).lte("journalUntil", now)).take(50);
-    for (const row of journals) {
-      if (row.status === "queued" || row.status === "researching") continue;
-      if (row.workflowId) await workflow.cleanup(ctx, row.workflowId as never);
-      await ctx.db.patch("lorePlaces", row._id, { workflowId: undefined, journalUntil: undefined });
+    for (const journal of await ctx.db.query("loreJournals").withIndex("by_until", (q) => q.lte("until", now)).take(50)) {
+      const place = await placeRow(ctx, journal.osmId);
+      // A place on its way to a run: a resume may need it, and a new run deletes it anyway.
+      if (place?.state.kind === "queued" || place?.state.kind === "researching") continue;
+      await workflow.cleanup(ctx, journal.workflowId as never);
+      await ctx.db.delete("loreJournals", journal._id);
     }
     // The per-person limits only look back a month.
     for (const old of await ctx.db.query("loreRequests").withIndex("by_at", (q) => q.lt("at", now - 62 * day)).take(200)) {
       await ctx.db.delete("loreRequests", old._id);
     }
+    await machines.pruneHistory(ctx, { before: now - historyKeep });
+    // In its own transaction: it reads Convex's record of scheduled functions.
+    await ctx.scheduler.runAfter(0, internal.lore.checkTimers, {});
     await startQueued(ctx);
     return null;
+  },
+});
+
+/** The machines' history (lore:history) is kept this long. */
+const historyKeep = 180 * day;
+
+/** Logs any of the machines' timers whose step threw, which stay pending until machines:rearmTimer. */
+export const checkTimers = internalMutation({
+  args: {}, returns: v.number(),
+  handler: async (ctx) => {
+    const failed = await machines.failedTimers(ctx, { limit: 20 });
+    if (failed.length > 0) console.error(`lore: ${failed.length} machine timers failed. npx convex run machines:failedTimers`, failed);
+    return failed.length;
+  },
+});
+
+/** Forgets whose walk queued places that haven't finished, for account deletion. Returns how many it went through. */
+export const forgetRequester = internalMutation({
+  args: { userId: v.id("users"), limit: v.number() }, returns: v.number(),
+  handler: async (ctx, { userId, limit }) => {
+    const rows = await ctx.db.query("lorePlaces").withIndex("by_requester", (q) => q.eq("state.requestedBy", userId)).take(limit);
+    for (const row of rows) await lorePlace.send(ctx, row._id, { type: "FORGET_REQUESTER" });
+    return rows.length;
   },
 });
 
@@ -542,13 +580,20 @@ export const queueManual = internalMutation({
   handler: async (ctx, { osmId }) => {
     if (!Number.isSafeInteger(osmId) || osmId <= 0) throw new ConvexError("Invalid OSM relation id");
     const row = await placeRow(ctx, osmId);
-    if (row?.status === "researching") return "already researching";
+    if (row?.state.kind === "researching") return "already researching";
     await queue(ctx, osmId, row?.name ?? "", { manual: true });
-    const started = await startQueued(ctx);
-    const after = await placeRow(ctx, osmId);
-    return started > 0 && after?.status === "researching" ? "started" : `queued${after?.held ? ` (held by the ${after.held})` : ""}`;
+    return queueAnswer(await startQueued(ctx), osmId, "started");
   },
 });
+
+/** What lore:research and lore:resume say about the place they queued. */
+function queueAnswer(pass: QueuePass, osmId: number, started: string) {
+  if (pass.started.includes(osmId)) return started;
+  const failed = pass.failed.get(osmId);
+  if (failed) return failed;
+  const held = pass.held.get(osmId);
+  return `queued${held ? ` (held by the ${held})` : ""}`;
+}
 
 /** Whether a run's journal has a step called `name`, the way restart looks for it. */
 async function hasStep(ctx: MutationCtx, workflowId: string, name: string): Promise<boolean> {
@@ -576,23 +621,15 @@ export const resume = internalMutation({
   returns: v.string(),
   handler: async (ctx, { osmId, from }) => {
     const row = await placeRow(ctx, osmId);
-    if (row === null || row.status === "researching" || row.status === "queued") {
-      throw new ConvexError("Only a finished run can be resumed");
-    }
-    if (row.workflowId === undefined) throw new ConvexError("This run's journal has been deleted, so it can't be resumed. Start a new run with lore:research.");
+    const finished = ["ready", "quiet", "failed", "quietWaiting", "failedWaiting"];
+    if (row === null || !finished.includes(row.state.kind)) throw new ConvexError("Only a finished run can be resumed");
+    const journal = await journalOf(ctx, row);
+    if (journal === null) throw new ConvexError("This run's journal has been deleted, so it can't be resumed. Start a new run with lore:research.");
     // Checked now, so a typo is an error here rather than a failed restart in the queue.
-    if (!await hasStep(ctx, row.workflowId, from)) throw new ConvexError(`This run's journal has no step called "${from}"`);
-    const unfinished = await ctx.db.query("loreEntries").withIndex("by_osm_run", (q) => q.eq("osmId", osmId).eq("run", row.attempts)).collect();
-    for (const entry of unfinished.filter((e) => e.review === "dropped" && notTheirFault.includes(e.droppedBy ?? ""))) {
-      await ctx.db.patch("loreEntries", entry._id, { review: "checking", droppedBy: undefined, checkNotes: [...entry.checkNotes, `Brought back by lore:resume from ${from}.`] });
-    }
-    await ctx.db.patch("lorePlaces", row._id, {
-      status: "queued", queuedAt: Date.now(), resumeFrom: from, manual: true, requeuedFrom: row.status,
-      held: undefined, error: undefined, retryAt: undefined,
-    });
-    await startQueued(ctx);
-    const after = await placeRow(ctx, osmId);
-    return after?.status === "researching" ? "resumed" : `queued${after?.held ? ` (held by the ${after.held})` : ""}`;
+    if (!await hasStep(ctx, journal.workflowId, from)) throw new ConvexError(`This run's journal has no step called "${from}"`);
+    const result = await lorePlace.send(ctx, row._id, { type: "RESUME", from });
+    if (result.status !== "done") throw new ConvexError(result.reasons.join(" "));
+    return queueAnswer(await startQueued(ctx), osmId, "resumed");
   },
 });
 
@@ -642,7 +679,7 @@ async function forReview(ctx: QueryCtx, entry: Doc<"loreEntries">) {
   return {
     entryId: entry.entryId, osmId: entry.osmId, suburb: entry.suburb, title: entry.title, body: entry.body, category: entry.category,
     ...(entry.place ? { place: entry.place } : {}), sources: entry.sources, sensitive: entry.sensitive,
-    review: entry.review, ...(entry.droppedBy ? { droppedBy: entry.droppedBy } : {}), checkNotes: entry.checkNotes,
+    review: entry.state.kind, ...(entry.state.kind === "dropped" ? { droppedBy: entry.state.by } : {}), checkNotes: entry.checkNotes,
     claims: entry.claims.map(({ text, url, quote, found }) => ({ text, url, quote, ...(found === undefined ? {} : { found }) })),
     stickerUrl: entry.stickerFile ? await ctx.storage.getUrl(entry.stickerFile) : null,
   };
@@ -652,7 +689,7 @@ async function forReview(ctx: QueryCtx, entry: Doc<"loreEntries">) {
 export const pending = internalQuery({
   args: {}, returns: v.array(vReviewEntry),
   handler: async (ctx) => {
-    const rows = await ctx.db.query("loreEntries").withIndex("by_review", (q) => q.eq("review", "pending")).collect();
+    const rows = await ctx.db.query("loreEntries").withIndex("by_review", (q) => q.eq("state.kind", "pending")).collect();
     return await Promise.all(rows.map((entry) => forReview(ctx, entry)));
   },
 });
@@ -667,17 +704,13 @@ export const entries = internalQuery({
   },
 });
 
+/** Mike's review of one secret: APPROVE or HIDE. One that's already there is left be. */
 async function setReview(ctx: MutationCtx, entryId: string, review: "approved" | "hidden") {
   const entry = await ctx.db.query("loreEntries").withIndex("by_entry", (q) => q.eq("entryId", entryId)).unique();
   if (entry === null) throw new ConvexError("No secret with that id");
-  if (entry.review === "checking" || entry.review === "dropped") throw new ConvexError(`That secret is ${entry.review}, not up for review`);
-  if (entry.review !== review) {
-    // A hidden secret's art goes too. Approved again later, it shows a plain badge until
-    // lore:resume from "stickers" draws it again.
-    if (review === "hidden") await deleteSticker(ctx, entry);
-    await ctx.db.patch("loreEntries", entry._id, { review, ...(review === "hidden" ? { stickerFile: undefined } : {}) });
-    await bumpVersion(ctx, entry.osmId);
-  }
+  if (entry.state.kind === review) return null;
+  const result = await loreEntry.send(ctx, entry._id, { type: review === "approved" ? "APPROVE" : "HIDE" });
+  if (result.status !== "done") throw new ConvexError(`That secret is ${entry.state.kind}, not up for review`);
   return null;
 }
 
@@ -715,26 +748,30 @@ export const adminPending = query({
   args: {}, returns: v.union(v.null(), v.array(vReviewEntry)),
   handler: async (ctx) => {
     if (!await isAdmin(ctx)) return null;
-    const rows = await ctx.db.query("loreEntries").withIndex("by_review", (q) => q.eq("review", "pending")).collect();
+    const rows = await ctx.db.query("loreEntries").withIndex("by_review", (q) => q.eq("state.kind", "pending")).collect();
     return await Promise.all(rows.map((entry) => forReview(ctx, entry)));
   },
 });
 
+// The admin check asks the feedback component, which a machine's guard can't, so it
+// happens here, and the review itself is lore:approve or lore:hide, which send the
+// machine's server events.
+
 /** lore:approve, for the admin from the app. */
 export const adminApprove = mutation({
   args: { entryId: v.string() }, returns: v.null(),
-  handler: async (ctx, { entryId }) => {
+  handler: async (ctx, { entryId }): Promise<null> => {
     await requireAdmin(ctx);
-    return await setReview(ctx, entryId, "approved");
+    return await ctx.runMutation(internal.lore.approve, { entryId });
   },
 });
 
 /** lore:hide, for the admin from the app. */
 export const adminHide = mutation({
   args: { entryId: v.string() }, returns: v.null(),
-  handler: async (ctx, { entryId }) => {
+  handler: async (ctx, { entryId }): Promise<null> => {
     await requireAdmin(ctx);
-    return await setReview(ctx, entryId, "hidden");
+    return await ctx.runMutation(internal.lore.hide, { entryId });
   },
 });
 
@@ -747,24 +784,70 @@ export const status = internalQuery({
     places: v.array(v.object({
       osmId: v.number(), name: v.string(), status: v.string(), attempts: v.number(), cost: v.number(), runCost: v.number(),
       held: v.optional(v.string()), error: v.optional(v.string()), startedAt: v.optional(v.number()), finishedAt: v.optional(v.number()),
-      live: v.number(), pending: v.number(),
+      retryAt: v.optional(v.number()), live: v.number(), pending: v.number(),
     })),
   }),
   handler: async (ctx) => {
     const today = dayKey(Date.now());
     const rows = await ctx.db.query("lorePlaces").collect();
+    // What the queue would do now, without starting anything.
+    const { held } = await passQueue(ctx);
     return {
       today: await spentBetween(ctx, today, today),
       month: await spentBetween(ctx, ...monthOf(today)),
       auto: autoOn(),
-      places: await Promise.all(rows.map(async (row) => ({
-        osmId: row.osmId, name: row.name, status: row.status, attempts: row.attempts, cost: row.cost, runCost: row.runCost,
-        ...(row.held ? { held: row.held } : {}), ...(row.error ? { error: row.error } : {}),
-        ...(row.startedAt ? { startedAt: row.startedAt } : {}), ...(row.finishedAt ? { finishedAt: row.finishedAt } : {}),
-        live: (await withReview(ctx, row.osmId, "auto")).length + (await withReview(ctx, row.osmId, "approved")).length,
-        pending: (await withReview(ctx, row.osmId, "pending")).length,
-      }))),
+      places: await Promise.all(rows.map(async (row) => {
+        const state = row.state;
+        const why = held.get(row.osmId);
+        return {
+          osmId: row.osmId, name: row.name, status: state.kind, attempts: row.attempts, cost: row.cost, runCost: row.runCost,
+          ...(why ? { held: why } : {}), ...("error" in state ? { error: state.error } : {}),
+          ...("startedAt" in state ? { startedAt: state.startedAt } : {}),
+          ...("finishedAt" in state ? { finishedAt: state.finishedAt } : {}),
+          ...("retryAt" in state ? { retryAt: state.retryAt } : {}),
+          live: (await withReview(ctx, row.osmId, "auto")).length + (await withReview(ctx, row.osmId, "approved")).length,
+          pending: (await withReview(ctx, row.osmId, "pending")).length,
+        };
+      })),
     };
   },
 });
 
+/** How many places and secrets are in each state, and any timers that failed.
+ * `npx convex run lore:machines` */
+const machineCounts = internalQuery({
+  args: {},
+  returns: v.object({
+    places: v.record(v.string(), v.number()),
+    entries: v.record(v.string(), v.number()),
+    failedTimers: v.array(v.object({ machine: v.string(), id: v.string(), event: v.string(), dueAt: v.number() })),
+  }),
+  handler: async (ctx) => {
+    const count = (rows: { state: { kind: string } }[]) => {
+      const counts: Record<string, number> = {};
+      for (const row of rows) counts[row.state.kind] = (counts[row.state.kind] ?? 0) + 1;
+      return counts;
+    };
+    return {
+      places: count(await ctx.db.query("lorePlaces").collect()),
+      entries: count(await ctx.db.query("loreEntries").collect()),
+      failedTimers: await machines.failedTimers(ctx, { limit: 50 }),
+    };
+  },
+});
+
+// Named `machines` for `npx convex run`; the catalog has that name in this file.
+export { machineCounts as machines };
+
+/** A place's research, step by step, from the machine's history: every event, who sent
+ * it, and why one was refused. `npx convex run lore:history '{"osmId": 11688696}'` */
+export const history = internalQuery({
+  args: { osmId: v.number(), paginationOpts: v.optional(paginationOptsValidator) },
+  returns: v.object({ page: vHistory, isDone: v.boolean(), continueCursor: v.string() }),
+  handler: async (ctx, { osmId, paginationOpts }) => {
+    const row = await placeRow(ctx, osmId);
+    if (row === null) throw new ConvexError("No lore place with that OSM relation");
+    const { page, isDone, continueCursor } = await lorePlace.history(ctx, row._id, { paginationOpts: paginationOpts ?? { numItems: 200, cursor: null } });
+    return { page, isDone, continueCursor };
+  },
+});

@@ -7,7 +7,8 @@ const crons = cronJobs();
 crons.interval("resume account deletions", { hours: 1 }, internal.accountDeletion.resumeStalled, {});
 
 // Secrets research held by a spending cap starts once the day or month rolls over, and
-// quiet or failed places that are due go back on the queue (only with LORE_AUTO on).
+// places a retry put back on the queue start. The retries themselves are the research
+// machine's timers (loreMachines.ts).
 crons.interval("start held secrets research", { hours: 1 }, internal.lore.tick, {});
 
 export default crons;

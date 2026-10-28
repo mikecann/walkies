@@ -114,11 +114,8 @@ const SWEEPS: Record<PersonalTable | "loreQueue" | "chefRequests", Sweep> = {
   loreCalls: plain("loreCalls"),
   loreRequests: plain("loreRequests"),
   // A suburb their walk queued stays queued (it's everyone's), but forgets who asked.
-  loreQueue: async (ctx, userId, budget) => {
-    const rows = await ctx.db.query("lorePlaces").withIndex("by_requester", (q) => q.eq("requestedBy", userId)).take(budget);
-    for (const row of rows) await ctx.db.patch(row._id, { requestedBy: undefined });
-    return rows.length;
-  },
+  // Who asked is the research machine's state, so the machine forgets it (lore.ts).
+  loreQueue: async (ctx, userId, budget) => await ctx.runMutation(internal.lore.forgetRequester, { userId, limit: budget }),
   // Chef: their feature requests, with screenshots, voice notes, votes on them and
   // notifications (the feedback component's items.remove). Counts requests, not rows.
   // Their votes on other people's requests and Chef's own row for them stay, since the
@@ -164,7 +161,7 @@ async function anythingLeft(ctx: MutationCtx, userId: UserId): Promise<boolean> 
     if ((await firstRows(ctx, table, userId, 1)).length > 0) return true;
   }
   if (await ctx.db.query("teams").withIndex("by_creator", (q) => q.eq("createdBy", userId)).first()) return true;
-  if (await ctx.db.query("lorePlaces").withIndex("by_requester", (q) => q.eq("requestedBy", userId)).first()) return true;
+  if (await ctx.db.query("lorePlaces").withIndex("by_requester", (q) => q.eq("state.requestedBy", userId)).first()) return true;
   return (await ctx.runQuery(components.feedback.items.listByCreator, { userId, limit: 1 })).length > 0;
 }
 
