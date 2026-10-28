@@ -155,7 +155,9 @@ class AlwaysOnTracking(
             // The you-are-here dot, and walks you started yourself.
             onScreen || walk == WalkState.Walking -> GpsMode.High
             !alwaysOn -> GpsMode.Off
-            awake -> GpsMode.High
+            // Not in a car or on a bike: every fix on the road is outside the fence and
+            // wakes it again, which kept the GPS flat out for whole drives.
+            awake && !onWheels -> GpsMode.High
             // Sitting still: the motion chip says when you're off again. A pending walk
             // ends by itself after the gap.
             motionKnown && still -> GpsMode.Off
