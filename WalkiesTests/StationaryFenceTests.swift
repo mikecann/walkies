@@ -33,6 +33,14 @@ struct StationaryFenceTests {
         #expect(fence.center == north(805))
     }
 
+    @Test func saysWhenYouSettleBackWhereTheFenceAlreadyIs() {
+        var fence = StationaryFence(center: home)
+        #expect(fence.add(north(10), time: 0, accuracy: 10, stationary: true, walking: false) == nil)
+        #expect(fence.settledInPlace)
+        #expect(fence.add(north(15), time: 10, accuracy: 10, stationary: false, walking: true) == nil)
+        #expect(!fence.settledInPlace)
+    }
+
     @Test func movesAsSoonAsIOSSaysYouHaveStopped() {
         var fence = StationaryFence(center: home)
         #expect(fence.add(north(800), time: 0, accuracy: 10, stationary: true, walking: true) == north(800))

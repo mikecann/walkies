@@ -281,6 +281,25 @@ class AlwaysOnTrackingTest {
     }
 
     @Test
+    fun comingHomeAfterAWalkGoesBackToALightWatch() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        t.leftFence()
+        now += AlwaysOnTracking.WAKE_TIME + 1
+        t.fix(fix(east(500.0)))
+        assertEquals(GpsMode.High, gps.mode)
+        // Back home, within a few metres of where the fence already is, for a couple of minutes.
+        t.fix(fix(east(10.0)))
+        now += StationaryFence.SETTLE_TIME
+        t.fix(fix(east(12.0)))
+        assertEquals(home, t.fenceCenter)
+        assertEquals(GpsMode.Off, gps.mode)
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        assertEquals(GpsMode.Low, gps.mode)
+    }
+
+    @Test
     fun drivingAwayFromTheFenceKeepsALightWatch() {
         val t = tracking(home)
         t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)

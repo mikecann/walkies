@@ -210,7 +210,14 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         // Not a cached fix from wherever you were when updates started.
         guard stationary || location.timestamp.timeIntervalSinceNow > -10 else { return }
         let point = Coordinate(location.coordinate)
-        guard let center = fence.add(point, time: location.timestamp.timeIntervalSince1970, accuracy: location.horizontalAccuracy, stationary: stationary, walking: isWalking()) else { return }
+        guard let center = fence.add(point, time: location.timestamp.timeIntervalSince1970, accuracy: location.horizontalAccuracy, stationary: stationary, walking: isWalking()) else {
+            // Back where you were (home after a walk, say): inside again, though the fence stays put.
+            if fence.settledInPlace, outside {
+                outside = false
+                refreshWatch()
+            }
+            return
+        }
         outside = false
         geofence.place(around: center, radius: StationaryFence.radius)
         refreshWatch()

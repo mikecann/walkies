@@ -126,7 +126,11 @@ class AlwaysOnTracking(
 
     private fun settle(point: TrackPoint, time: Double) {
         val center = fence.add(point.coordinate, time, point.accuracy, stationary = motion.known && motion.still, walking = walk != WalkState.None)
-            ?: return
+        if (center == null) {
+            // Back where you were (home after a walk, say): inside again, though the fence stays put.
+            if (fence.settledInPlace) outside = false
+            return
+        }
         outside = false
         geofence.place(center, StationaryFence.RADIUS)
         onFenceMoved(center)
