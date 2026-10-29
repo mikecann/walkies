@@ -26,3 +26,7 @@
 -dontwarn org.bouncycastle.**
 -dontwarn org.openjsse.**
 -dontwarn org.slf4j.**
+
+# Walkies' own class and method names stay readable in Sentry crash reports, since no
+# R8 mapping file is uploaded there. Shrinking and optimising still happen.
+-keepnames class com.mikecann.walkies.** { *; }

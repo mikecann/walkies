@@ -23,6 +23,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // First, so a crash anywhere in launch is reported. Does nothing outside Release on a phone.
+        CrashReporting.start()
         model.makePlaceClient = { [weak account] in await account?.client() }
         model.requestSync = { [weak self] in self?.sync.schedule() }
         // Chef (Seth's feedback board): opened from Settings rather than floating over the map.

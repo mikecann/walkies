@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A1B2C3D40000000000000302 /* ChefKit in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D40000000000000301 /* ChefKit */; };
+		A1B2C3D40000000000000305 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D40000000000000304 /* Sentry */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -46,6 +47,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1B2C3D40000000000000302 /* ChefKit in Frameworks */,
+				A1B2C3D40000000000000305 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -108,6 +110,7 @@
 			name = Walkies;
 			packageProductDependencies = (
 				A1B2C3D40000000000000301 /* ChefKit */,
+				A1B2C3D40000000000000304 /* Sentry */,
 			);
 			productName = Walkies;
 			productReference = A1B2C3D40000000000000020 /* Walkies.app */;
@@ -166,6 +169,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A1B2C3D40000000000000300 /* XCRemoteSwiftPackageReference "chef-cloud" */,
+				A1B2C3D40000000000000303 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A1B2C3D40000000000000051 /* Products */;
@@ -409,6 +413,14 @@
 				revision = 7f3eb9a40621d52ee2408f7fb9e48069ec07982e;
 			};
 		};
+		A1B2C3D40000000000000303 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.31.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -416,6 +428,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A1B2C3D40000000000000300 /* XCRemoteSwiftPackageReference "chef-cloud" */;
 			productName = ChefKit;
+		};
+		A1B2C3D40000000000000304 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D40000000000000303 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
 		};
 /* End XCSwiftPackageProductDependency section */
 

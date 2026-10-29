@@ -3,7 +3,9 @@
 <!-- Walkies' privacy manifest. Keep it in step with docs/runbooks/app-privacy-answers.md
      and the website's /privacy page (web/src/privacy.html). Walkies (and ChefKit, which is
      built into the app) only use UserDefaults from Apple's required-reason APIs, for the
-     app's own settings. No tracking, no tracking domains. -->
+     app's own settings. No tracking, no tracking domains. Sentry (crash reports, Release
+     builds only) ships its own privacy manifest for the APIs it uses; its Crash Data is
+     declared here, not linked to the user. -->
 <plist version="1.0">
 <dict>
 	<key>NSPrivacyAccessedAPITypes</key>
@@ -120,6 +122,18 @@
 			<string>NSPrivacyCollectedDataTypeOtherUserContent</string>
 			<key>NSPrivacyCollectedDataTypeLinked</key>
 			<true/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeCrashData</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
 			<key>NSPrivacyCollectedDataTypePurposes</key>
 			<array>
 				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>

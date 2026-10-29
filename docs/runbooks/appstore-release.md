@@ -62,6 +62,8 @@ It lists age rating questions it can't answer as "still unanswered". Answer thos
 
 Click through `docs/runbooks/app-privacy-answers.md` in App Store Connect > App Privacy, then **Publish**.
 
+**The first build with Sentry (after 1.0.0):** before submitting it, add **Diagnostics > Crash Data** in App Privacy (App Functionality, not linked to the user, not used for tracking), publish, and run `npm run web:upload:prod` so `/privacy` says crash reports go to Sentry. 1.0.0's label says no diagnostics leave the phone, which stops being true with that build.
+
 ## 6. Screenshots
 
 The App Store needs the **6.9-inch iPhone** size, **1320 × 2868** (portrait). Smaller iPhone sizes are scaled from it. They come from **sample data only** (`Walkies/Services/ScreenshotMode.swift`): a made-up explorer called Sam a few weeks into Fremantle, who's also had a long weekend in Busselton, built from `appstore/sample/*.json`. Never anyone's real walks.

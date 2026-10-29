@@ -1,5 +1,5 @@
 {
-  "originHash" : "3009478bf4c6b7865bc12efe3da929918515ac21fa17e8a38088bfc923941475",
+  "originHash" : "f7f42f18d1c836d11a02bd8eafc7a88ec9030ba4bc8b3786a213293faf741af2",
   "pins" : [
     {
       "identity" : "chef-cloud",
@@ -16,6 +16,15 @@
       "state" : {
         "revision" : "125b71b2f8725931a5b0e8252f0799ef2adad120",
         "version" : "0.8.1"
+      }
+    },
+    {
+      "identity" : "sentry-cocoa",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/getsentry/sentry-cocoa",
+      "state" : {
+        "revision" : "2f64c77f77514acd01780d1aac86ae75b7fccd04",
+        "version" : "9.31.0"
       }
     }
   ],
