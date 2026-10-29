@@ -120,6 +120,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     // Google sign-in runs in a Custom Tab.
     implementation(libs.androidx.browser)
+    // Crash and error reports, started by CrashReporting on release builds only.
+    implementation(libs.sentry.android)
     testImplementation(libs.junit)
 }
 

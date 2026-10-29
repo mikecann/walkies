@@ -20,7 +20,7 @@ export const GITHUB_URL = "https://github.com/mikecann/walkies";
 export const SUPPORT_EMAIL = "walkies@mikecann.app";
 
 /** The privacy policy's date. Change it whenever the policy changes. */
-export const PRIVACY_UPDATED = "23 October 2026";
+export const PRIVACY_UPDATED = "29 October 2026";
 
 /**
  * The promo video, unlisted on Mike's YouTube channel. It sits under the home page's hero

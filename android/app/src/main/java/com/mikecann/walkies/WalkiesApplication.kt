@@ -84,6 +84,8 @@ class WalkiesApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // First, so a crash anywhere in startup is reported. Does nothing on debug builds.
+        CrashReporting.start(this)
         tracker = LocationTracker(this)
         prefs = Prefs(this)
         motion = ActivityMotion()

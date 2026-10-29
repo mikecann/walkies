@@ -158,6 +158,7 @@ The screenshots come from a Debug-only screenshot mode (`-WalkiesScreen <screen>
 - `Walkies/Services/` talks to OpenStreetMap (`OSMClient`), builds a city's tiles (`CityBuilder`), runs GPS (`LocationTracker`) and saves files (`Store`).
 - `Walkies/Services/Account.swift` is Apple and Google sign-in and the session (Keychain, token refresh), `Sync.swift` is the sync engine, and `Convex.swift` calls Convex over its HTTP API.
 - `convex/` is the backend: auth, schema and sync functions.
+- `Walkies/Services/CrashReporting.swift` (`CrashReporting.kt` on Android) sends crashes and errors to Sentry (org `mikec`, project `walkies`, tagged `component: ios` or `android`). Only Release builds on a real phone start it, never Debug, the simulator, the emulator or tests, and reports carry no location, user or device ID.
 - `Walkies/AppModel.swift` ties it together: GPS fixes in, tiles uncovered, saved every 30 seconds.
 - `Walkies/Views/` is SwiftUI, apart from `FogMapView`, which wraps `MKMapView`, and `Clouds.swift`, a custom MapKit overlay renderer. It draws a soft cloud sprite over every unwalked hex (all the grey undersides first, then all the white tops, so they merge into one blanket), cuts soft holes over walked hexes, and dots the hidden streets on top. The sprites are drawn in code at launch.
 - The app icon and the Start walk and Secrets icons were drawn by Gemini 3 Pro Image. The concepts and their prompts are in `design/app-icon/`; the icon is `icon-badge`.

@@ -11,6 +11,7 @@ browser = "1.9.0"
 playServicesLocation = "21.3.0"
 playServicesFitness = "21.3.0"
 junit = "4.13.2"
+sentry = "8.62.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -27,6 +28,7 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 androidx-browser = { group = "androidx.browser", name = "browser", version.ref = "browser" }
 play-services-fitness = { group = "com.google.android.gms", name = "play-services-fitness", version.ref = "playServicesFitness" }
 play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "playServicesLocation" }
+sentry-android = { group = "io.sentry", name = "sentry-android", version.ref = "sentry" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]

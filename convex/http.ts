@@ -93,7 +93,7 @@ a { color: #c9573b; }
 const FALLBACK: Record<string, string> = {
   "/privacy": fallbackPage("Privacy · Walkies", `<h1>Walkies' privacy policy</h1>
 <p>Walkies keeps your name and email from Sign in with Apple or Google (and your photo if you use Google), the places you add, your walks (GPS points, times and steps), the tiles, secrets and shells you've collected, the teams you're in, and anything you send with Suggest a feature. It's kept on your phone and backed up to your account on Convex, in Sydney (aws-ap-southeast-2).</p>
-<p>The app also talks to Apple Maps for the satellite map, OpenStreetMap's Nominatim and Overpass for suburb outlines and streets, and Apple and Google for signing in. People in a team with you see your name, colour and Google photo, but not your walks. There's no ads or analytics, and nothing is sold.</p>
+<p>The app also talks to Apple Maps for the satellite map, OpenStreetMap's Nominatim and Overpass for suburb outlines and streets, and Apple and Google for signing in. People in a team with you see your name, colour and Google photo, but not your walks. There's no ads or analytics, and nothing is sold. Crash and error reports go to Sentry with no location or account in them.</p>
 <p>To delete your account and everything in it, go to Settings in the app and tap Delete account, or email <a href="mailto:walkies@mikecann.app">walkies@mikecann.app</a>.</p>`),
   "/support": fallbackPage("Help · Walkies", `<h1>Help with Walkies</h1>
 <p>Email <a href="mailto:walkies@mikecann.app">walkies@mikecann.app</a>, or tap Suggest a feature in the app's Settings.</p>`),
