@@ -29,6 +29,8 @@ keyPassword=…
 
 Without that file the build still works and comes out unsigned (`app/build/outputs/apk/release/app-release-unsigned.apk`). Keep the keystore safe: updates to Dad's phone have to be signed with the same key. The keep rules for R8 are in `app/proguard-rules.pro`.
 
+A signed `assembleRelease` also uploads R8's mapping to Sentry, so crash reports show real names. It needs `sentry-cli` (on PATH or in `~/.local/bin`) and a token in `SENTRY_AUTH_TOKEN` or `~/.config/sentry/token`; without them it says so and carries on.
+
 The first build downloads Nunito (the rounded heading font) into `app/src/main/assets/fonts/`. Commit it so builds don't need to fetch it again.
 
 ## Where things are
