@@ -95,3 +95,17 @@ xcodebuild -exportArchive -archivePath "$ARCHIVE" -exportPath "$OUT/upload" \
   -exportOptionsPlist "$(export_options upload)" "${auth[@]}" 2>&1 | tee "$OUT/upload.log" \
   | grep -E "error|Upload succeeded|EXPORT SUCCEEDED|EXPORT FAILED|Uploaded"
 echo "Uploaded Walkies $VERSION ($BUILD). It shows up under TestFlight once App Store Connect has processed it."
+
+# Sentry needs the archive's dSYMs to show function names in the App Store build's crash reports
+# (CrashReporting.swift). Only an uploaded build ships, so only then. Never fails the script: no
+# sentry-cli or token skips it, a failed upload warns.
+SENTRY_CLI=$(command -v sentry-cli || true)
+[[ -z "$SENTRY_CLI" && -x "$HOME/.local/bin/sentry-cli" ]] && SENTRY_CLI="$HOME/.local/bin/sentry-cli"
+SENTRY_TOKEN=${SENTRY_AUTH_TOKEN:-}
+[[ -z "$SENTRY_TOKEN" && -r "$HOME/.config/sentry/token" ]] && SENTRY_TOKEN=$(tr -d '[:space:]' < "$HOME/.config/sentry/token")
+if [[ -z "$SENTRY_CLI" || -z "$SENTRY_TOKEN" ]]; then
+  echo "Debug symbols not uploaded to Sentry (no sentry-cli or no token); they're in $ARCHIVE/dSYMs"
+elif ! SENTRY_AUTH_TOKEN="$SENTRY_TOKEN" "$SENTRY_CLI" debug-files upload --org mikec --project walkies "$ARCHIVE/dSYMs" \
+  > "$OUT/sentry-dsyms.log" 2>&1; then
+  echo "WARNING: debug symbols weren't uploaded to Sentry, see $OUT/sentry-dsyms.log (carrying on)" >&2
+fi

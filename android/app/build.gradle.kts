@@ -1,5 +1,6 @@
 import java.net.URI
 import java.util.Properties
+import java.util.UUID
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -25,6 +26,13 @@ val keystoreProperties = Properties().apply {
     rootProject.file("keystore.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
 }
 val hasReleaseKey = listOf("storeFile", "storePassword", "keyAlias", "keyPassword").all { !keystoreProperties.getProperty(it).isNullOrBlank() }
+
+/**
+ * Ties a release build to its R8 mapping in Sentry, so crash reports show real class and method
+ * names. Each Gradle run gets a new id: the release manifest carries it (src/release, read when
+ * CrashReporting starts Sentry) and uploadProguardMapping sends the mapping under it.
+ */
+val sentryProguardUuid = UUID.randomUUID().toString()
 
 /** The iPhone app and the shared fixtures, so iOS stays the single source of truth. */
 val repoRoot = rootProject.projectDir.parentFile
@@ -72,6 +80,7 @@ android {
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (hasReleaseKey) signingConfig = signingConfigs.getByName("release")
+            manifestPlaceholders["sentryProguardUuid"] = sentryProguardUuid
             buildConfigField("String", "CONVEX_CLOUD_URL", "\"https://savory-bee-296.ap-southeast-2.convex.cloud\"")
             buildConfigField("String", "CONVEX_SITE_URL", "\"https://savory-bee-296.ap-southeast-2.convex.site\"")
         }
@@ -200,3 +209,37 @@ val fetchFonts = tasks.register("fetchFonts") {
     }
 }
 tasks.named("preBuild") { dependsOn(fetchFonts) }
+
+/**
+ * Uploads R8's mapping to Sentry (project `walkies`) after a signed `assembleRelease`, the build
+ * that goes on phones; unsigned ones (CI, tests) don't. Never fails the build: no sentry-cli
+ * (PATH or ~/.local/bin) or token (SENTRY_AUTH_TOKEN, else ~/.config/sentry/token) says so in one
+ * line, and a failed upload only warns.
+ */
+fun uploadProguardMapping(mapping: File) {
+    val home = System.getProperty("user.home")
+    val cli = (System.getenv("PATH").orEmpty().split(File.pathSeparator) + "$home/.local/bin")
+        .map { File(it, "sentry-cli") }.firstOrNull { it.canExecute() }
+    val token = System.getenv("SENTRY_AUTH_TOKEN")?.takeIf { it.isNotBlank() }
+        ?: File("$home/.config/sentry/token").takeIf { it.canRead() }?.readText()?.trim()?.takeIf { it.isNotEmpty() }
+    if (cli == null || token == null) {
+        logger.lifecycle("R8 mapping not uploaded to Sentry (no sentry-cli or no token).")
+        return
+    }
+    // Its output comes back through Gradle's log: the daemon's own stdout isn't the console.
+    val (code, output) = runCatching {
+        val process = ProcessBuilder(cli.path, "upload-proguard", "--org", "mikec", "--project", "walkies",
+            "--uuid", sentryProguardUuid, mapping.path)
+            .apply { environment()["SENTRY_AUTH_TOKEN"] = token }
+            .redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().readText()
+        process.waitFor() to output
+    }.getOrElse { 1 to it.toString() }
+    logger.lifecycle(output.trim())
+    if (code != 0) logger.warn("WARNING: the R8 mapping wasn't uploaded to Sentry; crash reports from this build will show shrunk names.")
+}
+
+val releaseMapping = layout.buildDirectory.file("outputs/mapping/release/mapping.txt")
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+    if (hasReleaseKey) doLast { uploadProguardMapping(releaseMapping.get().asFile) }
+}

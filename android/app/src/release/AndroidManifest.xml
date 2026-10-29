@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Which R8 mapping in Sentry decodes this build's crash reports (sentryProguardUuid in
+             build.gradle.kts). Release only: debug builds aren't shrunk and never start Sentry. -->
+        <meta-data
+            android:name="io.sentry.proguard-uuid"
+            android:value="${sentryProguardUuid}" />
+    </application>
+</manifest>
