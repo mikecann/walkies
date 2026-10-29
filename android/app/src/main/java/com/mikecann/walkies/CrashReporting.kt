@@ -8,7 +8,7 @@ import io.sentry.android.core.SentryAndroid
 /**
  * Crash and error reports to Sentry (org `mikec`, project `walkies`), read by Mike's
  * Sentry watcher (CrashReporting.swift on the iPhone). Only release builds on a real
- * phone start it: debug builds, the emulator and the JVM tests never do, so the agents
+ * phone start it: debug builds (fastDebug too), the emulator and the JVM tests never do, so the agents
  * testing Walkies all day don't send anything and every report is a real person's crash.
  * Auto-init is off in the manifest, so this is the only way it starts.
  *
@@ -24,7 +24,9 @@ object CrashReporting {
     // isSendDefaultPii is deprecated in favour of dataCollection, but false is still what it says.
     @Suppress("DEPRECATION")
     fun start(context: Context) {
-        if (BuildConfig.DEBUG || isEmulator) return
+        // The build type, not BuildConfig.DEBUG: -PfastDebug builds aren't debuggable, so
+        // DEBUG is false there, but they're still dev builds for testing on old phones.
+        if (BuildConfig.BUILD_TYPE != "release" || isEmulator) return
         SentryAndroid.init(context) { options ->
             options.dsn = DSN
             options.environment = "production"
