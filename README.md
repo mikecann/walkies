@@ -108,7 +108,7 @@ node scripts/set-oauth-keys.mjs dev ~/Downloads/walkies-oauth.json
 node scripts/set-oauth-keys.mjs prod ~/Downloads/walkies-oauth.json
 ```
 
-What's set up now (2026-10-19): Services ID `com.mikecann.walkies.signin` (shown to people as "Walkies"), Sign in with Apple key `CYUWDZYQ3R`, and Google project `walkies-512104` on mike.cann@gmail.com with the "Walkies (Convex)" web client. Google's consent screen is in Testing, so only listed test users can sign in. To swap the Apple key, make a new one, then run the script with a JSON holding just `appleKeyId` and `appleKeyFile`; it skips anything missing.
+What's set up now (2026-10-19): Services ID `com.mikecann.walkies.signin` (shown to people as "Walkies"), Sign in with Apple key `PSB7VX6ZD6` (it replaced `CYUWDZYQ3R` on 29 Oct 2026, after the old key turned up in agent transcripts), and Google project `walkies-512104` on mike.cann@gmail.com with the "Walkies (Convex)" web client. Google's consent screen is in Testing, so only listed test users can sign in. To swap the Apple key, make a new one, then run the script with a JSON holding just `appleKeyId` and `appleKeyFile`; it skips anything missing.
 
 Signing in with Apple and Google gives the same account when both vouch for the same email (`existingUser` in `convex/users.ts`). Users made twice before that was in place are folded together by `users:mergeDuplicateUsers`, which points the newer one at the older with `mergedInto`; every function finds who's signed in with `currentUserId`, which follows it.
 
