@@ -30,6 +30,7 @@ import type * as machines from "../machines.js";
 import type * as placeData from "../placeData.js";
 import type * as places from "../places.js";
 import type * as progression from "../progression.js";
+import type * as stats from "../stats.js";
 import type * as sync from "../sync.js";
 import type * as teams from "../teams.js";
 import type * as users from "../users.js";
@@ -63,6 +64,7 @@ declare const fullApi: ApiFromModules<{
   placeData: typeof placeData;
   places: typeof places;
   progression: typeof progression;
+  stats: typeof stats;
   sync: typeof sync;
   teams: typeof teams;
   users: typeof users;
