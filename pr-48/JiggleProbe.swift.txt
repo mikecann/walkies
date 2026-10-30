@@ -1,0 +1,306 @@
+import MapKit
+import SwiftUI
+
+// TEMPORARY, not for committing: measures how steadily the clouds' projection follows
+// a camera moving at a perfectly constant speed.
+@MainActor
+final class JiggleProbe: NSObject {
+    static let requested = LaunchArguments.has("-jiggleProbe")
+
+    struct Scenario {
+        let name: String
+        let lat: Double
+        let lon: Double
+        let distance: Double
+        let pitch: Double
+        let heading: Double
+        let realistic: Bool
+    }
+
+    static let scenarios: [Scenario] = {
+        let places: [(String, Double, Double)] = [
+            ("fremantle", -32.0545, 115.7515),
+            ("busselton", -33.6450, 115.3480),
+            ("porlock", 51.2090, -3.5950),
+            ("sf", 37.7694, -122.4460),
+        ]
+        var out: [Scenario] = []
+        for place in places {
+            for distance in [600.0, 2500.0] {
+                out.append(Scenario(name: "\(place.0)_\(Int(distance))_3d", lat: place.1, lon: place.2, distance: distance, pitch: 55, heading: 0, realistic: true))
+            }
+        }
+        return out
+    }()
+
+    private let handle: MapHandle
+    private weak var model: AppModel?
+    init(handle: MapHandle, model: AppModel) { self.handle = handle; self.model = model }
+
+    private var map: MKMapView!
+    private var link: CADisplayLink?
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var step: () -> Bool = { true }
+
+    func run() async {
+        for _ in 0..<240 {
+            if let map = handle.map, map.window != nil, map.bounds.width > 0 { self.map = map; break }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        guard map != nil else { print("WALKIES_JIGGLE no map"); fflush(stdout); return }
+        try? await Task.sleep(for: .seconds(6))
+        if LaunchArguments.has("-panClip") { await panClip(); return }
+        var results: [[String: Any]] = []
+        for scenario in Self.scenarios {
+            results.append(await fly(scenario))
+            write(results)
+        }
+        print("WALKIES_JIGGLE_DONE")
+        fflush(stdout)
+    }
+
+    private func write(_ results: [[String: Any]]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: results, options: [.sortedKeys, .prettyPrinted]) else { return }
+        try? data.write(to: URL.cachesDirectory.appending(path: "jiggle.json"))
+    }
+
+    private func fly(_ s: Scenario) async -> [String: Any] {
+        map.preferredConfiguration = MKHybridMapConfiguration(elevationStyle: s.realistic ? .realistic : .flat)
+        let origin = MKMapPoint(CLLocationCoordinate2D(latitude: s.lat, longitude: s.lon))
+        let perMetre = MKMapPointsPerMeterAtLatitude(s.lat)
+        // A pan of about a sixth of the screen per second at 60 fps.
+        let stepMetres = s.distance / 400
+        func camera(_ i: Int) -> MKMapCamera {
+            let c = MKMapPoint(x: origin.x + Double(i) * stepMetres * perMetre * 0.8, y: origin.y - Double(i) * stepMetres * perMetre * 0.6)
+            return MKMapCamera(lookingAtCenter: c.coordinate, fromDistance: s.distance, pitch: s.pitch, heading: s.heading)
+        }
+        map.camera = camera(0)
+        // Tiles and terrain in.
+        try? await Task.sleep(for: .seconds(8))
+
+        let size = map.bounds.size
+        // Fixed spots on the ground, around where the screen will be mid-flight.
+        let start = Projection(map: map)
+        let midShift = 60.0
+        var ground: [(row: Double, column: Double, point: MKMapPoint)] = []
+        for (row, fy) in [0.3, 0.45, 0.6, 0.75, 0.9].enumerated() {
+            for (column, fx) in [0.15, 0.5, 0.85].enumerated() {
+                let screen = CGPoint(x: fx * size.width, y: fy * size.height)
+                let c = map.convert(screen, toCoordinateFrom: map)
+                guard CLLocationCoordinate2DIsValid(c) else { continue }
+                let p = MKMapPoint(c)
+                _ = start
+                ground.append((Double(row), Double(column), MKMapPoint(x: p.x + midShift * stepMetres * perMetre * 0.8, y: p.y - midShift * stepMetres * perMetre * 0.6)))
+            }
+        }
+
+        var rendered: [[CGPoint]] = []
+        var renderedConvert: [[CGPoint]] = []
+        var measured: [[CGPoint]] = []
+        var direct: [[CGPoint]] = []
+        var fitted: [[CGPoint]] = []
+        var residual: [Double] = []
+        var spots: [[CLLocationCoordinate2D]] = []
+        var distances: [Double] = []
+        var altitudes: [Double] = []
+        var index = 0
+        let frames = 120
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            self.continuation = continuation
+            self.step = { [unowned self] in
+                if index > 0 {
+                    let oldScreen = Projection.spots.map { CGPoint(x: $0.0 * size.width, y: $0.1 * size.height) }
+                    let late = Projection(ground: oldScreen.map { MKMapPoint(self.map.convert($0, toCoordinateFrom: self.map)) }, screen: oldScreen, width: Double(size.width), centre: MKMapPoint(self.map.centerCoordinate))
+                    rendered.append(ground.map { late.point($0.point) })
+                    renderedConvert.append(ground.map { Projection(map: self.map).point($0.point) })
+                }
+                self.map.camera = camera(index)
+                let p = Projection(map: self.map)
+                let a = ground.map { p.point($0.point) }
+                // As it was: fitted to where each spot on the screen found its ground.
+                let oldScreen = Projection.spots.map { CGPoint(x: $0.0 * size.width, y: $0.1 * size.height) }
+                let oldP = Projection(ground: oldScreen.map { MKMapPoint(self.map.convert($0, toCoordinateFrom: self.map)) }, screen: oldScreen, width: Double(size.width), centre: MKMapPoint(self.map.centerCoordinate))
+                fitted.append(ground.map { oldP.point($0.point) })
+                let b = ground.map { self.map.convert($0.point.coordinate, toPointTo: self.map) }
+                measured.append(a)
+                direct.append(b)
+                for (x, y) in zip(a, b) where self.map.bounds.contains(y) { residual.append(hypot(x.x - y.x, x.y - y.y)) }
+                spots.append(Projection.spots.map { self.map.convert(CGPoint(x: $0.0 * size.width, y: $0.1 * size.height), toCoordinateFrom: self.map) })
+                distances.append(self.map.camera.centerCoordinateDistance)
+                altitudes.append(self.map.camera.altitude)
+                index += 1
+                return index >= frames
+            }
+            let link = CADisplayLink(target: self, selector: #selector(tick))
+            link.add(to: .main, forMode: .common)
+            self.link = link
+        }
+
+        func jerk(_ tracks: [[CGPoint]]) -> [String: Any] {
+            var byRow: [Double: [Double]] = [:]
+            guard tracks.count > 2 else { return [:] }
+            for t in 2..<tracks.count {
+                for g in ground.indices {
+                    let (x0, x1, x2) = (tracks[t - 2][g], tracks[t - 1][g], tracks[t][g])
+                    guard map.bounds.contains(x2) else { continue }
+                    byRow[ground[g].row, default: []].append(hypot(x2.x - 2 * x1.x + x0.x, x2.y - 2 * x1.y + x0.y))
+                }
+            }
+            var out: [String: Any] = [:]
+            for (row, values) in byRow {
+                let sorted = values.sorted()
+                out["row\(Int(row))"] = ["n": sorted.count, "p50": r(sorted[sorted.count / 2]), "p90": r(sorted[sorted.count * 9 / 10]), "max": r(sorted.last ?? 0)]
+            }
+            return out
+        }
+        // How far each measuring spot's ground point strays from a straight line per frame.
+        var spotJerk: [Double] = []
+        if spots.count > 2 {
+            for t in 2..<spots.count {
+                for i in spots[t].indices {
+                    let a = MKMapPoint(spots[t - 2][i]), b = MKMapPoint(spots[t - 1][i]), c = MKMapPoint(spots[t][i])
+                    spotJerk.append(hypot(c.x - 2 * b.x + a.x, c.y - 2 * b.y + a.y) / perMetre)
+                }
+            }
+        }
+        let sortedResidual = residual.sorted()
+        let sortedSpots = spotJerk.sorted()
+        let frameShift = stepMetres
+        // A sample track, for looking at by eye.
+        let sample = ground.firstIndex { $0.row == 2 && $0.column == 1 } ?? 0
+        return [
+            "name": s.name,
+            "frames": measured.count,
+            "metresPerFrame": r(frameShift),
+            "cloudsJerk": jerk(measured),
+            "convertJerk": jerk(direct),
+            "oldCloudsJerk": jerk(fitted),
+            "oldAfterRender": jerk(rendered),
+            "newAfterRender": jerk(renderedConvert),
+            "cloudsVsConvert": sortedResidual.isEmpty ? [:] : ["p50": r(sortedResidual[sortedResidual.count / 2]), "p90": r(sortedResidual[sortedResidual.count * 9 / 10]), "max": r(sortedResidual.last ?? 0)],
+            "spotJerkMetres": sortedSpots.isEmpty ? [:] : ["p50": r(sortedSpots[sortedSpots.count / 2]), "p90": r(sortedSpots[sortedSpots.count * 9 / 10]), "max": r(sortedSpots.last ?? 0)],
+            "distance": [r(distances.min() ?? 0), r(distances.max() ?? 0)],
+            "altitude": [r(altitudes.min() ?? 0), r(altitudes.max() ?? 0)],
+            "sampleTrack": measured.map { [r(Double($0[sample].x)), r(Double($0[sample].y))] },
+        ]
+    }
+
+    private func r(_ v: Double) -> Double { (v * 1000).rounded() / 1000 }
+
+    // A steady drag over clouds, to record.
+    private func panClip() async {
+        let start = CLLocationCoordinate2D(latitude: -32.0545, longitude: 115.7515)
+        let origin = MKMapPoint(start)
+        let perMetre = MKMapPointsPerMeterAtLatitude(start.latitude)
+        func camera(_ i: Int) -> MKMapCamera {
+            MKMapCamera(lookingAtCenter: MKMapPoint(x: origin.x + Double(i) * 1.2 * perMetre, y: origin.y - Double(i) * 0.6 * perMetre).coordinate, fromDistance: 1000, pitch: 55, heading: 0)
+        }
+        map.camera = camera(0)
+        try? await Task.sleep(for: .seconds(14))
+        print("WALKIES_CLIP_START"); fflush(stdout)
+        try? await Task.sleep(for: .seconds(1))
+        handle.simulatedGesture = true
+        var index = 0
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            self.continuation = continuation
+            self.step = { [unowned self] in
+                self.map.camera = camera(index)
+                index += 1
+                return index >= 420
+            }
+            let link = CADisplayLink(target: self, selector: #selector(tick))
+            link.add(to: .main, forMode: .common)
+            self.link = link
+        }
+        handle.simulatedGesture = false
+        print("WALKIES_CLIP_END"); fflush(stdout)
+    }
+
+    // How far a cloud moves when a new rough bake drops in mid-drag, a quarter of a screen on.
+    private func bakeSwap(_ s: Scenario) -> [String: Any] {
+        guard let field = model?.cloudField, !field.puffs.isEmpty else { return [:] }
+        let size = map.bounds.size
+        let a = Projection(map: map)
+        let startCamera = map.camera
+        let c = MKMapPoint(startCamera.centerCoordinate)
+        let perMetre = MKMapPointsPerMeterAtLatitude(s.lat)
+        let cam = MKMapCamera(lookingAtCenter: MKMapPoint(x: c.x + 0.3 * s.distance * perMetre, y: c.y).coordinate, fromDistance: s.distance, pitch: s.pitch, heading: s.heading)
+        map.camera = cam
+        let b = Projection(map: map)
+        map.camera = startCamera
+        guard let warp = BakeWarp(now: b, frame: BakeFrame(projection: a, rect: CGRect(origin: .zero, size: size), scale: 1, draft: true)) else { return [:] }
+        var moved: [Double] = [], grew: [Double] = []
+        for puff in field.puffs {
+            let ra = CloudScene.capped(a.ellipse(centre: puff.centre, radius: puff.radius), radius: puff.radius, centreScale: a.centreScale)
+            let rb = CloudScene.capped(b.ellipse(centre: puff.centre, radius: puff.radius), radius: puff.radius, centreScale: b.centreScale)
+            guard !ra.isNull, !rb.isNull, map.bounds.contains(CGPoint(x: rb.midX, y: rb.midY)), map.bounds.contains(CGPoint(x: ra.midX, y: ra.midY)) else { continue }
+            guard let tl = warp.map(CGPoint(x: ra.minX, y: ra.minY)), let br = warp.map(CGPoint(x: ra.maxX, y: ra.maxY)) else { continue }
+            moved.append(hypot((tl.x + br.x) / 2 - rb.midX, (tl.y + br.y) / 2 - rb.midY))
+            grew.append(hypot((br.x - tl.x) - rb.width, (br.y - tl.y) - rb.height))
+        }
+        moved.sort(); grew.sort()
+        guard !moved.isEmpty else { return ["n": 0] }
+        return ["n": moved.count, "movedP50": r(moved[moved.count / 2]), "movedMax": r(moved.last!), "sizeP50": r(grew[grew.count / 2]), "sizeMax": r(grew.last!)]
+    }
+
+    // Still shots with the streets drawn from the old fit (red) and the new (cyan), over bare satellite.
+    private func alignmentShots() async {
+        guard let field = model?.cloudField, let window = map.window else { return }
+        let overlay = StreetsView(frame: map.convert(map.bounds, to: window))
+        overlay.isUserInteractionEnabled = false
+        overlay.backgroundColor = .clear
+        window.addSubview(overlay)
+        map.preferredConfiguration = MKHybridMapConfiguration(elevationStyle: .realistic)
+        let places: [(String, Double, Double, Double)] = [
+            ("fremantle_600", -32.0545, 115.7515, 600), ("fremantle_1500", -32.0545, 115.7515, 1500),
+            ("busselton_600", -33.6450, 115.3480, 600), ("busselton_1500", -33.6450, 115.3480, 1500),
+        ]
+        for place in places {
+            map.camera = MKMapCamera(lookingAtCenter: CLLocationCoordinate2D(latitude: place.1, longitude: place.2), fromDistance: place.3, pitch: 55, heading: 0)
+            try? await Task.sleep(for: .seconds(9))
+            let size = map.bounds.size
+            let new = Projection(map: map)
+            let screen = Projection.spots.map { CGPoint(x: $0.0 * size.width, y: $0.1 * size.height) }
+            let old = Projection(ground: screen.map { MKMapPoint(map.convert($0, toCoordinateFrom: map)) }, screen: screen, width: Double(size.width), centre: MKMapPoint(map.centerCoordinate))
+            overlay.update(lines: field.lines.map(\.points), old: old, new: new)
+            print("WALKIES_SHOT \(place.0)")
+            fflush(stdout)
+            try? await Task.sleep(for: .seconds(5))
+        }
+        overlay.removeFromSuperview()
+    }
+
+    private final class StreetsView: UIView {
+        private var oldPaths = UIBezierPath(), newPaths = UIBezierPath()
+        func update(lines: [[MKMapPoint]], old: Projection, new: Projection) {
+            oldPaths = path(lines, old)
+            newPaths = path(lines, new)
+            setNeedsDisplay()
+        }
+        private func path(_ lines: [[MKMapPoint]], _ p: Projection) -> UIBezierPath {
+            let path = UIBezierPath()
+            let area = bounds.insetBy(dx: -100, dy: -100)
+            for line in lines {
+                for j in line.indices.dropFirst() {
+                    guard let (a, b) = p.segment(line[j - 1], line[j]), area.contains(a) || area.contains(b) else { continue }
+                    path.move(to: a)
+                    path.addLine(to: b)
+                }
+            }
+            return path
+        }
+        override func draw(_ rect: CGRect) {
+            UIColor.systemRed.setStroke(); oldPaths.lineWidth = 1.5; oldPaths.stroke()
+            UIColor.cyan.setStroke(); newPaths.lineWidth = 1.5; newPaths.stroke()
+        }
+    }
+
+    @objc private func tick() {
+        guard step() else { return }
+        link?.invalidate()
+        link = nil
+        continuation?.resume()
+        continuation = nil
+    }
+}
