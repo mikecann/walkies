@@ -181,10 +181,25 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     func startAlwaysOn() {
         guard !alwaysOnRunning else { return }
         alwaysOnRunning = true
-        backgroundSession = CLBackgroundActivitySession()
+        // Left on by a manual walk earlier in this launch, it'd show the arrow all day.
+        manager.showsBackgroundLocationIndicator = false
+        refreshBackgroundSession()
         manager.startMonitoringSignificantLocationChanges()
         geofence.open()
         refreshWatch()
+    }
+
+    /// While using the app, always on can't run in the background without a session. With
+    /// Always permission it doesn't need one, and holding one showed the blue arrow all day
+    /// even with the GPS off, on Mike's iPhone 15 Pro Max (31 Oct 2026).
+    private func refreshBackgroundSession() {
+        guard alwaysOnRunning else { return }
+        if hasAlwaysPermission {
+            backgroundSession?.invalidate()
+            backgroundSession = nil
+        } else if backgroundSession == nil {
+            backgroundSession = CLBackgroundActivitySession()
+        }
     }
 
     func stopAlwaysOn() {
@@ -291,6 +306,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         let status = manager.authorizationStatus
         MainActor.assumeIsolated {
             authorization = status
+            refreshBackgroundSession()
             onAuthorizationChange?()
         }
     }
