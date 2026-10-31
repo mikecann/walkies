@@ -24,7 +24,7 @@
     "@convex-dev/agent": "^0.7.8",
     "@convex-dev/auth": "2.0.0-beta.0",
     "@convex-dev/feedback": "file:vendor/convex-dev-feedback-0.0.1.tgz",
-    "@convex-dev/state-machines": "file:vendor/convex-dev-state-machines-0.1.1.tgz",
+    "@convex-dev/state-machines": "file:vendor/convex-dev-state-machines-0.1.2.tgz",
     "@convex-dev/static-hosting": "^0.2.1",
     "@convex-dev/workflow": "^0.4.10",
     "@convex-dev/workpool": "^0.4.14",
