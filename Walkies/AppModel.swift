@@ -69,6 +69,9 @@ final class AppModel {
     /// GPS drift. Any tiles it uncovered stay uncovered.
     static let minimumAutoWalk = 300.0
 
+    /// Seconds the tracer's last spot can be old and still start a new always-on walk.
+    static let freshStart = 120.0
+
     /// An always-on walk only counts once you've got this far (metres, as the crow
     /// flies) from where it started. GPS indoors can wander tens of metres back and
     /// forth, which adds up as distance but never carries you this far away.
@@ -176,10 +179,11 @@ final class AppModel {
         tracker.onAuthorizationChange = { [weak self] in self?.authorizationChanged() }
         tracker.isWalking = { [weak self] in self?.activeWalk != nil }
         tracker.isOnConfirmedWalk = { [weak self] in self.map { $0.activeWalk != nil && !$0.autoWalkPending } ?? false }
-        tracker.isOnScreen = { [weak self] in self?.inForeground ?? false }
+        tracker.isOnManualWalk = { [weak self] in self?.activeWalk?.isAutomatic == false }
+        tracker.isOnScreen = { [weak self] in self.map { $0.inForeground && $0.mapVisible } ?? false }
         tracker.isOnWheels = { [weak self] in self?.motion.onWheels ?? false }
         tracker.isStill = { [weak self] in self?.motion.still ?? false }
-        motion.onChange = { [weak self] in self?.tracker.refreshWatch() }
+        motion.onChange = { [weak self] in self?.tracker.motionChanged() }
         locked = waitForUnlock
         if !waitForUnlock { load(alwaysOn: alwaysOn) }
     }
@@ -718,6 +722,10 @@ final class AppModel {
         let anchor = tracer.anchor
         var step = tracer.add(point)
         guard !step.samples.isEmpty else { return }
+        // The tracer's last spot can be hours old when the GPS has been off (the first fix
+        // after a restart, then nothing until you head out). Start from this fix instead, or
+        // the walk says it began back then: Dad's 16:20 walk on 30 Oct 2026 ran from 11:00.
+        if activeWalk == nil, let anchor, point.time - anchor.time > Self.freshStart { return }
         // Only decided once you're walking on from the new spot, so one bad fix can't
         // end a walk.
         if let last = activeWalk?.points.last, let anchor, rode(from: last, to: anchor) {
@@ -1493,6 +1501,13 @@ final class AppModel {
     /// Whether the app's on screen. Only a fix while it is can add where you are: one in
     /// the background could be from a car.
     @ObservationIgnored private(set) var inForeground = false
+    @ObservationIgnored private var mapVisible = false
+
+    func mapVisibility(_ visible: Bool) {
+        guard mapVisible != visible else { return }
+        mapVisible = visible
+        tracker.refreshWatch()
+    }
     /// Set when the app comes to the front, so the next good fix is checked for a suburb
     /// to add, and cleared when it goes. Never when iOS relaunches it in the background
     /// for always-on: only walks add places then.

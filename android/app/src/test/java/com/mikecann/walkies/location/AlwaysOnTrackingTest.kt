@@ -160,7 +160,7 @@ class AlwaysOnTrackingTest {
         val t = tracking()
         t.update(alwaysOn = false, onScreen = true, walk = WalkState.None)
         assertEquals(GpsMode.High, gps.mode)
-        t.update(alwaysOn = false, onScreen = false, walk = WalkState.Walking)
+        t.update(alwaysOn = false, onScreen = false, walk = WalkState.Manual)
         assertEquals(GpsMode.High, gps.mode)
     }
 
@@ -335,8 +335,68 @@ class AlwaysOnTrackingTest {
         assertEquals(GpsMode.High, gps.mode)
         t.motionChanged(MotionActivity.Still, entered = true)
         assertEquals(GpsMode.Off, gps.mode)
-        // A real walk keeps going through a stop at the lights.
-        t.update(alwaysOn = true, onScreen = false, walk = WalkState.Walking)
+        // Confirming it does not keep GPS on while stationary.
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.Automatic)
+        assertEquals(GpsMode.Off, gps.mode)
+    }
+
+    @Test
+    fun aFreshStillTransitionEndsAnUnconfirmedWakeEarly() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.Pending)
+        t.leftFence()
+        assertEquals(GpsMode.High, gps.mode)
+        now += 5
+        t.motionChanged(MotionActivity.Still, entered = true)
+        assertEquals(GpsMode.Off, gps.mode)
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        assertEquals(GpsMode.High, gps.mode)
+    }
+
+    @Test
+    fun anAutomaticWalkRestsAndResumesInsideTheSameFence() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.Automatic)
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        assertEquals(GpsMode.High, gps.mode)
+        t.motionChanged(MotionActivity.Still, entered = true)
+        t.fix(fix(home))
+        assertEquals(GpsMode.Off, gps.mode)
+        now += 30
+        // The model still owns the same walk during its ten-minute pause gap.
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        assertEquals(GpsMode.High, gps.mode)
+        t.fix(fix(east(10.0)))
+        assertEquals(GpsMode.High, gps.mode)
+    }
+
+    @Test
+    fun aManualWalkKeepsAccuracyWhenStillOrDriving() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.Manual)
+        t.motionChanged(MotionActivity.Still, entered = true)
+        assertEquals(GpsMode.High, gps.mode)
+        t.motionChanged(MotionActivity.InVehicle, entered = true)
+        assertEquals(GpsMode.High, gps.mode)
+    }
+
+    @Test
+    fun anAutomaticWalkTurnsDownInACar() {
+        val t = tracking()
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.Automatic)
+        t.motionChanged(MotionActivity.InVehicle, entered = true)
+        assertEquals(GpsMode.Low, gps.mode)
+    }
+
+    @Test
+    fun aSettledAutomaticWalkWithoutMotionKeepsALightWatch() {
+        val t = tracking()
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.Automatic)
+        t.fix(fix(home))
+        now += AlwaysOnTracking.WAKE_TIME + StationaryFence.SETTLE_TIME
+        t.fix(fix(home))
+        assertEquals(GpsMode.Low, gps.mode)
+        t.fix(fix(east(40.0)))
         assertEquals(GpsMode.High, gps.mode)
     }
 
@@ -347,7 +407,7 @@ class AlwaysOnTrackingTest {
         t.onFenceMoved = { saved = it }
         t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
         t.fix(fix(home))
-        t.update(alwaysOn = true, onScreen = false, walk = WalkState.Walking)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.Automatic)
         val park = east(1000.0)
         now += 600
         t.fix(fix(park))

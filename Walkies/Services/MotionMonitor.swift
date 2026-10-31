@@ -27,6 +27,8 @@ final class MotionMonitor {
     }
 
     private func update(with activity: CMMotionActivity) {
+        // An uncertain sample mustn't wake GPS after a confident stationary answer.
+        guard activity.confidence != .low else { return }
         still = activity.stationary && !activity.walking && !activity.running && activity.confidence != .low
         if activity.walking || activity.running {
             onWheels = false

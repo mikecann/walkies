@@ -121,6 +121,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             @Suppress("UNUSED_EXPRESSION") permissionsRevision
             @Suppress("UNUSED_VARIABLE") val accountRevision = rememberRevision(app.account::listen)
+            @Suppress("UNUSED_VARIABLE") val modelRevision = rememberRevision(app.model::listen)
+            val liveMap = app.account.isSignedIn && screen == Screen.Tabs && navigation.tab == AppTab.Map &&
+                app.model.recap == null && openSecret == null && app.model.stickerQueue.isEmpty()
+            androidx.compose.runtime.SideEffect { app.mapOnScreen = liveMap }
             if (!app.account.isSignedIn) {
                 SignInScreen(
                     working = signingIn,
