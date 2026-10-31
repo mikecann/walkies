@@ -300,7 +300,7 @@ async function whyNot(ctx: MutationCtx, userId: Id<"users">, osmId: number, walk
   if (walkedTiles < minWalkedTiles) return "not walked";
   // Past either limit nothing is saved, so a sync after it resets tries again.
   const since = dayAndMonthStart(Date.now());
-  const started = await ctx.db.query("loreRequests").withIndex("by_user_at", (q) => q.eq("userId", userId).gte("at", since.month)).collect();
+  const started = (await ctx.db.query("loreRequests").withIndex("by_user_at", (q) => q.eq("userId", userId).gte("at", since.month)).collect()).filter((r) => !r.nearby);
   if (started.length >= suburbsPerUserPerMonth || started.filter((r) => r.at >= since.day).length >= suburbsPerUserPerDay) return "too many";
   return null;
 }
@@ -393,7 +393,7 @@ async function whyNotNearby(ctx: MutationCtx, userId: Id<"users">, osmId: number
   if (bundledOsmIds.has(osmId)) return "bundled";
   if (known(await placeRow(ctx, osmId))) return "known";
   const since = dayAndMonthStart(Date.now());
-  const started = await ctx.db.query("loreNearbyRequests").withIndex("by_user_at", (q) => q.eq("userId", userId).gte("at", since.month)).collect();
+  const started = (await ctx.db.query("loreRequests").withIndex("by_user_at", (q) => q.eq("userId", userId).gte("at", since.month)).collect()).filter((r) => r.nearby);
   if (started.length >= nearbyPerUserPerMonth || started.filter((r) => r.at >= since.day).length >= nearbyPerUserPerDay) return "too many";
   return null;
 }
@@ -459,7 +459,7 @@ export const queueNearby = internalMutation({
   handler: async (ctx, { userId, osmId, name }) => {
     const why = await whyNotNearby(ctx, userId, osmId);
     if (why !== null) return why;
-    await ctx.db.insert("loreNearbyRequests", { userId, osmId, at: Date.now() });
+    await ctx.db.insert("loreRequests", { userId, osmId, at: Date.now(), nearby: true });
     await queue(ctx, osmId, name, { manual: false, requestedBy: userId, nearby: true });
     await startQueued(ctx);
     return "queued";
@@ -645,9 +645,6 @@ export const tick = internalMutation({
     // The per-person limits only look back a month.
     for (const old of await ctx.db.query("loreRequests").withIndex("by_at", (q) => q.lt("at", now - 62 * day)).take(200)) {
       await ctx.db.delete("loreRequests", old._id);
-    }
-    for (const old of await ctx.db.query("loreNearbyRequests").withIndex("by_at", (q) => q.lt("at", now - 62 * day)).take(200)) {
-      await ctx.db.delete("loreNearbyRequests", old._id);
     }
     await machines.pruneHistory(ctx, { before: now - historyKeep });
     // In its own transaction: it reads Convex's record of scheduled functions.

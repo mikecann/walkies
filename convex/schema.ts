@@ -238,12 +238,9 @@ export default defineSchema({
   loreCalls: defineTable({ userId: v.id("users"), windowStart: v.number(), count: v.number() })
     .index("by_user", ["userId"]),
 
-  // Each new suburb someone's walk queued, for the per-person day and month limits.
-  loreRequests: defineTable({ userId: v.id("users"), osmId: v.number(), at: v.number() })
-    .index("by_user_at", ["userId", "at"]).index("by_at", ["at"]),
-
-  // Each suburb lore:prepare queued for being next to where someone's been, which has limits of its own.
-  loreNearbyRequests: defineTable({ userId: v.id("users"), osmId: v.number(), at: v.number() })
+  // Each new suburb someone queued, for the per-person day and month limits. `nearby` is one
+  // lore:prepare queued for being next to where they've been, which has limits of its own.
+  loreRequests: defineTable({ userId: v.id("users"), osmId: v.number(), at: v.number(), nearby: v.optional(v.boolean()) })
     .index("by_user_at", ["userId", "at"]).index("by_at", ["at"]),
 
   // The research agents' threads (every search and page they read), deleted when the run finishes.
