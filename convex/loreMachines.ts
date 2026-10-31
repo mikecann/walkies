@@ -75,7 +75,7 @@ export const lorePlace = defineMachine(
     events: {
       server: {
         // A walk (lore.noteWalked) or Mike (lore:research) puts it on the queue.
-        QUEUE: { manual: v.boolean(), requestedBy: v.optional(v.id("users")) },
+        QUEUE: { manual: v.boolean(), requestedBy: v.optional(v.id("users")), nearby: v.optional(v.boolean()) },
         // The queue (lore.startQueued) started its workflow, or restarted its journal for a resume.
         START: { workflowId: v.string() },
         RESUMED: { workflowId: v.string() },
@@ -178,17 +178,24 @@ export const lorePlace = defineMachine(
     effects: {
       enqueue: async (_ctx, { event }) => ({
         kind: "queued", queuedAt: Date.now(), manual: event.manual, ...(event.requestedBy ? { requestedBy: event.requestedBy } : {}),
+        ...(event.nearby ? { nearby: true } : {}),
       }),
       requeue: async (_ctx, { state, event }) => ({
         kind: "queued", queuedAt: Date.now(), manual: event.manual, ...(event.requestedBy ? { requestedBy: event.requestedBy } : {}), was: finished(state),
+        ...(event.nearby ? { nearby: true } : {}),
       }),
       retry: async (_ctx, { state }) => ({ kind: "queued", queuedAt: Date.now(), manual: false, was: finished(state) }),
       postpone: async (_ctx, { state }) => ({ ...state, retryAt: Date.now() + day }),
       resume: async (_ctx, { state, event }) => ({ kind: "queued", queuedAt: Date.now(), manual: true, resume: event.from, was: finished(state) }),
       // Asked for again while it waits: Mike asking makes it his, and it keeps its place in the queue.
-      merge: async (_ctx, { state, event }) => ({
-        ...state, manual: state.manual || event.manual, ...(state.requestedBy ?? event.requestedBy ? { requestedBy: state.requestedBy ?? event.requestedBy } : {}),
-      }),
+      // Someone walking into a place that was only queued for being nearby moves it up.
+      merge: async (_ctx, { state, event }) => {
+        const { nearby: _was, ...rest } = state;
+        return {
+          ...rest, manual: state.manual || event.manual, ...(state.requestedBy ?? event.requestedBy ? { requestedBy: state.requestedBy ?? event.requestedBy } : {}),
+          ...(state.nearby && event.nearby ? { nearby: true } : {}),
+        };
+      },
       forget: async (_ctx, { state }) => {
         const { requestedBy: _forgotten, ...rest } = state;
         return rest;

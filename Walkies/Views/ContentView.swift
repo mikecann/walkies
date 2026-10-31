@@ -201,13 +201,6 @@ struct MapScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var focus = MapFocusRequest()
     @State private var mapHandle = MapHandle()
-    /// A suburb next door you've tapped, waiting for you to confirm adding it.
-    @State private var pickedNeighbour: PlaceResult?
-    /// What's happening while a suburb from the map is being added.
-    @State private var addingStatus: String?
-    @State private var addingError: String?
-    /// Where the buttons over the map are, so the neighbour labels keep out from under them.
-    @State private var buttonFrames: [String: CGRect] = [:]
 
     var body: some View {
         FogMapView(
@@ -222,10 +215,8 @@ struct MapScreen: View {
             handle: mapHandle,
             stickers: stickerPins,
             onSelectSticker: { navigation.openSecret = LoreLibrary.entry(id: $0) },
-            neighbours: addingStatus == nil ? model.neighbours : [],
-            onPickNeighbour: { pickedNeighbour = $0 },
+            walked: model.walkedHexes,
             onUserLocation: { model.noteWhereYouAre($0) },
-            buttons: Array(buttonFrames.values),
             dockRoom: dockRoom
         )
         .overlay {
@@ -266,13 +257,11 @@ struct MapScreen: View {
                 .animation(.snappy, value: model.addedPlaceNotice)
                 .animation(.snappy, value: model.loreNotice)
                 .animation(.snappy, value: model.lookingForSecrets?.id)
-                .mapButton("top leading", in: $buttonFrames)
                 Spacer(minLength: 12)
                 // Long-press: a screenshot of the map and a voice note, straight away.
                 HexBadge(icon: .art("icon-idea"), label: "Suggest a feature", onLongPress: { ChefKit.report() }) {
                     ChefKit.present()
                 }
-                .mapButton("top trailing", in: $buttonFrames)
             }
             .padding(.horizontal)
         }
@@ -280,7 +269,6 @@ struct MapScreen: View {
             VStack(alignment: .leading, spacing: 10) {
                 if model.showWalkHint, model.activeWalk == nil {
                     WalkHint()
-                        .mapButton("walk hint", in: $buttonFrames)
                         .transition(.opacity)
                 }
                 if model.secretsAlreadyWalked > 0 {
@@ -290,7 +278,6 @@ struct MapScreen: View {
                     } onClose: {
                         model.secretsAlreadyWalked = 0
                     }
-                    .mapButton("secrets", in: $buttonFrames)
                     .transition(.scale(scale: 0.8).combined(with: .opacity))
                 }
                 HStack(alignment: .bottom, spacing: 10) {
@@ -298,9 +285,7 @@ struct MapScreen: View {
                         model.startWalk()
                         focus.send(.user)
                     }
-                    .mapButton("walk", in: $buttonFrames)
                     HexBadge(icon: .symbol("location.fill"), fill: .badgeTeal, label: "Where am I") { focus.send(.user) }
-                        .mapButton("where am I", in: $buttonFrames)
                 }
             }
             .animation(.snappy, value: model.secretsAlreadyWalked > 0)
@@ -308,35 +293,6 @@ struct MapScreen: View {
             .padding(.horizontal)
             // Clear of MapKit's legal link along the bottom of the map.
             .padding(.bottom, 26)
-        }
-        .overlay {
-            if let addingStatus {
-                VStack(spacing: 14) {
-                    ProgressView().controlSize(.large)
-                    Text(addingStatus).font(.headline)
-                    Text("This can take up to a minute.")
-                        .font(.caption)
-                        .foregroundStyle(Color.ink.opacity(0.6))
-                }
-                .padding(28)
-                .stickerCard(in: .rect(cornerRadius: 24))
-            }
-        }
-        .confirmationDialog(
-            pickedNeighbour.map { "Add \($0.name)?" } ?? "",
-            isPresented: Binding(get: { pickedNeighbour != nil }, set: { if !$0 { pickedNeighbour = nil } }),
-            titleVisibility: .visible,
-            presenting: pickedNeighbour
-        ) { place in
-            Button("Add \(place.name)") { add(place) }
-            Button("Not now", role: .cancel) {}
-        } message: { place in
-            Text("\(place.kind.capitalized) · \(Format.area(place.area)). It'll go under the clouds next to your other places, and any walks you've already done there count.")
-        }
-        .alert("Couldn't add it", isPresented: Binding(get: { addingError != nil }, set: { if !$0 { addingError = nil } })) {
-            Button("OK") {}
-        } message: {
-            Text(addingError ?? "")
         }
         .task {
             // `-perfRun`: fly the map about and print how smoothly it drew.
@@ -374,24 +330,11 @@ struct MapScreen: View {
     private var mapInView: Bool {
         scenePhase == .active && navigation.tab == .map && model.recap == nil && model.stickerQueue.isEmpty
             && !navigation.showingPlaces && navigation.openSecret == nil && model.pendingTeamInvite == nil
-            && model.teamNotice == nil && pickedNeighbour == nil && addingStatus == nil && addingError == nil
+            && model.teamNotice == nil
     }
 }
 
 extension MapScreen {
-    /// Fetches a neighbouring suburb's streets and adds it on the world grid.
-    private func add(_ place: PlaceResult) {
-        addingStatus = "Getting \(place.name) ready…"
-        Task {
-            do {
-                try await model.addPlace(place) { addingStatus = $0 }
-            } catch {
-                addingError = "Couldn't load the streets for \(place.name). OpenStreetMap might be busy, so try again in a minute."
-            }
-            addingStatus = nil
-        }
-    }
-
     private var secretsCount: (found: Int, total: Int)? {
         let here = model.stickersHere
         guard !here.isEmpty else { return nil }
@@ -685,14 +628,6 @@ private struct NewSecretsBadge: View {
         }
         .padding(.trailing, 4)
         .stickerCard(in: .rect(cornerRadius: 20))
-    }
-}
-
-private extension View {
-    /// Tells the map where this button sits, so the labels on the map keep clear of it.
-    func mapButton(_ key: String, in frames: Binding<[String: CGRect]>) -> some View {
-        onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frames.wrappedValue[key] = $0 }
-            .onDisappear { frames.wrappedValue[key] = nil }
     }
 }
 

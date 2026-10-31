@@ -133,6 +133,8 @@ fun MapboxMap(
     systemBarInset: Boolean = true,
     /** Keep the logo and attribution above the floating dock and its raised hex. */
     bottomClearance: Dp = 0.dp,
+    /** The clouds over everywhere outside your places, for the main map only. */
+    blanket: CloudBlanketSource? = null,
 ) {
     val subscriptions = remember { ArrayList<Cancelable>() }
     val tap by rememberUpdatedState(onTap)
@@ -142,6 +144,7 @@ fun MapboxMap(
             subscriptions.forEach { it.cancel() }
             subscriptions.clear()
             state.controller = null
+            blanket?.close()
         }
     }
     AndroidView(
@@ -163,6 +166,8 @@ fun MapboxMap(
                 for (layer in style.styleLayers) {
                     if ("poi" in layer.id) style.setStyleLayerProperty(layer.id, "visibility", Value.valueOf("none"))
                 }
+                // Last, so it's over the labels too, as the place clouds are.
+                blanket?.attach(style)
             }
             view.scalebar.enabled = false
             view.compass.enabled = false

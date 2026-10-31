@@ -173,6 +173,19 @@ nonisolated struct CoverageTracer: Sendable {
         timedSamples(for: points).samples
     }
 
+    /// Every world tile these walks went through, for the world's clouds (`WorldClouds`).
+    /// Not a replay, so it isn't counted as one by the tests that watch for them.
+    static func worldTiles(of walks: [Walk]) -> Set<Hex> {
+        var tiles = Set<Hex>()
+        for walk in walks {
+            var tracer = CoverageTracer()
+            for point in walk.points {
+                for sample in tracer.add(point).samples { tiles.insert(HexGrid.world.hex(containing: sample)) }
+            }
+        }
+        return tiles
+    }
+
     /// The samples, each with when you passed it (seconds since 1970), spread evenly
     /// between the two fixes either side.
     static func timedSamples(for points: [TrackPoint]) -> (samples: [Coordinate], times: [Double]) {

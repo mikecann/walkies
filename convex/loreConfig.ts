@@ -32,8 +32,8 @@ export const caps = {
   perRun: 6,
   /** Across everyone, by UTC day and month. A run only starts if it can't take either
    * over, even if every run going spends its whole limit. */
-  daily: 15,
-  monthly: 50,
+  daily: 30,
+  monthly: 100,
 };
 
 /**
@@ -77,8 +77,14 @@ export const maxRunning = 2;
 /** New suburbs one person's walks can start in a UTC day and month. Spoofed GPS hits these. */
 export const suburbsPerUserPerDay = 3;
 export const suburbsPerUserPerMonth = 6;
+/** Suburbs next to where one person is that lore:prepare can queue in a UTC day and month. */
+export const nearbyPerUserPerDay = 10;
+export const nearbyPerUserPerMonth = 30;
+/** lore:prepare only queues a suburb if one of the person's newest walks has a good fix this
+ * close to its bounding box: it's next to where they've been, not anywhere they say. */
+export const nearbyReach = 5_000;
 /** Places one person's saves and walks can have checked in a UTC day (each check may ask Nominatim). */
-export const checksPerUserPerDay = 20;
+export const checksPerUserPerDay = 40;
 /**
  * Walked tiles a place needs before it's researched: about 250 m of walking, so a
  * GPS wobble over the border of a place you added doesn't start a paid run. What the

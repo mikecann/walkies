@@ -17,75 +17,6 @@ private final class StickerAnnotation: NSObject, MKAnnotation {
     }
 }
 
-/// A suburb next to yours, labelled on the zoomed-out map with a button to add it.
-private final class NeighbourAnnotation: NSObject, MKAnnotation {
-    let place: PlaceResult
-    let coordinate: CLLocationCoordinate2D
-
-    init(_ place: PlaceResult) {
-        self.place = place
-        coordinate = place.boundary.labelPoint.cl
-    }
-}
-
-/// The neighbour's label: a cream sticker pill with an orange plus.
-private enum NeighbourPill {
-    private static var cache: [String: UIImage] = [:]
-
-    static func image(for name: String) -> UIImage? {
-        if let cached = cache[name] { return cached }
-        let pill = HStack(spacing: 7) {
-            Image(systemName: "plus")
-                .font(.system(size: 12, weight: .black))
-                .foregroundStyle(.white)
-                .frame(width: 22, height: 22)
-                .background(Color.burnt, in: Circle())
-            Text(name)
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.ink)
-        }
-        .padding(.leading, 5)
-        .padding(.trailing, 13)
-        .padding(.vertical, 5)
-        .background(Color.cream, in: Capsule())
-        .overlay(Capsule().strokeBorder(.white, lineWidth: 2.5))
-        .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
-        .padding(8)
-        let renderer = ImageRenderer(content: pill)
-        renderer.scale = UITraitCollection.current.displayScale
-        let image = renderer.uiImage
-        cache[name] = image
-        return image
-    }
-}
-
-/// Where a neighbour's label goes: where it is on the map, unless that's under one of
-/// the app's buttons or off the edge of the screen, when it's nudged the shortest way clear.
-enum LabelPlacement {
-    static func clear(_ frame: CGRect, of buttons: [CGRect], within bounds: CGRect) -> CGRect {
-        var frame = frame
-        frame.origin.x = max(bounds.minX, min(frame.minX, bounds.maxX - frame.width))
-        frame.origin.y = max(bounds.minY, min(frame.minY, bounds.maxY - frame.height))
-        let under = buttons.filter { $0.intersects(frame) }
-        guard !under.isEmpty else { return frame }
-        let start = frame
-        let moves = under.flatMap { button in [
-            start.offsetBy(dx: 0, dy: button.minY - start.maxY),
-            start.offsetBy(dx: 0, dy: button.maxY - start.minY),
-            start.offsetBy(dx: button.minX - start.maxX, dy: 0),
-            start.offsetBy(dx: button.maxX - start.minX, dy: 0),
-        ] }
-        let clear = moves.filter { move in
-            bounds.insetBy(dx: -0.5, dy: -0.5).contains(move) && !buttons.contains { $0.intersects(move) }
-        }
-        return clear.min { distance($0, start) < distance($1, start) } ?? frame
-    }
-
-    private static func distance(_ a: CGRect, _ b: CGRect) -> CGFloat {
-        hypot(a.midX - b.midX, a.midY - b.midY)
-    }
-}
-
 struct MapFocusRequest: Equatable {
     /// `arrive`: opening the app. Go to where you are, or the selected place if
     /// there's no fix yet.
@@ -100,8 +31,8 @@ struct MapFocusRequest: Equatable {
 }
 
 /// The satellite map, with your places' outlines, your route and orange outlines on
-/// tiles uncovered this walk. Zoomed out, the suburbs next door are outlined too, each
-/// with a button to add it. The clouds are drawn over the top by `CloudLayer`.
+/// tiles uncovered this walk. Everywhere outside your places is under the world's
+/// clouds (`WorldClouds`), and your places' own clouds are drawn over the top by `CloudLayer`.
 struct FogMapView: UIViewRepresentable {
     @Environment(AppModel.self) private var model
     var cities: [City]
@@ -118,12 +49,10 @@ struct FogMapView: UIViewRepresentable {
     let handle: MapHandle
     var stickers: [StickerPin] = []
     var onSelectSticker: (String) -> Void = { _ in }
-    var neighbours: [PlaceResult] = []
-    var onPickNeighbour: (PlaceResult) -> Void = { _ in }
+    /// Every world tile your walks have been through, for holes in the world's clouds.
+    var walked: Set<Hex> = []
     /// Each fix behind the blue dot, which comes in whether or not a walk's going.
     var onUserLocation: (CLLocation) -> Void = { _ in }
-    /// The app's buttons over the map, in window coordinates.
-    var buttons: [CGRect] = []
     /// Room for the floating dock and its raised hex above the bottom safe area.
     /// MapKit adds its layout margins to the safe area when placing its legal link.
     var dockRoom: CGFloat = 0
@@ -155,9 +84,6 @@ struct FogMapView: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, MKMapViewDelegate {
-        /// Camera distance in metres beyond which the neighbours show.
-        static let neighbourDistance = 2500.0
-
         private var cities: [City] = []
         private var cityIDs: [UUID]?
         private var selectedID: UUID?
@@ -182,13 +108,11 @@ struct FogMapView: UIViewRepresentable {
         private var uncovered: MKMultiPolygon?
         private var line: MKPolyline?
 
-        private var neighbourIDs: [Int] = []
-        private var neighbourOutline: MKMultiPolygon?
-        private var neighbourPins: [NeighbourAnnotation] = []
-        private var showingNeighbours = false
-        private var onPickNeighbour: (PlaceResult) -> Void = { _ in }
+        private let world = WorldClouds()
+        private var worldShown = false
+        private var walked: Set<Hex> = []
+        private var cloudTheme: String?
         private var onUserLocation: (CLLocation) -> Void = { _ in }
-        private var buttons: [CGRect] = []
 
         func update(_ map: MKMapView, with view: FogMapView) {
             if view.tilted != tilted {
@@ -226,24 +150,28 @@ struct FogMapView: UIViewRepresentable {
                 if !first, !cities.isEmpty { zoomToCity(on: map) }
             }
 
-            onPickNeighbour = view.onPickNeighbour
             onUserLocation = view.onUserLocation
-            if view.buttons != buttons {
-                buttons = view.buttons
-                placeNeighbourLabels(on: map)
-            }
-            if view.neighbours.map(\.id) != neighbourIDs {
-                neighbourIDs = view.neighbours.map(\.id)
-                neighbourPins = view.neighbours.map(NeighbourAnnotation.init)
-                showNeighbours(on: map, force: true)
-            }
 
             let equippedTrail = view.model.equipped[.trail]
-            if view.path != route || equippedTrail != trail {
+            let pathChanged = view.path != route
+            if pathChanged || equippedTrail != trail {
                 route = view.path
                 trail = equippedTrail
                 handle?.route = route.map { MKMapPoint($0.cl) }
                 drawPath(route, on: map)
+            }
+            // The walk going now clears the world's clouds as you go, before it's saved.
+            if pathChanged || view.walked != walked || view.model.equipped[.clouds] != cloudTheme {
+                walked = view.walked
+                cloudTheme = view.model.equipped[.clouds]
+                var tiles = walked
+                for point in route { tiles.insert(HexGrid.world.hex(containing: point)) }
+                world.update(walked: tiles, theme: view.model.equipped[.clouds])
+            }
+            if !worldShown {
+                worldShown = true
+                // Under everything else of ours, but over the map's labels.
+                map.insertOverlay(world, at: 0, level: .aboveLabels)
             }
 
             if view.focus.id != focusID {
@@ -306,6 +234,7 @@ struct FogMapView: UIViewRepresentable {
         }
 
         private func redrawAll(on map: MKMapView) {
+            world.update(places: cities.map(\.boundary))
             map.removeOverlays([outline, uncovered].compactMap { $0 })
             outline = nil
             uncovered = nil
@@ -335,48 +264,8 @@ struct FogMapView: UIViewRepresentable {
             add(layer, to: map)
         }
 
-        /// The suburbs next door, only once you've zoomed out far enough to see past your own.
-        private func showNeighbours(on map: MKMapView, force: Bool = false) {
-            let show = !neighbourPins.isEmpty && map.camera.centerCoordinateDistance > Self.neighbourDistance
-            guard force || show != showingNeighbours else { return }
-            showingNeighbours = show
-            if let neighbourOutline { map.removeOverlay(neighbourOutline) }
-            neighbourOutline = nil
-            map.removeAnnotations(map.annotations.filter { $0 is NeighbourAnnotation })
-            guard show else { return }
-            let outline = MKMultiPolygon(neighbourPins.flatMap { Self.polygons($0.place.boundary) })
-            neighbourOutline = outline
-            map.addOverlay(outline, level: .aboveRoads)
-            map.addAnnotations(neighbourPins)
-        }
-
-        /// Keeps each neighbour's label out from under the buttons and inside the screen,
-        /// so it can always be read and tapped.
-        private func placeNeighbourLabels(on map: MKMapView) {
-            guard showingNeighbours else { return }
-            let bounds = map.bounds.inset(by: map.safeAreaInsets)
-            let blocked = buttons.map { map.convert($0, from: nil).insetBy(dx: -6, dy: -6) }
-            for pin in neighbourPins {
-                guard let view = map.view(for: pin) else { continue }
-                let centre = map.convert(pin.coordinate, toPointTo: map)
-                var offset = CGPoint.zero
-                if map.bounds.contains(centre) {
-                    let size = view.bounds.size
-                    let frame = CGRect(x: centre.x - size.width / 2, y: centre.y - size.height / 2, width: size.width, height: size.height)
-                    let placed = LabelPlacement.clear(frame, of: blocked, within: bounds)
-                    offset = CGPoint(x: placed.midX - centre.x, y: placed.midY - centre.y)
-                }
-                if view.centerOffset != offset { view.centerOffset = offset }
-            }
-        }
-
         func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
             handle?.cameraDidChange()
-            placeNeighbourLabels(on: mapView)
-        }
-
-        func mapView(_ mapView: MKMapView, didAdd views: [MKAnnotationView]) {
-            if views.contains(where: { $0.annotation is NeighbourAnnotation }) { placeNeighbourLabels(on: mapView) }
         }
 
         private func drawPath(_ path: [Coordinate], on map: MKMapView) {
@@ -481,7 +370,6 @@ struct FogMapView: UIViewRepresentable {
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             handle?.moving = false
             handle?.dragging = false
-            showNeighbours(on: mapView)
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
@@ -491,18 +379,6 @@ struct FogMapView: UIViewRepresentable {
                     ?? MKAnnotationView(annotation: annotation, reuseIdentifier: "me")
                 view.annotation = annotation
                 view.isHidden = true
-                return view
-            }
-            if let neighbour = annotation as? NeighbourAnnotation {
-                let view = mapView.dequeueReusableAnnotationView(withIdentifier: "neighbour")
-                    ?? MKAnnotationView(annotation: annotation, reuseIdentifier: "neighbour")
-                view.annotation = annotation
-                view.image = NeighbourPill.image(for: neighbour.place.name)
-                view.centerOffset = .zero
-                view.canShowCallout = false
-                // Let MapKit hide labels that would overlap, rather than pile them up.
-                view.collisionMode = .rectangle
-                view.displayPriority = .defaultHigh
                 return view
             }
             guard let sticker = annotation as? StickerAnnotation, let entry = LoreLibrary.entry(id: sticker.id) else { return nil }
@@ -515,28 +391,19 @@ struct FogMapView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, didSelect annotation: MKAnnotation) {
-            if let neighbour = annotation as? NeighbourAnnotation {
-                mapView.deselectAnnotation(annotation, animated: false)
-                onPickNeighbour(neighbour.place)
-                return
-            }
             guard let sticker = annotation as? StickerAnnotation else { return }
             mapView.deselectAnnotation(annotation, animated: false)
             onSelectSticker(sticker.id)
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let world = overlay as? WorldClouds { return world.renderer }
             if let multi = overlay as? MKMultiPolygon {
                 let r = MKMultiPolygonRenderer(multiPolygon: multi)
                 if multi === uncovered {
                     r.fillColor = UIColor.walkiesOrange.withAlphaComponent(0.18)
                     r.strokeColor = .walkiesOrange
                     r.lineWidth = 2
-                } else if multi === neighbourOutline {
-                    r.fillColor = UIColor.white.withAlphaComponent(0.07)
-                    r.strokeColor = UIColor.white.withAlphaComponent(0.6)
-                    r.lineWidth = 1.5
-                    r.lineDashPattern = [3, 5]
                 } else {
                     r.fillColor = nil
                     r.strokeColor = UIColor.white.withAlphaComponent(0.85)

@@ -511,6 +511,29 @@ final class AppModel {
         }
     }
 
+    /// Every world tile a finished walk has been through, cleared from the world's clouds
+    /// (`WorldClouds`). Worked out off the main thread when the walks change, with the
+    /// last one showing until it's ready. The walk going now is added by the map.
+    @ObservationIgnored private var walkedTiles: (key: String, hexes: Set<Hex>)?
+    @ObservationIgnored private var buildingWalked = false
+    private var walkedBuilt = 0
+
+    var walkedHexes: Set<Hex> {
+        _ = walkedBuilt
+        let key = "\(dataGeneration)-\(walks.count)-\(walks.reduce(0) { $0 + $1.points.count })"
+        if walkedTiles?.key != key, !buildingWalked {
+            buildingWalked = true
+            let walks = walks
+            Task {
+                let hexes = await Task.detached(priority: .utility) { CoverageTracer.worldTiles(of: walks) }.value
+                buildingWalked = false
+                walkedTiles = (key, hexes)
+                walkedBuilt += 1
+            }
+        }
+        return walkedTiles?.hexes ?? []
+    }
+
     // MARK: Walks
 
     func startWalk() {
@@ -1355,6 +1378,44 @@ final class AppModel {
         requestSync?()
     }
 
+    // MARK: Getting ahead
+
+    /// The suburbs around you last asked about, and when.
+    @ObservationIgnored private var prepared: (ids: [Int], at: Date)?
+    @ObservationIgnored private var preparing = false
+    /// Stands in for lore:prepare in tests.
+    @ObservationIgnored var askToPrepare: (([Int]) async throws -> Void)?
+
+    /// Asks the server to research secrets for the suburb you're in and the ones next to
+    /// it (`AroundYou`), so they're ready before you walk into them. Fire and forget:
+    /// the server checks each one, and a failure just waits for the next fix.
+    func prepareAround(_ point: Coordinate, now: Date = .now) {
+        guard !locked, !worldGridResetPending, !preparing else { return }
+        let ids = AroundYou.suburbs(at: point, places: cities, nearby: nearby)
+        guard AroundYou.due(ids, last: prepared, now: now) else { return }
+        let ask: ([Int]) async throws -> Void
+        if let askToPrepare {
+            ask = askToPrepare
+        } else if servicesEnabled, let makePlaceClient {
+            ask = { ids in
+                guard let client = await makePlaceClient() else { throw CancellationError() }
+                let _: Nothing = try await client.mutation("lore:prepare", ["osmIds": ids])
+            }
+        } else {
+            return
+        }
+        preparing = true
+        Task {
+            defer { preparing = false }
+            do {
+                try await ask(ids)
+                prepared = (ids, now)
+            } catch {
+                Self.log.info("Couldn't ask for secrets around you: \(error)")
+            }
+        }
+    }
+
     // MARK: Neighbours
 
     /// Suburbs around your places, fetched from OpenStreetMap.
@@ -1363,20 +1424,9 @@ final class AppModel {
     @ObservationIgnored private var nearbyRetries = 0
     nonisolated private static let log = Logger(subsystem: "com.mikecann.walkies", category: "places")
 
-    /// How far around your places to offer suburbs, in metres. Twice this is fetched
-    /// and kept, so adding the next suburb over doesn't mean fetching again.
+    /// How far around your places to know the suburbs, in metres. Twice this is fetched
+    /// and kept, so the next suburb over adds itself without fetching again.
     static let neighbourhood = 5000.0
-
-    /// Suburbs within reach of your places that you haven't added yet, for the map to offer.
-    var neighbours: [PlaceResult] {
-        guard let box = box(around: Self.neighbourhood) else { return [] }
-        let have = Set(cities.map { $0.name.lowercased() })
-        return nearby.filter { place in
-            let b = place.boundary.bounds
-            return !have.contains(place.name.lowercased()) && place.area <= CityBuilder.maxArea
-                && b.north >= box.south && b.south <= box.north && b.east >= box.west && b.west <= box.east
-        }
-    }
 
     /// The box around your places, grown by this many metres each way. When they're
     /// spread far apart (a holiday suburb that added itself, say), it's just the ones
@@ -1551,6 +1601,9 @@ final class AppModel {
     /// Fixes moving faster than a walk, or that the motion chip says are on wheels,
     /// are passed over for the next.
     func noteWhereYouAre(_ location: CLLocation) {
+        if inForeground, location.horizontalAccuracy >= 0, location.horizontalAccuracy <= 100 {
+            prepareAround(Coordinate(location.coordinate))
+        }
         guard checkSpotOnNextFix, inForeground, !locked, location.timestamp.timeIntervalSinceNow > -60,
               location.horizontalAccuracy >= 0, location.horizontalAccuracy <= AutoPlaces.spotAccuracy,
               !motion.onWheels, location.speed <= CoverageTracer.maxSpeed

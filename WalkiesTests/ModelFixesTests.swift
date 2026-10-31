@@ -215,22 +215,4 @@ struct ModelFixesTests {
         await model.waitForHistory()
         #expect(model.historyReady)
     }
-
-    @Test func neighbourLabelsMoveOutFromUnderButtons() {
-        let screen = CGRect(x: 0, y: 0, width: 400, height: 800)
-        let recentre = CGRect(x: 330, y: 700, width: 60, height: 70)
-        let label = CGRect(x: 300, y: 720, width: 80, height: 30)
-        let placed = LabelPlacement.clear(label, of: [recentre], within: screen)
-        #expect(!placed.intersects(recentre))
-        #expect(screen.contains(placed))
-        // The shortest way out: up or left, 50 points either way.
-        #expect(hypot(placed.midX - label.midX, placed.midY - label.midY) == 50)
-        // Off the edge comes back inside.
-        let edge = LabelPlacement.clear(CGRect(x: 360, y: 100, width: 80, height: 30), of: [], within: screen)
-        #expect(edge.maxX == screen.maxX)
-        // Clear of every button, not just the one it started under.
-        let stack = [recentre, CGRect(x: 240, y: 700, width: 80, height: 70)]
-        let crowded = LabelPlacement.clear(label, of: stack, within: screen)
-        #expect(!stack.contains { $0.intersects(crowded) })
-    }
 }

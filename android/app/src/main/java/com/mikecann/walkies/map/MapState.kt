@@ -67,8 +67,8 @@ class MapState {
         cameraTick.longValue++
     }
 
-    // The last measure(), kept for the rest of the frame: the clouds, the pins and the
-    // neighbours all ask, and each ask is five calls into Mapbox.
+    // The last measure(), kept for the rest of the frame: the clouds and the pins both
+    // ask, and each ask is five calls into Mapbox.
     private val measured = DoubleArray(10)
     private var measuredTick = -1L
     private var measuredFrame = -1L
