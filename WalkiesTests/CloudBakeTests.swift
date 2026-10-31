@@ -98,6 +98,38 @@ struct CloudBakeTests {
         }
     }
 
+    /// With 3D elevation on, the ground MapKit finds under a screen point follows the
+    /// buildings and hills there, and shifts as they slide under it. Those shifts mustn't
+    /// reach the clouds: only where a coordinate lands on screen should place them.
+    @Test func bumpsUnderTheMeasuringSpotsDontMoveTheClouds() {
+        let camera = base.tipped(55).turned(30)
+        var bump = 0.0
+        func bumpy(_ s: CGPoint) -> CLLocationCoordinate2D {
+            bump += 1
+            let g = camera.ground(s)
+            return MKMapPoint(x: g.x + 6 * sin(bump * 2.1), y: g.y + 6 * cos(bump * 1.3)).coordinate
+        }
+        let p = Projection.measure(
+            size: camera.size, centre: camera.centre,
+            coordinateAt: bumpy,
+            pointAt: { camera.screen(MKMapPoint($0)) ?? .zero }
+        )
+        // Fitted the old way, to the screen spots themselves, those bumps do show.
+        let spots = Projection.spots.map { CGPoint(x: $0.0 * camera.size.width, y: $0.1 * camera.size.height) }
+        let unsteady = Projection(ground: spots.map { MKMapPoint(bumpy($0)) }, screen: spots, width: Double(camera.size.width), centre: camera.centre)
+        var worst = 0.0
+        for i in 0...6 {
+            for j in 0...6 {
+                let s = CGPoint(x: camera.size.width * Double(i) / 6, y: camera.size.height * (0.3 + 0.7 * Double(j) / 6))
+                let g = camera.ground(s)
+                #expect(close(p.point(g), s, within: 0.01))
+                let u = unsteady.point(g)
+                worst = max(worst, hypot(u.x - s.x, u.y - s.y))
+            }
+        }
+        #expect(worst > 1)
+    }
+
     /// The bake's box, warped by the layer transform, lands exactly where the camera
     /// now sees the ground under its corners and under the four measured spots.
     @Test func theBakesCornersLandOnTheGroundUnderThem() throws {

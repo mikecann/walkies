@@ -1,11 +1,17 @@
 import MapKit
 import simd
 
-/// Turns map points into screen points. The ground is flat, so wherever the camera
-/// is, flat or tilted, one perspective transform (a homography) maps it onto the
-/// screen. It's measured each frame from four spots spread across the screen: far
+/// Turns map points into screen points. The clouds treat the ground as flat, so wherever
+/// the camera is, flat or tilted, one perspective transform (a homography) maps it onto
+/// the screen. It's measured each frame from four spots spread across the screen: far
 /// enough apart that MapKit's rounding doesn't make the clouds wobble when you're
 /// zoomed out.
+///
+/// Each spot's ground point only says where to measure. With the map's realistic 3D
+/// elevation, a screen point to a coordinate is found on the buildings and hills under
+/// it, so it jumps about as a spot slides over them, and fitting the clouds to those
+/// made them jiggle as you dragged. A coordinate back to a screen point is steady, so
+/// that's the pair the homography is fitted to.
 ///
 /// A plain value with no hold on the map, so a bake can take a copy to another thread.
 nonisolated struct Projection: Sendable {
@@ -26,17 +32,27 @@ nonisolated struct Projection: Sendable {
     init(map: MKMapView) {
         let size = map.bounds.size
         let centre = MKMapPoint(map.centerCoordinate)
+        self = Self.measure(
+            size: size, centre: centre,
+            coordinateAt: { map.convert($0, toCoordinateFrom: map) },
+            pointAt: { map.convert($0, toPointTo: map) }
+        )
+    }
+
+    /// Fits the projection to what the map says, with `coordinateAt` only choosing which
+    /// ground to measure and `pointAt` saying where that ground is on screen.
+    static func measure(
+        size: CGSize, centre: MKMapPoint,
+        coordinateAt: (CGPoint) -> CLLocationCoordinate2D,
+        pointAt: (CLLocationCoordinate2D) -> CGPoint
+    ) -> Projection {
         for spots in [Self.spots, Self.lowSpots] {
-            let screen = spots.map { CGPoint(x: $0.0 * size.width, y: $0.1 * size.height) }
-            let coordinates = screen.map { map.convert($0, toCoordinateFrom: map) }
+            let coordinates = spots.map { coordinateAt(CGPoint(x: $0.0 * size.width, y: $0.1 * size.height)) }
             guard coordinates.allSatisfy(CLLocationCoordinate2DIsValid) else { continue }
-            let measured = Projection(ground: coordinates.map(MKMapPoint.init), screen: screen, width: Double(size.width), centre: centre)
-            if measured.isValid {
-                self = measured
-                return
-            }
+            let measured = Projection(ground: coordinates.map(MKMapPoint.init), screen: coordinates.map(pointAt), width: Double(size.width), centre: centre)
+            if measured.isValid { return measured }
         }
-        self = Projection(ground: [], screen: [], width: Double(size.width), centre: centre)
+        return Projection(ground: [], screen: [], width: Double(size.width), centre: centre)
     }
 
     /// From four ground points and where they are on a screen `width` points wide.

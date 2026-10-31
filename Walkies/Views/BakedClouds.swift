@@ -622,9 +622,9 @@ final class BakedCloudEngine {
         CATransaction.setDisableActions(true)
         overviewImage.bounds = CGRect(origin: .zero, size: overview.pixels)
         overviewImage.contents = overview.image
-        CATransaction.commit()
         self.overview = overview
         tick()
+        CATransaction.commit()
     }
 
     private func ask(projection: Projection, size: CGSize, moving: Bool, clock: Double, displayScale: Double) {
@@ -744,9 +744,12 @@ final class BakedCloudEngine {
         } else {
             cloudImage.removeAnimation(forKey: "drift")
         }
-        CATransaction.commit()
         front = bake
+        // In the same transaction as the new picture: committed apart, it can show for a
+        // frame on the old one's warp, which mid-drag is a jump as far as the last bake's
+        // camera was from this one's.
         tick()
+        CATransaction.commit()
     }
 
     // MARK: Where you are
