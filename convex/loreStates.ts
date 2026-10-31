@@ -15,7 +15,8 @@ export const lorePlaceState = v.union(
   /** Waiting for a slot and the caps. `manual`: asked for with lore:research or lore:resume rather
    * than by someone's walk, so it runs with LORE_AUTO off. `requestedBy`: whose walk queued it, so
    * the queue takes turns between people. `resume`: the step lore:resume restarts its journal from.
-   * `was`: what it was before it was queued again. */
+   * `was`: what it was before it was queued again. `nearby`: queued by lore:prepare for being next
+   * to where someone is, rather than walked in, so it waits behind places people have walked. */
   v.object({
     kind: v.literal("queued"),
     queuedAt: v.number(),
@@ -23,6 +24,7 @@ export const lorePlaceState = v.union(
     requestedBy: v.optional(v.id("users")),
     resume: v.optional(v.string()),
     was: v.optional(vFinished),
+    nearby: v.optional(v.boolean()),
   }),
   v.object({
     kind: v.literal("researching"),

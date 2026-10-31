@@ -20,7 +20,7 @@ flowchart LR
 stateDiagram-v2
   direction LR
   state "queued" as queued
-  queued : queuedAt, manual, requestedBy?, resume?, was?
+  queued : queuedAt, manual, requestedBy?, resume?, was?, nearby?
   state "researching" as researching
   researching : manual, requestedBy?, startedAt, workflowId
   state "ready" as ready
@@ -35,8 +35,8 @@ stateDiagram-v2
   failed : startedAt, finishedAt, error
   state "expired" as expired
   expired : expiredAt
-  [*] --> queued : QUEUE(manual, requestedBy?) (server) / enqueue
-  queued --> queued : QUEUE(manual, requestedBy?) (server) / merge
+  [*] --> queued : QUEUE(manual, requestedBy?, nearby?) (server) / enqueue
+  queued --> queued : QUEUE(manual, requestedBy?, nearby?) (server) / merge
   queued --> queued : FORGET_REQUESTER (server) / forget
   queued --> researching : START(workflowId) (server) [notResume] / start
   queued --> researching : RESUMED(workflowId) (server) [isResume] / resumed
@@ -53,21 +53,21 @@ stateDiagram-v2
   researching --> quiet : PUBLISHED(run) (server) [3. currentRun] / finish
   researching --> failedWaiting : RUN_FAILED(run, error) (server) [1. currentRun, canRetry] / failAndRetry, sends RUN_STOPPED to loreEntry (ignore)
   researching --> failed : RUN_FAILED(run, error) (server) [2. currentRun] / fail, sends RUN_STOPPED to loreEntry (ignore)
-  ready --> queued : QUEUE(manual, requestedBy?) (server) / requeue
+  ready --> queued : QUEUE(manual, requestedBy?, nearby?) (server) / requeue
   ready --> queued : RESUME(from) (server) [hasJournal] / resume, sends BROUGHT_BACK to loreEntry (ignore)
-  quietWaiting --> queued : QUEUE(manual, requestedBy?) (server) / requeue
+  quietWaiting --> queued : QUEUE(manual, requestedBy?, nearby?) (server) / requeue
   quietWaiting --> queued : RESUME(from) (server) [hasJournal] / resume, sends BROUGHT_BACK to loreEntry (ignore)
   quietWaiting --> queued : RETRY_DUE at retryAt [1. autoOn] / retry
   quietWaiting --> quietWaiting : RETRY_DUE at retryAt [else] / postpone
-  quiet --> queued : QUEUE(manual, requestedBy?) (server) / requeue
+  quiet --> queued : QUEUE(manual, requestedBy?, nearby?) (server) / requeue
   quiet --> queued : RESUME(from) (server) [hasJournal] / resume, sends BROUGHT_BACK to loreEntry (ignore)
-  failedWaiting --> queued : QUEUE(manual, requestedBy?) (server) / requeue
+  failedWaiting --> queued : QUEUE(manual, requestedBy?, nearby?) (server) / requeue
   failedWaiting --> queued : RESUME(from) (server) [hasJournal] / resume, sends BROUGHT_BACK to loreEntry (ignore)
   failedWaiting --> queued : RETRY_DUE at retryAt [1. autoOn] / retry
   failedWaiting --> failedWaiting : RETRY_DUE at retryAt [else] / postpone
-  failed --> queued : QUEUE(manual, requestedBy?) (server) / requeue
+  failed --> queued : QUEUE(manual, requestedBy?, nearby?) (server) / requeue
   failed --> queued : RESUME(from) (server) [hasJournal] / resume, sends BROUGHT_BACK to loreEntry (ignore)
-  expired --> queued : QUEUE(manual, requestedBy?) (server) / enqueue
+  expired --> queued : QUEUE(manual, requestedBy?, nearby?) (server) / enqueue
 ```
 
 ## `loreEntry`, on `loreEntries.state`

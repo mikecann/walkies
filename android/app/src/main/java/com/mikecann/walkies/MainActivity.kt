@@ -229,7 +229,6 @@ class MainActivity : ComponentActivity() {
                     alwaysOnWarning = alwaysOnWarning(),
                     name = app.account.displayName,
                     picture = app.account.picture,
-                    scope = app.scope,
                     active = tab == AppTab.Map,
                     covered = openSecret != null,
                     onOpenSettings = ::openSettings,

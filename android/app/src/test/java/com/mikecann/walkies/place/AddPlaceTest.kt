@@ -154,7 +154,7 @@ class AddPlaceTest {
     }
 
     @Test
-    fun neighboursLeaveOutYourPlacesAndTheTooBig() {
+    fun aSavedListOfNeighboursThatCoversYourPlacesIsUsedAsItIs() {
         val (store, _) = tempStore()
         val data = PlaceData.parse(geographe.decodeToString())
         store.save(listOf(CityBuilder.build(place(), data.ways, emptyList())))
@@ -172,7 +172,9 @@ class AddPlaceTest {
         val model = AppModel(store, FakeSettings(), FakeLocation())
         model.services = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined)
         model.refreshNeighbours()
-        assertEquals(listOf("Next door"), model.neighbours.map { it.name })
+        // All of them, your own and the too big too: the map no longer offers them, and
+        // places adding themselves decide which of them count.
+        assertEquals(listOf("Next door", "geographe", "Huge", "Far away"), model.nearby.map { it.name })
     }
 
     private object NoNetwork : Http {

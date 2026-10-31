@@ -23,8 +23,9 @@ enum ScreenshotMode {
     /// What the made-up explorer is called.
     static let explorerName = "Sam"
 
-    /// How far up the map opens, in metres (1,500 normally).
-    static let mapDistance = 4_000.0
+    /// How far up the map opens, in metres (1,500 normally). `-WalkiesMapDistance 20000`
+    /// opens further out, to see the world's clouds round the places.
+    static let mapDistance = LaunchArguments.value(after: "-WalkiesMapDistance").flatMap(Double.init) ?? 4_000.0
 
     /// The secrets book opens with this area showing: the one the Busselton weekend found.
     static let secretsArea = "Busselton"

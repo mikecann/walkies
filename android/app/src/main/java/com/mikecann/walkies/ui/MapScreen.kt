@@ -33,17 +33,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
@@ -54,6 +50,8 @@ import com.mikecann.walkies.AppModel
 import com.mikecann.walkies.BuildConfig
 import com.mikecann.walkies.LocationAccess
 import com.mikecann.walkies.location.LocationTracker
+import com.mikecann.walkies.map.BlanketPlaces
+import com.mikecann.walkies.map.CloudBlanketSource
 import com.mikecann.walkies.map.CloudField
 import com.mikecann.walkies.map.CloudLayer
 import com.mikecann.walkies.map.CloudSprites
@@ -65,20 +63,16 @@ import androidx.compose.ui.platform.LocalContext
 import com.mikecann.walkies.map.MapPoints
 import com.mikecann.walkies.map.MapState
 import com.mikecann.walkies.map.MapboxMap
-import com.mikecann.walkies.map.NeighbourLayer
 import com.mikecann.walkies.map.StandInMap
 import com.mikecann.walkies.map.StickerPin
 import com.mikecann.walkies.map.StickerPinLayer
 import com.mikecann.walkies.lore.LoreEntry
 import com.mikecann.walkies.lore.LoreLibrary
+import com.mikecann.walkies.map.WalkedHexes
 import com.mikecann.walkies.map.YouAreHere
 import com.mikecann.walkies.place.Mist
-import com.mikecann.walkies.place.PlaceResult
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -98,8 +92,6 @@ fun MapScreen(
     /** Whoever's signed in, for your head on the place chip. */
     name: String?,
     picture: String?,
-    /** Where adding a neighbour runs, so it carries on if the screen goes. */
-    scope: CoroutineScope,
     /** The map's tab is showing. Under another tab the clouds stop drifting. */
     active: Boolean,
     /** A secret's card is open over the map. */
@@ -152,29 +144,6 @@ fun MapScreen(
     val context = LocalContext.current
     val cosmetics = remember(equipped.trail, equipped.marker, ring) { mapCosmetics(context, equipped.trail, equipped.marker, ring) }
 
-    /** A suburb next door you've tapped, waiting for you to confirm adding it. */
-    var pickedNeighbour by remember { mutableStateOf<PlaceResult?>(null) }
-    /** What's happening while a suburb from the map is being added. */
-    var addingStatus by remember { mutableStateOf<String?>(null) }
-    var addingError by remember { mutableStateOf<String?>(null) }
-    /** Where the buttons over the map are, so the neighbour labels keep out from under them. */
-    val buttonFrames = remember { mutableStateMapOf<String, Rect>() }
-
-    /** Fetches a neighbouring suburb's streets and adds it on the world grid. */
-    fun add(place: PlaceResult) {
-        addingStatus = "Getting ${place.name} ready…"
-        scope.launch {
-            try {
-                model.addPlace(place) { addingStatus = it }
-            } catch (e: CancellationException) {
-                // Signed out meanwhile.
-            } catch (e: Exception) {
-                addingError = "Couldn't load the streets for ${place.name}. OpenStreetMap might be busy, so try again in a minute."
-            }
-            addingStatus = null
-        }
-    }
-
     val cities = model.cities
     val fresh = model.freshTiles
     // Ticks over as often as walked tiles could newly mist over while the map's open.
@@ -190,6 +159,22 @@ fun MapScreen(
         val walkTiles = fresh.values.flatten().toSet()
         val now = System.currentTimeMillis() / 1000.0
         field = withContext(Dispatchers.Default) { CloudField(cities, walkTiles, mistAt = now, mistDays = mistDays) }
+    }
+    // The clouds over everywhere outside your places (CloudBlanket.kt): cut out round your
+    // places, with holes wherever you've walked, worked out off the main thread and only
+    // when the places, your walks or the walk you're on change.
+    val blanket = remember { CloudBlanketSource() }
+    val walkedHexes = remember { WalkedHexes() }
+    val boundaries = cities.map { it.boundary }
+    LaunchedEffect(boundaries) {
+        blanket.setPlaces(withContext(Dispatchers.Default) { BlanketPlaces(boundaries) })
+    }
+    LaunchedEffect(sprites) { sprites?.let(blanket::setSprites) }
+    val walks = model.walks
+    // A walk that's started by itself counts once it's sure it's a walk, as for your places.
+    val walking = if (model.autoWalkPending) null else model.activeWalk
+    LaunchedEffect(walks, walking?.id, model.activePath.size) {
+        blanket.setWalked(withContext(Dispatchers.Default) { walkedHexes.of(walks, walking) })
     }
     LaunchedEffect(model.revealCount) {
         if (model.revealCount > 0) haptics.performHapticFeedback(HapticFeedbackType.Confirm)
@@ -254,7 +239,7 @@ fun MapScreen(
     // starts the count again.
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     val inView = active && !covered && lifecycle.isAtLeast(Lifecycle.State.RESUMED) && model.recap == null &&
-        model.stickerQueue.isEmpty() && pickedNeighbour == null && addingStatus == null && addingError == null
+        model.stickerQueue.isEmpty()
     val noticeId = model.addedPlaceNotice?.id
     LaunchedEffect(noticeId, inView) {
         if (noticeId == null || !inView) return@LaunchedEffect
@@ -284,19 +269,13 @@ fun MapScreen(
             if (hasToken) {
                 MapboxMap(
                     state, onTap = {}, onReady = { mapReady = true }, modifier = Modifier.fillMaxSize(),
-                    systemBarInset = false, bottomClearance = LocalTabBarClearance.current,
+                    systemBarInset = false, bottomClearance = LocalTabBarClearance.current, blanket = blanket,
                 )
             } else {
                 StandInMap(state, onTap = {}, onReady = { mapReady = true })
             }
             CloudLayer(field, state, sprites, route, freshOutlines, you, cosmetics = cosmetics, animate = active)
             StickerPinLayer(pins, state, onPick = onOpenSecret)
-            NeighbourLayer(
-                neighbours = if (addingStatus == null) model.neighbours else emptyList(),
-                state = state,
-                avoid = buttonFrames.values.toList(),
-                onPick = { pickedNeighbour = it },
-            )
         }
 
         // Keeps the status bar readable over dark water.
@@ -314,7 +293,7 @@ fun MapScreen(
                 .statusBarsPadding()
                 .padding(start = 16.dp, end = 28.dp),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.mapButton("top leading", buttonFrames)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val hidden = model.stickersHere
                 val secrets = if (hidden.isEmpty()) null else hidden.count { model.foundStickers[it.first.id] != null } to hidden.size
                 PlaceChip(model.selectedCity, name, picture, secrets, finding = model.findingFirstPlace, onChangePlace = onShowPlaces)
@@ -364,8 +343,7 @@ fun MapScreen(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 // Clear of the Mapbox logo and attribution along the bottom of the map.
-                .padding(start = 16.dp, end = 16.dp, bottom = LocalTabBarClearance.current + 26.dp)
-                .mapButton("bottom", buttonFrames),
+                .padding(start = 16.dp, end = 16.dp, bottom = LocalTabBarClearance.current + 26.dp),
         ) {
             if (!hasToken) MissingToken()
             AnimatedVisibility(model.showWalkHint && model.activeWalk == null, enter = fadeIn(), exit = fadeOut()) {
@@ -408,20 +386,6 @@ fun MapScreen(
                 HexBadge(BadgeIcon.Location, "Where am I", fill = Walkies.badgeTeal) { focusOnYou() }
             }
         }
-
-        addingStatus?.let { BuildingCard(it, "This can take up to a minute.", Modifier.align(Alignment.Center)) }
-    }
-
-    pickedNeighbour?.let { place ->
-        WalkiesDialog(
-            "Add ${place.name}?",
-            "${place.summary}. It'll go under the clouds next to your other places, and any walks you've already done there count.",
-            listOf(DialogButton("Add ${place.name}", bold = true) { add(place) }, DialogButton("Not now")),
-            onDismiss = { pickedNeighbour = null },
-        )
-    }
-    addingError?.let {
-        WalkiesDialog("Couldn't add it", it, listOf(DialogButton("OK", bold = true)), onDismiss = { addingError = null })
     }
 }
 
@@ -566,10 +530,6 @@ private fun NewSecretsBadge(count: Int, onOpen: () -> Unit, onClose: () -> Unit)
         }
     }
 }
-
-/** Tells the map where this button sits, so the labels on the map keep clear of it. */
-private fun Modifier.mapButton(key: String, frames: MutableMap<String, Rect>) =
-    onGloballyPositioned { frames[key] = it.boundsInRoot() }
 
 @Composable
 private fun MissingToken() {

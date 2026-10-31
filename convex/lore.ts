@@ -13,8 +13,8 @@ import {
 import type { AppCtx, InternalCtx } from "@convex-dev/state-machines";
 import { boundaryArea, boundingBox, fetchPage, insideBoundary } from "./loreChecks";
 import {
-  bundledOsmIds, caps, checksPerUserPerDay, day, journalKeep, maxRunning, minWalkedTiles,
-  suburbArea, suburbsPerUserPerDay, suburbsPerUserPerMonth, walkCheck,
+  bundledOsmIds, caps, checksPerUserPerDay, day, journalKeep, maxRunning, minWalkedTiles, nearbyPerUserPerDay,
+  nearbyPerUserPerMonth, nearbyReach, suburbArea, suburbsPerUserPerDay, suburbsPerUserPerMonth, walkCheck,
 } from "./loreConfig";
 import { autoOn, journalOf, placeRow } from "./loreMachines";
 import { dayKey, monthOf, releaseStale, spentBetween } from "./loreRun";
@@ -36,6 +36,8 @@ type MutationCtx = AppCtx<DataModel> & InternalCtx & Pick<RawMutationCtx, "runMu
 
 /** A place nobody's queue ever got to is as good as unknown: the next walk there can queue it again. */
 const known = (row: Doc<"lorePlaces"> | null) => row !== null && row.state.kind !== "expired";
+/** Known, and not just waiting for being next to someone (lore:prepare): a walk there moves that up. */
+const settled = (row: Doc<"lorePlaces"> | null) => known(row) && !(row!.state.kind === "queued" && row!.state.nearby);
 
 const vPlace = v.object({ name: v.string(), lat: v.number(), lon: v.number() });
 
@@ -112,7 +114,7 @@ async function withReview(ctx: QueryCtx, osmId: number, review: Doc<"loreEntries
  */
 export async function noticePlace(ctx: RawMutationCtx, place: Doc<"places">) {
   if (!autoOn()) return;
-  if (place.osmId !== undefined && (bundledOsmIds.has(place.osmId) || place.loreNoSuburb || known(await placeRow(ctx, place.osmId)))) return;
+  if (place.osmId !== undefined && (bundledOsmIds.has(place.osmId) || place.loreNoSuburb || settled(await placeRow(ctx, place.osmId)))) return;
   await ctx.scheduler.runAfter(0, internal.lore.readPlace, { placeId: place._id });
 }
 
@@ -131,7 +133,7 @@ export async function noticeWalk(ctx: RawMutationCtx, userId: Id<"users">, walkI
   for (const place of places) {
     if (looked >= placesPerWalk) break;
     if (place.walkedTiles !== undefined && place.walkedTiles < minWalkedTiles) continue;
-    if (place.osmId !== undefined && (bundledOsmIds.has(place.osmId) || place.loreNoSuburb || known(await placeRow(ctx, place.osmId)))) continue;
+    if (place.osmId !== undefined && (bundledOsmIds.has(place.osmId) || place.loreNoSuburb || settled(await placeRow(ctx, place.osmId)))) continue;
     await ctx.scheduler.runAfter(0, internal.lore.readPlace, { placeId: place._id, walkId });
     looked++;
   }
@@ -189,9 +191,16 @@ function sizeProblem(boundary: Boundary): string | null {
   return area > suburbArea.max ? "too big" : area < suburbArea.min ? "too small" : null;
 }
 
-/** Whether one of the person's newest walks has good GPS fixes inside the boundary. */
-async function walkedInside(ctx: ActionCtx, userId: Id<"users">, boundary: Boundary, walkId?: Id<"walks">): Promise<boolean> {
-  const box = boundingBox(boundary);
+/**
+ * Whether one of the person's newest walks has good GPS fixes inside the boundary, or
+ * with `reach`, one good fix within that many metres of its bounding box.
+ */
+async function walkedInside(ctx: ActionCtx, userId: Id<"users">, boundary: Boundary, walkId?: Id<"walks">, reach?: number): Promise<boolean> {
+  const inner = boundingBox(boundary);
+  // Metres to degrees, generously at the box's widest latitude.
+  const lat = reach ? reach / 111_000 : 0;
+  const lon = reach ? reach / (111_000 * Math.max(0.1, Math.cos(Math.max(Math.abs(inner.south), Math.abs(inner.north)) * Math.PI / 180))) : 0;
+  const box = { south: inner.south - lat, north: inner.north + lat, west: inner.west - lon, east: inner.east + lon };
   for (const file of await ctx.runQuery(internal.lore.recentWalks, { userId, ...(walkId ? { walkId } : {}) })) {
     const blob = await ctx.storage.get(file);
     if (!blob) continue;
@@ -208,6 +217,7 @@ async function walkedInside(ctx: ActionCtx, userId: Id<"users">, boundary: Bound
       if (typeof lat !== "number" || typeof lon !== "number" || typeof accuracy !== "number") continue;
       if (accuracy < 0 || accuracy > walkCheck.maxAccuracy) continue;
       if (lat < box.south || lat > box.north || lon < box.west || lon > box.east) continue;
+      if (reach !== undefined) return true;
       if (insideBoundary(boundary, lat, lon) && ++inside >= walkCheck.minPoints) return true;
     }
   }
@@ -285,7 +295,7 @@ async function whyNot(ctx: MutationCtx, userId: Id<"users">, osmId: number, walk
   if (!autoOn()) return "off";
   if (bundledOsmIds.has(osmId)) return "bundled";
   // Someone else got here first. Whatever state it's in, this walk pays nothing.
-  if (known(await placeRow(ctx, osmId))) return "known";
+  if (settled(await placeRow(ctx, osmId))) return "known";
   if (place?.loreNoSuburb && place.osmId === osmId) return "not a suburb";
   if (walkedTiles < minWalkedTiles) return "not walked";
   // Past either limit nothing is saved, so a sync after it resets tries again.
@@ -352,8 +362,112 @@ export const noteWalked = internalMutation({
   },
 });
 
+// Getting ahead of people. The phone also says which suburbs are around the one it's
+// in (lore:prepare), so their secrets are ready by the time anyone walks over the
+// border. It's not believed either: the server checks each is a suburb-sized admin
+// boundary that one of the person's own walks came within `nearbyReach` of, and these
+// have their own per-person limits and wait behind places people have walked.
+
+/** The most suburbs one lore:prepare call can ask about. */
+const preparePerCall = 12;
+
+/** Asks for secrets for the suburbs around where you are. Checked and queued in the background. */
+export const prepare = mutation({
+  args: { osmIds: v.array(v.number()) }, returns: v.null(),
+  handler: async (ctx, { osmIds }): Promise<null> => {
+    const userId = await currentUserId(ctx);
+    if (userId === null) throw new ConvexError("Not signed in");
+    if (!autoOn()) return null;
+    const wanted = [...new Set(osmIds)].filter((id) => Number.isSafeInteger(id) && id > 0 && !bundledOsmIds.has(id)).slice(0, preparePerCall);
+    for (const osmId of wanted) {
+      if (known(await placeRow(ctx, osmId))) continue;
+      await ctx.scheduler.runAfter(0, internal.lore.readNearby, { userId, osmId });
+    }
+    return null;
+  },
+});
+
+/** Why this person can't queue a suburb for being nearby, or null if they can (so far). */
+async function whyNotNearby(ctx: MutationCtx, userId: Id<"users">, osmId: number) {
+  if (!autoOn()) return "off";
+  if (bundledOsmIds.has(osmId)) return "bundled";
+  if (known(await placeRow(ctx, osmId))) return "known";
+  const since = dayAndMonthStart(Date.now());
+  const started = await ctx.db.query("loreNearbyRequests").withIndex("by_user_at", (q) => q.eq("userId", userId).gte("at", since.month)).collect();
+  if (started.length >= nearbyPerUserPerMonth || started.filter((r) => r.at >= since.day).length >= nearbyPerUserPerDay) return "too many";
+  return null;
+}
+
+/** The first look at a nearby suburb: says "check" if it's worth fetching, which counts towards the person's checks. */
+export const noteNearby = internalMutation({
+  args: { userId: v.id("users"), osmId: v.number() }, returns: v.string(),
+  handler: async (ctx, { userId, osmId }) => {
+    const why = await whyNotNearby(ctx, userId, osmId);
+    if (why !== null) return why;
+    const now = Date.now();
+    const calls = await ctx.db.query("loreCalls").withIndex("by_user", (q) => q.eq("userId", userId)).unique();
+    const today = calls !== null && dayKey(calls.windowStart) === dayKey(now);
+    if (today && calls.count >= checksPerUserPerDay) return "checked enough";
+    if (calls === null) await ctx.db.insert("loreCalls", { userId, windowStart: now, count: 1 });
+    else await ctx.db.patch("loreCalls", calls._id, { windowStart: today ? calls.windowStart : now, count: today ? calls.count + 1 : 1 });
+    return "check";
+  },
+});
+
+/**
+ * Checks a suburb lore:prepare asked about, the same way readPlace does but with the
+ * walk only having to come near it, and queues it. Says what it decided.
+ */
+export const readNearby = internalAction({
+  args: { userId: v.id("users"), osmId: v.number() }, returns: v.string(),
+  handler: async (ctx, { userId, osmId }): Promise<string> => {
+    const first: string = await ctx.runMutation(internal.lore.noteNearby, { userId, osmId });
+    if (first !== "check") return first;
+    let boundary = await cachedBoundary(ctx, osmId);
+    if (boundary) {
+      const size = sizeProblem(boundary);
+      if (size) return `not a suburb (${size})`;
+      if (!await walkedInside(ctx, userId, boundary, undefined, nearbyReach)) return "not near";
+    }
+    const answer = await nominatim(ctx, "lookup", {
+      osm_ids: `R${osmId}`, format: "jsonv2", ...(boundary ? {} : { polygon_geojson: "1", polygon_threshold: "0.0001" }),
+    }).catch(() => null);
+    const item = Array.isArray(answer)
+      ? (answer as { osm_type?: string; osm_id?: number; category?: string; type?: string; name?: string }[])
+        .find((i) => i.osm_type === "relation" && i.osm_id === osmId)
+      : undefined;
+    if (!item) return "unknown";
+    if (item.category !== "boundary" || item.type !== "administrative") return `not a suburb (${item.category}=${item.type})`;
+    if (!boundary) {
+      try {
+        boundary = boundaryFromNominatim(answer, osmId).boundary;
+      } catch {
+        return "unknown";
+      }
+      const size = sizeProblem(boundary);
+      if (size) return `not a suburb (${size})`;
+      if (!await walkedInside(ctx, userId, boundary, undefined, nearbyReach)) return "not near";
+    }
+    return await ctx.runMutation(internal.lore.queueNearby, { userId, osmId, name: typeof item.name === "string" ? item.name : "" });
+  },
+});
+
+/** Queues a nearby suburb once readNearby's checks have passed, if nobody has yet. */
+export const queueNearby = internalMutation({
+  args: { userId: v.id("users"), osmId: v.number(), name: v.string() },
+  returns: v.union(v.literal("off"), v.literal("bundled"), v.literal("known"), v.literal("too many"), v.literal("queued")),
+  handler: async (ctx, { userId, osmId, name }) => {
+    const why = await whyNotNearby(ctx, userId, osmId);
+    if (why !== null) return why;
+    await ctx.db.insert("loreNearbyRequests", { userId, osmId, at: Date.now() });
+    await queue(ctx, osmId, name, { manual: false, requestedBy: userId, nearby: true });
+    await startQueued(ctx);
+    return "queued";
+  },
+});
+
 /** Puts a place on the queue: a new row, or one that's finished or expired back on it. */
-async function queue(ctx: MutationCtx, osmId: number, name: string, event: { manual: boolean; requestedBy?: Id<"users"> }) {
+async function queue(ctx: MutationCtx, osmId: number, name: string, event: { manual: boolean; requestedBy?: Id<"users">; nearby?: boolean }) {
   const row = await placeRow(ctx, osmId);
   if (row === null) {
     return await lorePlace.create(ctx, { osmId, name, version: 0, attempts: 0, cost: 0, runCost: 0, segment: 0 }, { type: "QUEUE", ...event });
@@ -398,7 +512,9 @@ async function passQueue(ctx: QueryCtx, begin?: (row: Doc<"lorePlaces">) => Prom
     const who = asked(row)?.requestedBy ?? row._id;
     const turn = turns.get(who) ?? 0;
     turns.set(who, turn + 1);
-    return { row, index, turn: asked(row)?.manual ? -1 : turn };
+    // Mike's own first, then places people have walked, then ones only next to them.
+    const state = asked(row);
+    return { row, index, turn: state?.manual ? -1 : state?.kind === "queued" && state.nearby ? 1_000 + turn : turn };
   }).sort((a, b) => a.turn - b.turn || a.index - b.index);
   for (const { row } of order) {
     // Rows a walk queued wait while the switch is off; ones Mike asked for don't.
@@ -529,6 +645,9 @@ export const tick = internalMutation({
     // The per-person limits only look back a month.
     for (const old of await ctx.db.query("loreRequests").withIndex("by_at", (q) => q.lt("at", now - 62 * day)).take(200)) {
       await ctx.db.delete("loreRequests", old._id);
+    }
+    for (const old of await ctx.db.query("loreNearbyRequests").withIndex("by_at", (q) => q.lt("at", now - 62 * day)).take(200)) {
+      await ctx.db.delete("loreNearbyRequests", old._id);
     }
     await machines.pruneHistory(ctx, { before: now - historyKeep });
     // In its own transaction: it reads Convex's record of scheduled functions.

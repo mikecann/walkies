@@ -6,6 +6,7 @@ import com.mikecann.walkies.grid.Hex
 import com.mikecann.walkies.grid.HexGrid
 import com.mikecann.walkies.lore.LoreEntry
 import com.mikecann.walkies.lore.LoreLibrary
+import com.mikecann.walkies.lore.LorePrep
 import com.mikecann.walkies.lore.ServerLore
 import com.mikecann.walkies.lore.placeStickers
 import com.mikecann.walkies.model.CoverageTracer
@@ -580,6 +581,7 @@ class AppModel(
             followIntoPlace(point.coordinate)
         }
         noteWhereYouAre(point)
+        prepareLoreNear(fix.coordinate, onlyIfMoved = true)
         onChange()
     }
 
@@ -988,7 +990,66 @@ class AppModel(
      */
     fun refreshLore(now: Long? = null) {
         val scope = services ?: return
+        lastLocation?.let { prepareLoreNear(it.coordinate) }
         scope.launch { updateLore(now) }
+    }
+
+    // Secrets for the suburbs round you
+
+    private var lorePrep = LorePrep()
+    private var preparingLore = false
+    /** Where and when the suburbs round you were last looked at, so it isn't on every fix. */
+    private var lorePrepSpot: Coordinate? = null
+    private var lorePrepCheckedAt = Double.NEGATIVE_INFINITY
+    /** Tests stand in for lore:prepare. */
+    var prepareLore: (suspend (List<Long>) -> Unit)? = null
+
+    /**
+     * Asks the server to start on secrets for the suburb you're in and the ones next to
+     * it ([LorePrep]), when that list changes, or again after half an hour for the same
+     * list. Only signed in, and fire-and-forget: if it fails, it's just logged. Called
+     * when the app opens and after each sync, and as you move about ([onlyIfMoved]:
+     * once you've gone 100 m or a few minutes have passed since the last look).
+     */
+    private fun prepareLoreNear(here: Coordinate, onlyIfMoved: Boolean = false) {
+        val scope = services ?: return
+        if (prepareLore == null && makePlaceClient == null) return
+        val now = clock()
+        val last = lorePrepSpot
+        if (onlyIfMoved && last != null && last.distance(here) < LORE_PREP_MOVE && now - lorePrepCheckedAt < LORE_PREP_CHECK) return
+        lorePrepSpot = here
+        lorePrepCheckedAt = now
+        if (preparingLore) return
+        val ids = LorePrep.around(
+            here,
+            cities.map { LorePrep.Suburb(it.osmId, it.boundary) },
+            nearby.map { LorePrep.Suburb(it.osmId, it.boundary) },
+        ) { id -> id in LoreLibrary.bundledOsmIds || serverLore.place(id)?.status == ServerLore.Status.Bundled }
+        if (!lorePrep.due(ids, now)) return
+        preparingLore = true
+        val generation = dataGeneration
+        scope.launch {
+            try {
+                val send = prepareLore ?: run {
+                    // Signed out: nothing's noted as asked, so it asks once you've signed in.
+                    val client = makePlaceClient?.invoke() ?: return@launch
+                    val call: suspend (List<Long>) -> Unit = { list ->
+                        client.mutation("lore:prepare", buildJsonObject { put("osmIds", JsonArray(list.map(::JsonPrimitive))) })
+                    }
+                    call
+                }
+                if (generation != dataGeneration) return@launch
+                // Noted before asking, so a server that keeps failing isn't asked again on every fix.
+                lorePrep = lorePrep.asked(ids, clock())
+                send(ids)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.info("Couldn't ask the server to get secrets ready nearby: $e")
+            } finally {
+                preparingLore = false
+            }
+        }
     }
 
     suspend fun updateLore(now: Long? = null) {
@@ -1210,7 +1271,7 @@ class AppModel(
         return dated
     }
 
-    /** Both the neighbour buttons and place search add to your own places, with your walks so far replayed into it. */
+    /** Place search adds to your own places, with your walks so far replayed into it. */
     suspend fun addPlace(place: PlaceResult, status: (String) -> Unit) {
         // Already one of yours, say it added itself: no need to fetch it again.
         val have = place.osmId?.let { osmId -> cities.firstOrNull { it.osmId == osmId } }
@@ -1270,18 +1331,6 @@ class AppModel(
     private var warmedNeighbourIds: List<Long>? = null
     private var warmingNeighbours = false
 
-    /** Suburbs within reach of your places that you haven't added yet, for the map to offer. */
-    val neighbours: List<PlaceResult>
-        get() {
-            val box = box(NEIGHBOURHOOD) ?: return emptyList()
-            val have = cities.mapTo(HashSet()) { it.name.lowercase() }
-            return nearby.filter { place ->
-                val b = place.boundary.bounds
-                place.name.lowercase() !in have && place.area <= CityBuilder.MAX_AREA &&
-                    b.north >= box.south && b.south <= box.north && b.east >= box.west && b.west <= box.east
-            }
-        }
-
     /**
      * The box around your places, grown by this many metres each way. When they're
      * spread far apart (a holiday suburb that added itself, say), it's just the ones
@@ -1328,6 +1377,7 @@ class AppModel(
         ) {
             if (saved.places != nearby) {
                 nearby = saved.places
+                lastLocation?.let { prepareLoreNear(it.coordinate) }
                 onChange()
             }
             warmNeighbours()
@@ -1369,6 +1419,8 @@ class AppModel(
             nearby = places
             warmNeighbours()
             store.saveNearby(NearbyPlaces(box.south, box.west, box.north, box.east, now(), places))
+            // The suburbs next to you may be in it now.
+            lastLocation?.let { prepareLoreNear(it.coordinate) }
             onChange()
         }
     }
@@ -2002,6 +2054,8 @@ class AppModel(
         nearby = emptyList()
         warmedNeighbourIds = null
         nearbyRetries = 0
+        lorePrep = LorePrep()
+        lorePrepSpot = null
         selectedCityId = null
         settings.selectedCity = null
         placeYouOnNextFix = true
@@ -2083,13 +2137,19 @@ class AppModel(
         const val AUTO_WALK_CONFIRM_DISTANCE = 150.0
 
         /**
-         * How far around your places to offer suburbs, in metres. Twice this is fetched
-         * and kept, so adding the next suburb over doesn't mean fetching again.
+         * How far around your places to look for suburbs, in metres, for adding themselves
+         * as you walk in. Twice this is fetched and kept, so walking on into the next
+         * suburb over doesn't mean fetching again.
          */
         const val NEIGHBOURHOOD = 5000.0
 
         /** Metres corner to corner. Places spread wider than this get neighbours only around the selected one. */
         const val NEIGHBOURHOOD_SPAN = 60_000.0
+
+        /** The suburbs round you are looked at again once you've moved this many metres... */
+        const val LORE_PREP_MOVE = 100.0
+        /** ...or this many seconds have passed. */
+        const val LORE_PREP_CHECK = 300.0
 
         private val log: Logger = Logger.getLogger("walkies.places")
 

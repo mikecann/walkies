@@ -307,6 +307,64 @@ describe("what starts research", () => {
     expect((await placeOf(t, 3)).state.kind).toBe("queued");
   });
 
+  test("the suburbs around you are queued before anyone walks there, if one of your walks came near", async () => {
+    vi.stubEnv("LORE_AUTO", "1");
+    const { t, aliceId, alice } = await setup();
+    await expect(t.mutation(api.lore.prepare, { osmIds: [somewhere] })).rejects.toThrow("Not signed in");
+    await cachePlace(t, somewhere);
+    const read = (osmId = somewhere) => t.action(internal.lore.readNearby, { userId: aliceId, osmId });
+    expect(await read()).toBe("not near");
+    await walked(t, aliceId, elsewhere, "far");
+    expect(await read()).toBe("not near");
+    // About 2 km south of the square, so never inside it.
+    await walked(t, aliceId, insideSquare.map((p) => ({ ...p, lat: -33.03 })), "next door");
+    await alice.mutation(api.lore.prepare, { osmIds: [somewhere, geographe, somewhere] });
+    await runScheduled(t);
+    expect(await lorePlaces(t)).toMatchObject([{ osmId: somewhere, state: { kind: "researching", requestedBy: aliceId } }]);
+    // Asking again, or walking in, doesn't start a second run.
+    expect(await read()).toBe("known");
+  });
+
+  test("the suburbs around you have limits of their own, apart from the ones you walk", async () => {
+    vi.stubEnv("LORE_AUTO", "1");
+    const { t, aliceId } = await setup();
+    vi.setSystemTime(new Date("2026-10-05T12:00:00Z"));
+    const queue = (osmId: number) => t.mutation(internal.lore.queueNearby, { userId: aliceId, osmId, name: "n" });
+    const results = [];
+    for (let osmId = 1; osmId <= 11; osmId++) results.push(await queue(osmId));
+    expect(results.filter((r) => r === "queued")).toHaveLength(10);
+    expect(results.at(-1)).toBe("too many");
+    // Walked suburbs still have all of theirs.
+    const placeId = await t.run(async (ctx) => ctx.db.insert("places", {
+      userId: aliceId, clientId: "p", name: "p", createdAt: 0, updatedAt: 0, file: await ctx.storage.store(new Blob(["{}"])),
+    }));
+    expect(await t.mutation(internal.lore.noteWalked, { userId: aliceId, placeId, osmId: 100, name: "p", walkedTiles: 5 })).toBe("queued");
+  });
+
+  test("places people have walked go ahead of ones only next to them, and walking into one moves it up", async () => {
+    vi.stubEnv("LORE_AUTO", "1");
+    const { t, aliceId, bobId } = await setup();
+    await addPlace(t, { osmId: 1, state: researching({ requestedBy: aliceId }), runCost: 5.9 });
+    await addPlace(t, { osmId: 2, state: researching({ requestedBy: aliceId }), runCost: 5.9 });
+    await addPlace(t, { osmId: 3, state: queued({ requestedBy: bobId, nearby: true, queuedAt: Date.now() - 3000 }), attempts: 0 });
+    await addPlace(t, { osmId: 4, state: queued({ requestedBy: bobId, nearby: true, queuedAt: Date.now() - 2000 }), attempts: 0 });
+    await addPlace(t, { osmId: 5, state: queued({ requestedBy: aliceId, queuedAt: Date.now() - 1000 }), attempts: 0 });
+    const placeId = await t.run(async (ctx) => ctx.db.insert("places", {
+      userId: bobId, clientId: "p", name: "p", createdAt: 0, updatedAt: 0, file: await ctx.storage.store(new Blob(["{}"])),
+    }));
+    // Bob walks into 4: it stops being only nearby, keeping its place in the queue.
+    expect(await t.mutation(internal.lore.noteWalked, { userId: bobId, placeId, osmId: 4, name: "p", walkedTiles: 5 })).toBe("queued");
+    expect((await placeOf(t, 4)).state).toMatchObject({ kind: "queued", requestedBy: bobId });
+    expect((await placeOf(t, 4)).state).not.toHaveProperty("nearby");
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query("lorePlaces").collect()) if (row.osmId <= 2) await ctx.db.patch(row._id, { state: ready });
+    });
+    await t.mutation(internal.lore.tick, {});
+    expect((await placeOf(t, 5)).state.kind).toBe("researching");
+    expect((await placeOf(t, 4)).state.kind).toBe("researching");
+    expect((await placeOf(t, 3)).state.kind).toBe("queued");
+  });
+
   test("with the switch off, saving a place or a walk does nothing and walked places aren't started", async () => {
     const { t, aliceId, alice } = await setup();
     await walked(t, aliceId);
@@ -422,10 +480,10 @@ describe("spending caps", () => {
 
   test("two runs at once can't take the day past its cap", async () => {
     const { t } = await setup();
-    await t.run((ctx) => ctx.db.insert("loreSpend", { day: today(), osmId: 1, step: "research", cost: 3, calls: 10 }));
+    await t.run((ctx) => ctx.db.insert("loreSpend", { day: today(), osmId: 1, step: "research", cost: caps.daily - 2 * caps.perRun, calls: 10 }));
     expect(await t.mutation(internal.lore.queueManual, { osmId: 101 })).toBe("started");
     expect(await t.mutation(internal.lore.queueManual, { osmId: 102 })).toBe("started");
-    // 3 spent and two runs that could each spend 6 leave no room for a third.
+    // What's spent and two runs that could each spend their whole limit leave no room for a third.
     expect(await t.mutation(internal.lore.queueManual, { osmId: 103 })).toBe("queued (held by the daily cap)");
     // Both spend all they can, a call at a time, at the same time.
     let refused = 0;
@@ -448,7 +506,7 @@ describe("spending caps", () => {
 
   test("a run that would take today over the daily cap waits for tomorrow", async () => {
     const { t } = await setup();
-    await t.run((ctx) => ctx.db.insert("loreSpend", { day: today(), osmId: 1, step: "research", cost: 9.5, calls: 40 }));
+    await t.run((ctx) => ctx.db.insert("loreSpend", { day: today(), osmId: 1, step: "research", cost: caps.daily - caps.perRun + 0.5, calls: 40 }));
     expect(await t.mutation(internal.lore.queueManual, { osmId: somewhere })).toBe("queued (held by the daily cap)");
     expect((await lorePlaces(t))[0]!.state.kind).toBe("queued");
     expect((await t.query(internal.lore.status, {})).places[0]).toMatchObject({ status: "queued", held: "daily cap" });
@@ -463,8 +521,8 @@ describe("spending caps", () => {
   test("runs already going count as if they'll spend their whole limit", async () => {
     const { t } = await setup();
     await addPlace(t, { osmId: 1, runCost: 0.5 });
-    await t.run((ctx) => ctx.db.insert("loreSpend", { day: today(), osmId: 1, step: "research", cost: 4, calls: 10 }));
-    // 4 spent + 5.50 the running one could still spend + 6 for a new one is over 15.
+    await t.run((ctx) => ctx.db.insert("loreSpend", { day: today(), osmId: 1, step: "research", cost: caps.daily - 11, calls: 10 }));
+    // What's spent + 5.50 the running one could still spend + 6 for a new one is just over the cap.
     expect(await t.mutation(internal.lore.queueManual, { osmId: somewhere })).toBe("queued (held by the daily cap)");
   });
 
@@ -472,7 +530,7 @@ describe("spending caps", () => {
     const { t } = await setup();
     const month = today().slice(0, 7);
     const otherDay = today().endsWith("-01") ? `${month}-02` : `${month}-01`;
-    await t.run((ctx) => ctx.db.insert("loreSpend", { day: otherDay, osmId: 1, step: "research", cost: 45, calls: 200 }));
+    await t.run((ctx) => ctx.db.insert("loreSpend", { day: otherDay, osmId: 1, step: "research", cost: caps.monthly - caps.perRun + 1, calls: 200 }));
     expect(await t.mutation(internal.lore.queueManual, { osmId: somewhere })).toBe("queued (held by the monthly cap)");
   });
 

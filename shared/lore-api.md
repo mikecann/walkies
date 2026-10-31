@@ -1,6 +1,6 @@
 # Secrets for new suburbs: what the apps get
 
-The server researches and writes secrets for a suburb once someone has added it and walked in it, which it checks for itself (`convex/lore.ts`). This is what the iPhone and Android apps download them with (`Walkies/Model/ServerLore.swift`, `ServerLore.kt`, and `updateLore` in each `AppModel`). The apps keep their own copy of `bundledOsmIds` in `Walkies/Lore/bundled-places.json`, so bundled places never ask; `convex/lore.test.ts` checks the two match.
+The server researches and writes secrets for a suburb once someone has added it and walked in it, or once someone has been next to it (`lore:prepare`), which it checks for itself (`convex/lore.ts`). This is what the iPhone and Android apps download them with (`Walkies/Model/ServerLore.swift`, `ServerLore.kt`, and `updateLore` in each `AppModel`). The apps keep their own copy of `bundledOsmIds` in `Walkies/Lore/bundled-places.json`, so bundled places never ask; `convex/lore.test.ts` checks the two match.
 
 ## `lore:forPlace`
 
@@ -27,6 +27,16 @@ The server keeps more detail than these seven words: a quiet or failed place wai
 `version` goes up whenever the live secrets change: a run finishing, Mike approving one, or Mike hiding one. Cache the answer and the sticker PNGs in Application Support, and only fetch the stickers again when `version` changes. A secret can disappear from `entries` (hidden later), so replace the cached list rather than merging it.
 
 Only live secrets come back. Ones waiting for Mike's review, hidden ones, and ones the checks dropped never do.
+
+## `lore:prepare`
+
+A public mutation, signed in only. The apps call it with the suburb you're in and the ones next to it, so their secrets are ready before you walk over the border (`AroundYou` on iPhone, `LorePrep` on Android).
+
+```
+lore:prepare({ osmIds: number[] }) -> null
+```
+
+It takes the first 12, skips bundled ones and ones the server already knows, and checks the rest in the background. The apps don't hear back: they find out through `lore:forPlace` once the suburb is one of their places. Each app sends the suburb you're in first, then the ones whose bounding box comes within 500 m of it, and doesn't send the same set again for 30 minutes.
 
 ## An entry
 
@@ -98,6 +108,6 @@ All of these are internal, so only `npx convex run` (or the dashboard) can call 
 
 ### Spending
 
-Every paid OpenRouter call books a hold before it's sent: the most it could cost, from its prompt size, its `max_tokens` and the prices in `convex/loreConfig.ts`. A call is refused if its hold could take the run's segment past $6, the UTC day past $15 or the month past $50. After the call the hold is settled to OpenRouter's `usage.cost`. A call that never answers, can't be read, or has no `usage.cost` keeps its whole hold as spent (`unpriced` in `loreSpend`); a hold still open after an hour is kept the same way. `lore:status` counts holds in today's and this month's totals.
+Every paid OpenRouter call books a hold before it's sent: the most it could cost, from its prompt size, its `max_tokens` and the prices in `convex/loreConfig.ts`. A call is refused if its hold could take the run's segment past $6, the UTC day past $30 or the month past $100. After the call the hold is settled to OpenRouter's `usage.cost`. A call that never answers, can't be read, or has no `usage.cost` keeps its whole hold as spent (`unpriced` in `loreSpend`); a hold still open after an hour is kept the same way. `lore:status` counts holds in today's and this month's totals.
 
-Walks only start research when the deployment's `LORE_AUTO` environment variable is exactly `1`; with anything else, only `lore:research` and `lore:resume` start runs, and a quiet or failed place's next look waits a day at a time until it's on. A walk only starts one when the server agrees: the relation is an admin boundary between 0.1 and 400 km², one of the person's own saved walks has at least three good GPS fixes inside it, and they haven't started three suburbs today or six this month. A place a walk queued that hasn't started after 30 days leaves the queue.
+Walks only start research when the deployment's `LORE_AUTO` environment variable is exactly `1`; with anything else, only `lore:research` and `lore:resume` start runs, and a quiet or failed place's next look waits a day at a time until it's on. A walk only starts one when the server agrees: the relation is an admin boundary between 0.1 and 400 km², one of the person's own saved walks has at least three good GPS fixes inside it, and they haven't started three suburbs today or six this month. `lore:prepare` starts one when the relation passes the same size check and one of their newest walks has a good fix within 5 km of its bounding box, up to ten a day and thirty a month per person, counted apart from walks. Those wait behind places people have walked, and someone walking into one moves it up. A place a walk queued that hasn't started after 30 days leaves the queue.
