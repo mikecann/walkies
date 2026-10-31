@@ -87,6 +87,24 @@ class AppModelTest {
     }
 
     @Test
+    fun aWalkHoursAfterTheLastFixStartsWhenYouHeadOut() {
+        val (store, _) = tempStore()
+        val place = city()
+        store.save(listOf(place))
+        val model = model(store, alwaysOn = true)
+        // One fix just after a restart, then the GPS rests for five hours (30 Oct 2026).
+        visit(model, place, -400.0, 0.0)
+        val later = 5 * 3600.0
+        val xs = listOf(-280.0, -230.0, -180.0, -130.0, -80.0, -30.0)
+        for ((i, x) in xs.withIndex()) visit(model, place, x, later + i * 40.0)
+        val walk = model.activeWalk!!
+        assertFalse(model.autoWalkPending)
+        assertTrue(abs(walk.startedAt.epochSeconds - (now + later)) < 0.001)
+        assertTrue(walk.points.all { it.time >= now + later })
+        assertTrue(walk.points[0].coordinate.distance(coordinate(place, -280.0)) < 1)
+    }
+
+    @Test
     fun fixesAfterTheGapNeverJoinTheWalkBeforeIt() {
         val (store, _) = tempStore()
         val place = city()

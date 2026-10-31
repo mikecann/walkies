@@ -346,6 +346,8 @@ struct MapScreen: View {
             // Just above the Maps logo, clear of the chips and buttons.
             if PerfOverlay.requested { PerfOverlay().padding(.leading, 10).padding(.bottom, 32) }
         }
+        .onChange(of: mapInView, initial: true) { _, visible in model.mapVisibility(visible) }
+        .onDisappear { model.mapVisibility(false) }
         .onChange(of: scenePhase, initial: true) { _, phase in
             // Open on where you are, in whichever of your places that is.
             if phase == .active { focus.send(.arrive) }

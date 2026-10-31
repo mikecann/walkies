@@ -18,7 +18,7 @@ interface Gps {
     var mode: GpsMode
 }
 
-enum class WalkState { None, Pending, Walking }
+enum class WalkState { None, Pending, Automatic, Manual }
 
 /**
  * The always-on half of LocationTracker.swift, without the Android parts: where the
@@ -97,7 +97,11 @@ class AlwaysOnTracking(
 
     /** An Activity Recognition transition. */
     fun motionChanged(activity: MotionActivity, entered: Boolean) {
-        if (motion.transition(activity, entered)) {
+        val moving = motion.transition(activity, entered)
+        // A new still transition is stronger evidence than the wake timer. A fence exit
+        // can still wake GPS while the chip's old answer says still.
+        if (activity == MotionActivity.Still && entered) awakeUntil = Double.NEGATIVE_INFINITY
+        if (moving) {
             // Moving about inside the fence (round the house, picking the phone up) only needs a
             // light watch: leaving it is what brings the GPS up.
             if (insideFence) fence.unsettle() else wake()
@@ -178,7 +182,7 @@ class AlwaysOnTracking(
             insideFence: Boolean = false,
         ): GpsMode = when {
             // The you-are-here dot, and walks you started yourself.
-            onScreen || walk == WalkState.Walking -> GpsMode.High
+            onScreen || walk == WalkState.Manual -> GpsMode.High
             !alwaysOn -> GpsMode.Off
             // Not in a car or on a bike: every fix on the road is outside the fence and
             // wakes it again, which kept the GPS flat out for whole drives.
@@ -186,13 +190,17 @@ class AlwaysOnTracking(
             // Sitting still: the motion chip says when you're off again. A pending walk
             // ends by itself after the gap.
             motionKnown && still -> GpsMode.Off
+            // Keep an automatic walk resumable through a pause without holding GPS on.
+            // Moving again unsets the settling clock, even inside the same fence.
+            onWheels -> GpsMode.Low
+            walk == WalkState.Automatic -> if (settled) {
+                if (motionKnown) GpsMode.Off else GpsMode.Low
+            } else GpsMode.High
             // Pottering about where you settled. Low still gets a fix every minute or so, and one
             // past the fence (or the fence itself) wakes it. The first ~100 m of a walk from
             // here is coarse, which Mike accepted for the battery (28 Oct 2026).
             insideFence -> if (settled) GpsMode.Off else GpsMode.Low
             walk == WalkState.Pending -> GpsMode.High
-            // Bikes and cars don't count, but notice when you get out.
-            onWheels -> GpsMode.Low
             // Without the motion chip, keep a light watch rather than rely on the fence alone.
             settled -> if (motionKnown) GpsMode.Off else GpsMode.Low
             else -> GpsMode.High

@@ -13,7 +13,9 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored var onLocation: ((CLLocation) -> Void)?
     @ObservationIgnored var onAuthorizationChange: (() -> Void)?
     @ObservationIgnored var isWalking: () -> Bool = { false }
-    /// A walk that's past pending, so the GPS has to keep up with it.
+    /// Manual walks keep full accuracy even through a stop.
+    @ObservationIgnored var isOnManualWalk: () -> Bool = { false }
+    /// An automatic walk that's past pending, including its resumable pause gap.
     @ObservationIgnored var isOnConfirmedWalk: () -> Bool = { false }
     /// The app's on screen, for the you-are-here dot.
     @ObservationIgnored var isOnScreen: () -> Bool = { false }
@@ -74,6 +76,9 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     /// You've left the fence and haven't settled anywhere since.
     @ObservationIgnored private var outside = false
     @ObservationIgnored private var lightOn = false
+    @ObservationIgnored private var stationary = false
+    @ObservationIgnored private var pausedAt: Coordinate?
+    @ObservationIgnored private var lastLocation: Coordinate?
 
     /// How hard always on works.
     enum Watch: Equatable {
@@ -88,17 +93,37 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     /// Always on used to run live updates whenever you were moving, which meant the GPS ran
     /// for whole drives and every time you walked round the house (28 Oct 2026). The first
     /// ~100 m of a walk from where you settled is missed, which Mike accepted for the battery.
-    nonisolated static func watch(confirmedWalk: Bool, onScreen: Bool, onWheels: Bool, insideFence: Bool) -> Watch {
-        if confirmedWalk || onScreen { return .live }
+    nonisolated static func watch(confirmedWalk: Bool, onScreen: Bool, onWheels: Bool, insideFence: Bool,
+                                 manualWalk: Bool = false, stationary: Bool = false) -> Watch {
+        if manualWalk || onScreen { return .live }
+        if onWheels { return insideFence && !confirmedWalk ? .idle : .light }
+        // Keep the walk open, but use Wi-Fi/cell fixes until motion or displacement
+        // says it's moving again. This also works when Core Motion isn't available.
+        if stationary { return confirmedWalk || !insideFence ? .light : .idle }
+        if confirmedWalk { return .live }
         if insideFence { return .idle }
-        // Cars and bikes don't count, but notice when you get out.
-        if onWheels { return .light }
         return .live
     }
 
     var watch: Watch {
         Self.watch(confirmedWalk: isOnConfirmedWalk(), onScreen: isOnScreen(), onWheels: isOnWheels(),
-                   insideFence: fence.center != nil && !outside)
+                   insideFence: fence.center != nil && !outside, manualWalk: isOnManualWalk(), stationary: stationary)
+    }
+
+    /// A fence exit can override the chip's old stationary answer until a fresh update.
+    func motionChanged() {
+        stationary = isStill()
+        if stationary { pausedAt = pausedAt ?? lastLocation } else { pausedAt = nil }
+        refreshWatch()
+    }
+
+    private func noteMovement(_ location: CLLocation) {
+        guard stationary, let pausedAt, location.timestamp.timeIntervalSinceNow > -10,
+              location.horizontalAccuracy >= 0 else { return }
+        if pausedAt.distance(to: Coordinate(location.coordinate)) - location.horizontalAccuracy > StationaryFence.settleRadius {
+            stationary = false
+            self.pausedAt = nil
+        }
     }
 
     /// Call when anything `watch` depends on changes.
@@ -193,11 +218,18 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
                     guard let self, !Task.isCancelled else { return }
                     last = update.location ?? last
                     self.lastLive = update.stationary ? nil : .now
+                    self.stationary = update.stationary
                     if let location = update.location {
+                        self.lastLocation = Coordinate(location.coordinate)
+                        if update.stationary { self.pausedAt = Coordinate(location.coordinate) }
                         self.noteOutside(location)
                         self.onLocation?(location)
                     }
-                    if let last { self.settle(at: last, stationary: update.stationary) }
+                    if let last {
+                        if update.stationary { self.pausedAt = Coordinate(last.coordinate) }
+                        self.settle(at: last, stationary: update.stationary)
+                    }
+                    self.refreshWatch()
                 }
             } catch {
                 Self.log.error("Live updates stopped: \(error)")
@@ -228,6 +260,8 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     private func leftFence() {
         guard alwaysOnRunning else { return }
         outside = true
+        stationary = false
+        pausedAt = nil
         guard liveTask != nil else { return refreshWatch() }
         if let lastLive, Date.now.timeIntervalSince(lastLive) < 10 { return }
         startLiveUpdates()
@@ -241,6 +275,9 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
                 // Light watch and significant-change fixes, while always on.
                 if alwaysOnRunning {
                     noteOutside(location)
+                    noteMovement(location)
+                    if stationary, pausedAt == nil { pausedAt = Coordinate(location.coordinate) }
+                    lastLocation = Coordinate(location.coordinate)
                     // Not in a car: stopping at the lights isn't settling somewhere.
                     if lightOn, !isOnWheels() { settle(at: location, stationary: isStill()) }
                 }

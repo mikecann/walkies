@@ -56,12 +56,20 @@ class WalkiesApplication : Application() {
     private lateinit var tracking: AlwaysOnTracking
     private lateinit var transitions: ActivityTransitions
 
-    /** Whether the map's showing. */
+    /** Whether the activity is visible; also controls steps and notifications. */
     var onScreen = false
         set(value) {
             field = value
             refreshTracking()
             if (value) { steps.refreshToday(); steps.refreshLive(model.activeWalk) } else steps.stopLive()
+        }
+
+    /** The live map, rather than settings, history, or a cover over it. */
+    var mapOnScreen = false
+        set(value) {
+            if (field == value) return
+            field = value
+            refreshTracking()
         }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -169,9 +177,10 @@ class WalkiesApplication : Application() {
         val walk = when {
             model.activeWalk == null -> WalkState.None
             model.autoWalkPending -> WalkState.Pending
-            else -> WalkState.Walking
+            model.activeWalk?.isAutomatic == true -> WalkState.Automatic
+            else -> WalkState.Manual
         }
-        tracking.update(alwaysOn, onScreen, walk)
+        tracking.update(alwaysOn, onScreen && mapOnScreen, walk)
 
         if (alwaysOn) transitions.start() else transitions.stop()
 

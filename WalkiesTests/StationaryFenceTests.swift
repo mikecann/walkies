@@ -120,9 +120,53 @@ struct LocationTrackerFenceTests {
         // Left it: GPS on foot, a light watch in a car.
         #expect(T.watch(confirmedWalk: false, onScreen: false, onWheels: false, insideFence: false) == .live)
         #expect(T.watch(confirmedWalk: false, onScreen: false, onWheels: true, insideFence: false) == .light)
-        // A real walk, or the app on screen, always gets the GPS.
-        #expect(T.watch(confirmedWalk: true, onScreen: false, onWheels: true, insideFence: true) == .live)
+        // Automatic walks turn down in cars; manual walks and the live map keep accuracy.
+        #expect(T.watch(confirmedWalk: true, onScreen: false, onWheels: true, insideFence: true) == .light)
         #expect(T.watch(confirmedWalk: false, onScreen: true, onWheels: false, insideFence: true) == .live)
+    }
+
+    @Test func anAutomaticPauseKeepsALightWatchAndResumesOnMotion() {
+        let tracker = LocationTracker(geofence: FakeFence())
+        tracker.isOnConfirmedWalk = { true }
+        var still = false
+        tracker.isStill = { still }
+        #expect(tracker.watch == .live)
+        still = true
+        tracker.motionChanged()
+        #expect(tracker.watch == .light)
+        still = false
+        tracker.motionChanged()
+        #expect(tracker.watch == .live)
+    }
+
+    @Test func aNewStillAnswerEndsAnUnconfirmedWake() {
+        let tracker = LocationTracker(geofence: FakeFence())
+        tracker.isStill = { true }
+        #expect(tracker.watch == .live)
+        tracker.motionChanged()
+        #expect(tracker.watch == .light)
+    }
+
+    @Test func manualWalksKeepAccuracyThroughStopsAndCarMotion() {
+        typealias T = LocationTracker
+        #expect(T.watch(confirmedWalk: true, onScreen: false, onWheels: false, insideFence: true,
+                        manualWalk: true, stationary: true) == .live)
+        #expect(T.watch(confirmedWalk: true, onScreen: false, onWheels: true, insideFence: true,
+                        manualWalk: true, stationary: true) == .live)
+    }
+
+    @Test func aPausedAutomaticWalkResumesInsideItsFence() {
+        let fake = FakeFence()
+        let tracker = LocationTracker(geofence: fake)
+        tracker.isOnConfirmedWalk = { true }
+        var still = true
+        tracker.isStill = { still }
+        fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
+        tracker.motionChanged()
+        #expect(tracker.watch == .light)
+        still = false
+        tracker.motionChanged()
+        #expect(tracker.watch == .live)
     }
 
     @Test func theFenceFromLastTimeMeansYouAreInsideIt() {

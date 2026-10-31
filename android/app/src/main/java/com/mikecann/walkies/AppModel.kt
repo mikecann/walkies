@@ -633,6 +633,10 @@ class AppModel(
         val anchor = tracer.anchor
         var step = tracer.add(point)
         if (step.samples.isEmpty()) return
+        // The tracer's last spot can be hours old when the GPS has been off (the first fix
+        // after a restart, then nothing until you head out). Start from this fix instead, or
+        // the walk says it began back then: Dad's 16:20 walk on 30 Oct 2026 ran from 11:00.
+        if (activeWalk == null && anchor != null && point.time - anchor.time > FRESH_START) return
         // Only decided once you're walking on from the new spot, so one bad fix can't
         // end a walk.
         val walkEnd = activeWalk?.points?.lastOrNull()
@@ -2067,6 +2071,9 @@ class AppModel(
          * GPS drift. Any tiles it uncovered stay uncovered.
          */
         const val MINIMUM_AUTO_WALK = 300.0
+
+        /** Seconds the tracer's last spot can be old and still start a new always-on walk. */
+        const val FRESH_START = 120.0
 
         /**
          * An always-on walk only counts once you've got this far (metres, as the crow

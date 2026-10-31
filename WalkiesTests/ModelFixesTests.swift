@@ -74,6 +74,68 @@ struct ModelFixesTests {
         #expect(try #require(samples.first).distance(to: coordinate(in: place, x: -400)) <= CoverageTracer.spacing)
     }
 
+    @Test func aWalkHoursAfterTheLastFixStartsWhenYouHeadOut() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let place = city()
+        store.save([place])
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true)
+        await model.waitForHistory()
+        // One fix just after a restart, then the GPS rests for five hours (30 Oct 2026).
+        let start = Date.now
+        visit(model, in: place, x: -400, seconds: 0)
+        let later = 5 * 3600.0
+        for (i, x) in [-280.0, -230, -180, -130, -80, -30].enumerated() {
+            visit(model, in: place, x: x, seconds: later + Double(i) * 40)
+        }
+        let walk = try #require(model.activeWalk)
+        #expect(!model.autoWalkPending)
+        #expect(walk.startedAt.timeIntervalSince(start) > later - 1)
+        #expect(try #require(walk.points.first).coordinate.distance(to: coordinate(in: place, x: -280)) < 1)
+    }
+
+    @Test func anAutomaticPauseKeepsTheSameWalkAndResumesCoverage() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let place = city()
+        store.save([place])
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true)
+        await model.waitForHistory()
+        for (i, x) in [-400.0, -350, -300, -250, -200].enumerated() {
+            visit(model, in: place, x: x, seconds: Double(i) * 40)
+        }
+        let before = try #require(model.activeWalk)
+        #expect(!model.autoWalkPending)
+        var still = true
+        model.tracker.isStill = { still }
+        model.tracker.motionChanged()
+        #expect(model.tracker.watch == .light)
+        #expect(model.activeWalk?.id == before.id)
+        still = false
+        model.tracker.motionChanged()
+        #expect(model.tracker.watch == .live)
+        visit(model, in: place, x: -150, seconds: 220)
+        visit(model, in: place, x: -100, seconds: 260)
+        #expect(model.activeWalk?.id == before.id)
+        #expect(try #require(model.activeWalk).distance > before.distance + 90)
+        #expect(model.walks.isEmpty)
+    }
+
+    @Test func onlyTheVisibleMapAsksForForegroundAccuracy() {
+        let store = store()
+        defer { store.wipe() }
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true)
+        model.foreground(true)
+        #expect(!model.tracker.isOnScreen())
+        model.mapVisibility(true)
+        #expect(model.tracker.isOnScreen())
+        model.mapVisibility(false)
+        #expect(!model.tracker.isOnScreen())
+        model.mapVisibility(true)
+        model.foreground(false)
+        #expect(!model.tracker.isOnScreen())
+    }
+
     @Test func fixesAfterTheGapNeverJoinAWalkStillWaitingToFinish() async throws {
         let store = store()
         defer { store.wipe() }
