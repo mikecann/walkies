@@ -40,7 +40,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
@@ -133,7 +132,7 @@ fun CelebrationScreen(
     val haptics = LocalHapticFeedback.current
     val state = remember { MapState() }
     val player = remember(recap) { ReplayPlayer(recap, others) }
-    val sounds = remember { SoundFX(context) }
+    val sounds = rememberSoundFX()
     var sprites by remember { mutableStateOf<CloudSprites?>(null) }
     var mapReady by remember { mutableStateOf(false) }
     /** You've moved the map yourself, so offer to put it back on the walk. */
@@ -146,10 +145,8 @@ fun CelebrationScreen(
     player.onPop = { haptics.performHapticFeedback(HapticFeedbackType.SegmentTick) }
     player.onSuccess = { haptics.performHapticFeedback(HapticFeedbackType.Confirm) }
 
-    DisposableEffect(sounds) { onDispose { sounds.release() } }
     LaunchedEffect(Unit) {
         sprites = withContext(Dispatchers.Default) { CloudSprites.forTheme(clouds) }
-        withContext(Dispatchers.Default) { sounds.prepare() }
     }
     LaunchedEffect(player.runs) { player.run() }
 

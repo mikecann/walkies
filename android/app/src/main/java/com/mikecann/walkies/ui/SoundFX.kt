@@ -5,6 +5,18 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.os.Handler
+import android.os.Looper
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.exp
 import kotlin.math.max
@@ -19,6 +31,8 @@ import kotlin.math.sin
  * the summary and a tick for counting up. Played as sonification without asking for
  * audio focus, so they mix over a podcast rather than stopping it, and kept quiet
  * when the phone's on silent or vibrate, as the iPhone's silent switch does.
+ *
+ * Use [rememberSoundFX], which only holds the sounds while the app's on screen.
  */
 class SoundFX(context: Context) {
     sealed interface Sound {
@@ -31,12 +45,20 @@ class SoundFX(context: Context) {
 
     private val audio = context.applicationContext.getSystemService(AudioManager::class.java)
     private val tracks = HashMap<Sound, AudioTrack>()
+    /** Between [open] and [release]: the only time a sound gets made, so none are left open in the background. */
+    private var isOpen = false
+    private val main = Handler(Looper.getMainLooper())
     private val attributes = AudioAttributes.Builder()
         .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
         .build()
 
-    /** Makes the sounds up front, so there's no lag on the first. Call off the main thread if you can. */
+    fun open() = synchronized(tracks) { isOpen = true }
+
+    /**
+     * Makes the sounds up front, so there's no lag on the first. Call off the main thread if
+     * you can. Stops partway if they're released meanwhile, so none are left open.
+     */
     fun prepare() {
         for (n in 0..14) track(Sound.Pop(n))
         track(Sound.Chime)
@@ -51,18 +73,23 @@ class SoundFX(context: Context) {
         runCatching {
             if (track.playState == AudioTrack.PLAYSTATE_PLAYING) track.stop()
             track.reloadStaticData()
+            // Setting it again arms it again for this play.
+            track.notificationMarkerPosition = track.bufferSizeInFrames - 1
             track.play()
         }
     }
 
     fun release() {
         synchronized(tracks) {
+            isOpen = false
             tracks.values.forEach { runCatching { it.release() } }
             tracks.clear()
         }
     }
 
+    /** Null once released: a celebration still counting up after you've left is silent. */
     private fun track(sound: Sound): AudioTrack? = synchronized(tracks) {
+        if (!isOpen) return null
         tracks[sound] ?: runCatching { build(make(sound)) }.getOrNull()?.also { tracks[sound] = it }
     }
 
@@ -81,6 +108,17 @@ class SoundFX(context: Context) {
             .build()
         track.write(samples, 0, samples.size)
         track.setVolume(0.7f)
+        // A static track that's played to the end still says it's playing, and Android
+        // counts it as open audio, so stop it at its last frame.
+        track.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
+            override fun onMarkerReached(track: AudioTrack) {
+                // Left over from the play before, if it's started again since: the head's back near the start.
+                if (track.playbackHeadPosition < track.notificationMarkerPosition) return
+                runCatching { track.stop() }
+            }
+
+            override fun onPeriodicNotification(track: AudioTrack) = Unit
+        }, main)
         return track
     }
 
@@ -156,4 +194,37 @@ class SoundFX(context: Context) {
         /** A major pentatonic scale from C5, so any run of pops sounds pleasant. */
         private val PENTATONIC = intArrayOf(0, 2, 4, 7, 9)
     }
+}
+
+/**
+ * The sounds for a screen, held only while the app's on screen. Audio tracks left open in
+ * the background got Walkies blamed for other apps' sound in Android's battery stats: on
+ * 1 Nov 2026 Dad's Pixel put six hours of "AudioMix" on Walkies, two-thirds of its
+ * battery that day, while the only thing playing was his audiobook app, for six minutes.
+ */
+@Composable
+fun rememberSoundFX(): SoundFX {
+    val context = LocalContext.current
+    val sounds = remember { SoundFX(context) }
+    val scope = rememberCoroutineScope()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        // Adding it replays ON_START if the app's already on screen.
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> {
+                    sounds.open()
+                    scope.launch(Dispatchers.Default) { sounds.prepare() }
+                }
+                Lifecycle.Event.ON_STOP -> sounds.release()
+                else -> Unit
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose {
+            lifecycle.removeObserver(observer)
+            sounds.release()
+        }
+    }
+    return sounds
 }
