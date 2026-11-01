@@ -36,7 +36,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -62,7 +61,6 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -76,9 +74,7 @@ import com.mikecann.walkies.AppModel
 import com.mikecann.walkies.model.LevelMeter
 import com.mikecann.walkies.model.Progression
 import com.mikecann.walkies.model.SwiftDate
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -97,12 +93,9 @@ import kotlin.math.sin
  */
 @Composable
 fun ProgressPage(model: AppModel, section: ProgressSection, onSection: (ProgressSection) -> Unit) {
-    val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     @Suppress("UNUSED_VARIABLE") val revision = rememberRevision(model::listen)
-    val sounds = remember { SoundFX(context) }
-    DisposableEffect(sounds) { onDispose { sounds.release() } }
-    LaunchedEffect(sounds) { withContext(Dispatchers.Default) { sounds.prepare() } }
+    val sounds = rememberSoundFX()
 
     // The model has no timer. Keep quests and the ring's countdown current while this stays open.
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
