@@ -45,7 +45,7 @@ class SoundFX(context: Context) {
 
     private val audio = context.applicationContext.getSystemService(AudioManager::class.java)
     private val tracks = HashMap<Sound, AudioTrack>()
-    /** Between [open] and [release]: only then does [prepare] make the sounds. */
+    /** Between [open] and [release]: the only time a sound gets made, so none are left open in the background. */
     private var isOpen = false
     private val main = Handler(Looper.getMainLooper())
     private val attributes = AudioAttributes.Builder()
@@ -60,10 +60,10 @@ class SoundFX(context: Context) {
      * you can. Stops partway if they're released meanwhile, so none are left open.
      */
     fun prepare() {
-        for (n in 0..14) track(Sound.Pop(n), prepared = true)
-        track(Sound.Chime, prepared = true)
-        track(Sound.Fanfare, prepared = true)
-        track(Sound.Tick, prepared = true)
+        for (n in 0..14) track(Sound.Pop(n))
+        track(Sound.Chime)
+        track(Sound.Fanfare)
+        track(Sound.Tick)
     }
 
     fun play(sound: Sound) {
@@ -87,8 +87,9 @@ class SoundFX(context: Context) {
         }
     }
 
-    private fun track(sound: Sound, prepared: Boolean = false): AudioTrack? = synchronized(tracks) {
-        if (prepared && !isOpen) return null
+    /** Null once released: a celebration still counting up after you've left is silent. */
+    private fun track(sound: Sound): AudioTrack? = synchronized(tracks) {
+        if (!isOpen) return null
         tracks[sound] ?: runCatching { build(make(sound)) }.getOrNull()?.also { tracks[sound] = it }
     }
 
@@ -111,6 +112,8 @@ class SoundFX(context: Context) {
         // counts it as open audio, so stop it at its last frame.
         track.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
             override fun onMarkerReached(track: AudioTrack) {
+                // Left over from the play before, if it's started again since: the head's back near the start.
+                if (track.playbackHeadPosition < track.notificationMarkerPosition) return
                 runCatching { track.stop() }
             }
 
