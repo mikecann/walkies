@@ -154,6 +154,17 @@ class CoverageTracer {
         const val SPACING = 10.0
 
         /** How far these points really walked, by the same rules. */
+        /** Faster than this (m/s), by a good fix's own speed, is walking rather than GPS wobble. */
+        const val WALKING_PACE = 0.8
+
+        /**
+         * A fix that shows you walking by itself: accurate, with the GPS's own speed at a
+         * walking pace. Activity Recognition can take minutes to notice you've set off, and
+         * this is better evidence than its last "still".
+         */
+        fun atWalkingPace(point: TrackPoint): Boolean =
+            point.accuracy in 0.0..20.0 && (point.speed ?: 0.0) in WALKING_PACE..MAX_SPEED
+
         fun distance(points: List<TrackPoint>): Double {
             val tracer = CoverageTracer()
             return points.fold(0.0) { total, point -> total + tracer.add(point).distance }

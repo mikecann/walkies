@@ -341,16 +341,64 @@ class AlwaysOnTrackingTest {
     }
 
     @Test
-    fun aFreshStillTransitionEndsAnUnconfirmedWakeEarly() {
+    fun aStillTransitionDoesNotCutAWakeShort() {
         val t = tracking(home)
-        t.update(alwaysOn = true, onScreen = false, walk = WalkState.Pending)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
         t.leftFence()
         assertEquals(GpsMode.High, gps.mode)
         now += 5
         t.motionChanged(MotionActivity.Still, entered = true)
-        assertEquals(GpsMode.Off, gps.mode)
-        t.motionChanged(MotionActivity.Walking, entered = true)
         assertEquals(GpsMode.High, gps.mode)
+        now += AlwaysOnTracking.WAKE_TIME
+        t.tick()
+        assertEquals(GpsMode.Off, gps.mode)
+    }
+
+    /** Dad's Pixel, 1 Nov 2026: the chip still said still, so GPS went off and the fence followed him. */
+    @Test
+    fun aStillTheChipHasntCaughtUpOnDoesNotStopAWalkLeavingHome() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
+        t.motionChanged(MotionActivity.Still, entered = true)
+        t.leftFence()
+        for (i in 1..60) {
+            now += 5
+            t.fix(TrackPoint(east(100.0 + i * 6.5).lat, east(100.0 + i * 6.5).lon, now, 8.0, speed = 1.3))
+        }
+        // Well past the wake: still up, and the fence is still at home.
+        assertEquals(GpsMode.High, gps.mode)
+        assertTrue(geofence.placed.isEmpty())
+    }
+
+    @Test
+    fun aStillGpsFixDoesNotOverruleTheChip() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
+        t.motionChanged(MotionActivity.Still, entered = true)
+        t.leftFence()
+        now += AlwaysOnTracking.WAKE_TIME + 1
+        t.fix(TrackPoint(east(150.0).lat, east(150.0).lon, now, 8.0, speed = 0.2))
+        assertEquals(GpsMode.Off, gps.mode)
+    }
+
+    /** Two minutes into a walk with no fixes yet, the minute tick settled you back on the last one, at home. */
+    @Test
+    fun theTickDoesNotSettleYouOnAFixFromBeforeYouSetOff() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
+        t.motionChanged(MotionActivity.Still, entered = true)
+        t.fix(fix(home))
+        now += StationaryFence.SETTLE_TIME + 1
+        t.fix(fix(home))
+        assertEquals(GpsMode.Off, gps.mode)
+        now += 60
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        assertEquals(GpsMode.Low, gps.mode)
+        repeat(4) {
+            now += 60
+            t.tick()
+        }
+        assertEquals(GpsMode.Low, gps.mode)
     }
 
     @Test

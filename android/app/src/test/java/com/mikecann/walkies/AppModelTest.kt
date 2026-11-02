@@ -59,8 +59,8 @@ class AppModelTest {
         model.record(TrackPoint(c.lat, c.lon, now + seconds, 5.0, speed = speed, wheels = wheels))
     }
 
-    private fun model(store: Store, alwaysOn: Boolean, location: FakeLocation = FakeLocation()) =
-        AppModel(store, FakeSettings(alwaysOn = alwaysOn), location, clock = clock)
+    private fun model(store: Store, alwaysOn: Boolean, location: FakeLocation = FakeLocation(), motion: Motion = Motion.Unknown) =
+        AppModel(store, FakeSettings(alwaysOn = alwaysOn), location, motion = motion, clock = clock)
 
     @Test
     fun anAutomaticWalkKeepsTheFixItStartedFrom() {
@@ -102,6 +102,28 @@ class AppModelTest {
         assertTrue(abs(walk.startedAt.epochSeconds - (now + later)) < 0.001)
         assertTrue(walk.points.all { it.time >= now + later })
         assertTrue(walk.points[0].coordinate.distance(coordinate(place, -280.0)) < 1)
+    }
+
+    /** Dad's Pixel, 1 and 2 Nov 2026: the chip's old "still" got every fix ignored. */
+    @Test
+    fun fixesAtWalkingPaceStartAWalkWhileTheChipStillSaysStill() {
+        val (store, _) = tempStore()
+        val place = city()
+        store.save(listOf(place))
+        val still = object : Motion {
+            override val onWheels = false
+            override val still = true
+        }
+        val model = model(store, alwaysOn = true, motion = still)
+        for ((i, x) in listOf(-400.0, -350.0, -300.0, -250.0, -200.0).withIndex()) visit(model, place, x, i * 40.0)
+        assertNotNull(model.activeWalk)
+        assertFalse(model.autoWalkPending)
+        // Creeping fixes still count as standing about while the chip says still.
+        val (store2, _) = tempStore()
+        store2.save(listOf(place))
+        val slow = model(store2, alwaysOn = true, motion = still)
+        for ((i, x) in listOf(-400.0, -390.0, -380.0, -370.0).withIndex()) visit(slow, place, x, i * 40.0, speed = 0.5)
+        assertNull(slow.activeWalk)
     }
 
     @Test

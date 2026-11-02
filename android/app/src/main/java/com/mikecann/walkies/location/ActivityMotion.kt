@@ -19,6 +19,11 @@ class ActivityMotion : Motion {
     var known = false
         private set
 
+    /** A good GPS fix shows you walking, whatever the last transition said. */
+    fun sawWalking() {
+        still = false
+    }
+
     /** Returns true when this means you've started moving. */
     fun transition(activity: MotionActivity, entered: Boolean): Boolean {
         known = true
