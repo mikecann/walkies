@@ -60,9 +60,9 @@ const PIXEL_ON_WIFI = `s=$(cat ~/.config/walkies/dads-pixel-serial 2>/dev/null) 
 export default {
   icon: "figure.walk",
   actions: [
-    { title: "Website", icon: "safari", run: "open https://walkies.mikecann.app/" },
-    { title: "App Store Connect", icon: "app.badge", run: `open ${CONNECT}` },
-    { title: "Sentry", icon: "exclamationmark.triangle", run: "open 'https://mikec.sentry.io/issues/?project=4512336956751872'" },
+    { title: "Website", icon: "safari", url: "https://walkies.mikecann.app/" },
+    { title: "App Store Connect", icon: "app.badge", url: CONNECT },
+    { title: "Sentry", icon: "exclamationmark.triangle", url: "https://mikec.sentry.io/issues/?project=4512336956751872" },
     {
       title: "Update Dad's phone",
       icon: "iphone.gen3",
