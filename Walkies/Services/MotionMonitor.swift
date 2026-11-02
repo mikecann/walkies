@@ -89,9 +89,9 @@ final class MotionMonitor {
             manager.queryActivityStarting(from: now.addingTimeInterval(-Self.setOffWindow), to: now, to: .main) { activities, _ in
                 let stretches = (activities ?? []).map { activity -> Stretch in
                     let kind: Stretch.Kind
-                    if activity.confidence == .low { kind = .other }
-                    else if activity.walking || activity.running { kind = .onFoot }
-                    else if activity.cycling || activity.automotive { kind = .wheels }
+                    // Even an unsure "walking" counts here, or it would clip the start of the walk.
+                    if activity.walking || activity.running { kind = .onFoot }
+                    else if activity.confidence != .low, activity.cycling || activity.automotive { kind = .wheels }
                     else { kind = .other }
                     return Stretch(start: activity.startDate, kind: kind)
                 }

@@ -769,7 +769,7 @@ final class AppModel {
             freshTiles = [:]
             addedTiles = [:]
             autoWalkPending = true
-            startFromWhenYouSetOff(firstFix: point.time)
+            startFromWhenYouSetOff()
         }
         guard var walk = activeWalk else { return }
         // The fix this step started from, so replaying the points gives the same
@@ -797,9 +797,8 @@ final class AppModel {
 
     /// The first fix can come well after you left, so ask the motion chip when you really did.
     /// The start time and steps go back to then. The route can't: there's no GPS to show for it.
-    private func startFromWhenYouSetOff(firstFix: TimeInterval) {
-        guard let id = activeWalk?.id, servicesEnabled || querySetOff != nil else { return }
-        let now = Date(timeIntervalSince1970: firstFix)
+    private func startFromWhenYouSetOff() {
+        guard let id = activeWalk?.id, let now = activeWalk?.startedAt, servicesEnabled || querySetOff != nil else { return }
         Task {
             let found = if let querySetOff { await querySetOff(now) } else { await motion.setOff(before: now) }
             guard let found, var walk = activeWalk, walk.id == id, finishingWalkID == nil else { return }
@@ -809,6 +808,7 @@ final class AppModel {
             guard start < walk.startedAt else { return }
             walk.startedAt = start
             activeWalk = walk
+            saveNow()
         }
     }
 
