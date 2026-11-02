@@ -100,6 +100,8 @@ final class AppModel {
     @ObservationIgnored private var finishingWalkID: UUID?
     /// Tests can supply a delayed count without Core Motion.
     @ObservationIgnored var querySteps: ((Date, Date) async -> Int?)?
+    /// Tests can say when you set off without Core Motion.
+    @ObservationIgnored var querySetOff: ((Date) async -> Date?)?
 
     func stepsForeground(_ foreground: Bool) {
         stepsInForeground = foreground
@@ -183,6 +185,7 @@ final class AppModel {
         tracker.isOnScreen = { [weak self] in self.map { $0.inForeground && $0.mapVisible } ?? false }
         tracker.isOnWheels = { [weak self] in self?.motion.onWheels ?? false }
         tracker.isStill = { [weak self] in self?.motion.still ?? false }
+        tracker.isOnFoot = { [weak self] in self?.motion.onFoot ?? false }
         motion.onChange = { [weak self] in self?.tracker.motionChanged() }
         locked = waitForUnlock
         if !waitForUnlock { load(alwaysOn: alwaysOn) }
@@ -766,6 +769,7 @@ final class AppModel {
             freshTiles = [:]
             addedTiles = [:]
             autoWalkPending = true
+            startFromWhenYouSetOff()
         }
         guard var walk = activeWalk else { return }
         // The fix this step started from, so replaying the points gives the same
@@ -789,6 +793,23 @@ final class AppModel {
         }
         activeWalk = walk
         saveIfDue()
+    }
+
+    /// The first fix can come well after you left, so ask the motion chip when you really did.
+    /// The start time and steps go back to then. The route can't: there's no GPS to show for it.
+    private func startFromWhenYouSetOff() {
+        guard let id = activeWalk?.id, let now = activeWalk?.startedAt, servicesEnabled || querySetOff != nil else { return }
+        Task {
+            let found = if let querySetOff { await querySetOff(now) } else { await motion.setOff(before: now) }
+            guard let found, var walk = activeWalk, walk.id == id, finishingWalkID == nil else { return }
+            // Not into the walk before this one, if you stopped for a bit between them.
+            let earliest = walks.last?.endedAt ?? .distantPast
+            let start = max(found, earliest)
+            guard start < walk.startedAt else { return }
+            walk.startedAt = start
+            activeWalk = walk
+            saveNow()
+        }
     }
 
     /// You've turned up somewhere you can't have walked to from the walk's last spot:
