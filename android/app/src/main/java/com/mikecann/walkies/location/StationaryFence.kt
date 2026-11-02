@@ -20,7 +20,8 @@ class StationaryFence(center: Coordinate? = null) {
     /**
      * Returns where to put the fence when this fix means you've settled somewhere new.
      * [stationary]: the phone says you've stopped moving. [walking]: a walk is in
-     * progress, so the first fix isn't necessarily where you'll stop.
+     * progress, so the first fix isn't necessarily where you'll stop, and the fence stays
+     * where it is: a pause mid-walk isn't settling somewhere new.
      */
     fun add(point: Coordinate, time: Double, accuracy: Double, stationary: Boolean, walking: Boolean): Coordinate? {
         settledInPlace = false
@@ -38,6 +39,9 @@ class StationaryFence(center: Coordinate? = null) {
                 return null
             }
         }
+        // Dad paused 280 m out on 2 Nov 2026, the fence moved onto him, and the walk
+        // carried on "inside" it on a light watch that couldn't record it.
+        if (walking && center != null) return null
         center = point
         return point
     }
