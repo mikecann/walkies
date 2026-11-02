@@ -102,17 +102,24 @@ nonisolated final class WorldCloudsRenderer: MKOverlayRenderer, @unchecked Senda
         context.setAlpha(0.35)
         for puff in puffs {
             let r = rect(for: puff.box)
-            CloudScene.draw(sprites.shadows[puff.variant], in: r.offsetBy(dx: r.width * 0.15, dy: r.height * 0.18), on: context)
+            CloudScene.draw(sprites.level(for: r.width, on: context).shadows[puff.variant], in: r.offsetBy(dx: r.width * 0.15, dy: r.height * 0.18), on: context)
         }
         context.setAlpha(1)
         context.beginTransparencyLayer(auxiliaryInfo: nil)
-        for puff in puffs { CloudScene.draw(sprites.bases[puff.variant], in: rect(for: puff.box), on: context) }
-        for puff in puffs { CloudScene.draw(sprites.tops[puff.variant], in: rect(for: puff.box), on: context) }
+        for puff in puffs {
+            let r = rect(for: puff.box)
+            CloudScene.draw(sprites.level(for: r.width, on: context).bases[puff.variant], in: r, on: context)
+        }
+        for puff in puffs {
+            let r = rect(for: puff.box)
+            CloudScene.draw(sprites.level(for: r.width, on: context).tops[puff.variant], in: r, on: context)
+        }
         context.setBlendMode(.destinationOut)
         let radius = WorldCloudLayout.clearing
         for centre in WorldCloudLayout.walked(near: near, in: now.walked) {
             let hole = MKMapRect(x: centre.x - radius, y: centre.y - radius, width: radius * 2, height: radius * 2)
-            CloudScene.draw(sprites.eraser, in: rect(for: hole), on: context)
+            let r = rect(for: hole)
+            CloudScene.draw(sprites.level(for: r.width, on: context).eraser, in: r, on: context)
         }
         context.endTransparencyLayer()
     }

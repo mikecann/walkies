@@ -17,11 +17,22 @@ class BakeJob(
     val honeycomb: Boolean,
     /** The field on screen when this was asked for, to work out which clouds clear. */
     val previous: CloudField?,
+    /** Someone's waiting to see this one, the map having just stopped: not behind everything else. */
+    val urgent: Boolean = false,
+    /**
+     * The bake to take the lines from, when they'd come out the same: the clouds drift
+     * but the streets don't, so a drift bake only has the clouds to do.
+     */
+    val linesFrom: CloudBake? = null,
 )
 
+/** A honeycomb, for [frame]. Comes after its bake, as the clouds shouldn't wait for it. */
+class BakedHoneycomb(val frame: BakeFrame, val rect: RectF, val bitmap: Bitmap)
+
 /**
- * A finished bake: pictures of [BakeJob]'s clouds and honeycomb, each covering the
- * frame's box of its camera's screen. Read on the main thread only once handed over.
+ * A finished bake: pictures of [BakeJob]'s soft clouds and of the crisp lines over
+ * them, each covering the frame's box of its camera's screen. Read on the main thread
+ * only once handed over.
  */
 class CloudBake(
     val frame: BakeFrame,
@@ -29,7 +40,10 @@ class CloudBake(
     val sprites: CloudSprites,
     val clock: Double,
     val clouds: Bitmap,
-    val honeycomb: Bitmap?,
+    /** The streets, grid and outline, cut by the same holes. */
+    val lines: Bitmap,
+    /** Whether [lines] is this bake's to free, rather than still the bake's it came from. */
+    var ownsLines: Boolean,
     val previous: CloudField?,
     /** The clouds in [previous] that aren't in [field], and which clearings are new, if it's tiles clearing. */
     val leaving: List<CloudField.Puff>,
@@ -48,12 +62,12 @@ class CloudBake(
 
     /**
      * Frees the pictures' GPU memory now rather than whenever the GC gets round to it
-     * (they're 5 to 10 MB each). On the main thread, once nothing will draw them
-     * again: frames already recorded keep their own hold on them, so that's safe.
+     * (they're a few MB each). On the main thread, once nothing will draw them again:
+     * frames already recorded keep their own hold on them, so that's safe.
      */
-    fun recycle(withHoneycomb: Boolean) {
+    fun recycle() {
         clouds.recycle()
-        if (withHoneycomb) honeycomb?.recycle()
+        if (ownsLines) lines.recycle()
     }
 }
 
@@ -69,11 +83,11 @@ class CloudBaker(density: Float) {
     private var working = false
     private var closed = false
     private val done = AtomicReference<CloudBake?>()
+    private val doneHoneycomb = AtomicReference<BakedHoneycomb?>()
 
     // Drawn into, then copied to the GPU. Kept between bakes, and resized in place
     // when they're smaller, so baking doesn't allocate 10 MB each time.
-    private var cloudScratch: Bitmap? = null
-    private var honeycombScratch: Bitmap? = null
+    private val scratches = arrayOfNulls<Bitmap>(3)
     private val canvas = Canvas()
     /**
      * The bake's camera, copied: projecting writes its results into the projection,
@@ -100,13 +114,17 @@ class CloudBaker(density: Float) {
     /** The newest finished bake, once. Yours to recycle. */
     fun take(): CloudBake? = done.getAndSet(null)
 
+    /** The newest honeycomb finished, once. Yours to recycle. */
+    fun takeHoneycomb(): BakedHoneycomb? = doneHoneycomb.getAndSet(null)
+
     fun close() {
         synchronized(lock) {
             closed = true
             waiting = null
             lock.notifyAll()
         }
-        done.getAndSet(null)?.recycle(withHoneycomb = true)
+        done.getAndSet(null)?.recycle()
+        doneHoneycomb.getAndSet(null)?.bitmap?.recycle()
     }
 
     private fun run() {
@@ -120,11 +138,27 @@ class CloudBaker(density: Float) {
             try {
                 // Well behind the main thread and the map's renderer for the big cores,
                 // and a rough bake mid-pan further still: it's only there to keep up.
-                Process.setThreadPriority(if (job.frame.draft) Process.THREAD_PRIORITY_LOWEST else Process.THREAD_PRIORITY_BACKGROUND)
+                // The sharp one you're waiting for once it stops needn't be, nor the drift
+                // hurry, which nobody's waiting for and goes on as long as the map's open.
+                Process.setThreadPriority(
+                    when {
+                        job.frame.draft -> Process.THREAD_PRIORITY_LOWEST
+                        job.urgent -> Process.THREAD_PRIORITY_DEFAULT
+                        else -> Process.THREAD_PRIORITY_BACKGROUND
+                    },
+                )
                 val bake = bake(job)
                 // One the main thread never took: free it now.
-                done.getAndSet(bake)?.recycle(withHoneycomb = true)
-                if (synchronized(lock) { closed }) done.getAndSet(null)?.recycle(withHoneycomb = true)
+                done.getAndSet(bake)?.recycle()
+                // After handing the clouds over: it only shows while you drag.
+                if (job.honeycomb) {
+                    val honeycomb = honeycomb(job)
+                    doneHoneycomb.getAndSet(honeycomb)?.bitmap?.recycle()
+                }
+                if (synchronized(lock) { closed }) {
+                    done.getAndSet(null)?.recycle()
+                    doneHoneycomb.getAndSet(null)?.bitmap?.recycle()
+                }
             } catch (e: Throwable) {
                 // Out of memory on a small phone, say: skip it, the next one may fit.
                 Log.w(TAG, "Couldn't bake the clouds", e)
@@ -152,25 +186,33 @@ class CloudBaker(density: Float) {
             leavingMist = CloudField.clearedMist(old, job.field)
         }
 
-        val clouds = render(frame.pixelWidth, frame.pixelHeight, frame, scratch = 0) { c ->
-            painter.drawClouds(c, job.field, emptyList(), null, 1.0, projection, job.sprites, bounds, job.clock)
+        val clouds = render(frame.cloudPixelWidth, frame.cloudPixelHeight, frame, scratch = 0) { c ->
+            painter.drawClouds(c, job.field, emptyList(), null, 1.0, projection, job.sprites, bounds, job.clock, part = CloudPainter.Part.Clouds)
         }
         val drewClouds = System.nanoTime()
-        val honeycomb = if (!job.honeycomb) null else {
-            val w = (frame.pixelWidth * HONEYCOMB_SCALE).toInt().coerceAtLeast(1)
-            val h = (frame.pixelHeight * HONEYCOMB_SCALE).toInt().coerceAtLeast(1)
-            render(w, h, frame, scratch = 1) { c ->
-                painter.drawHoneycomb(c, job.field, projection, bounds, 1f)
-            }
+        val kept = job.linesFrom?.lines
+        val lines = kept ?: render(frame.pixelWidth, frame.pixelHeight, frame, scratch = 1) { c ->
+            painter.drawClouds(c, job.field, emptyList(), null, 1.0, projection, job.sprites, bounds, job.clock, part = CloudPainter.Part.Lines)
         }
         val finished = System.nanoTime()
         Log.d(
             TAG,
-            "Baked ${frame.pixelWidth}x${frame.pixelHeight}${if (frame.draft) " draft" else ""}: clouds " +
+            "Baked ${frame.cloudPixelWidth}x${frame.cloudPixelHeight}${if (frame.draft) " draft" else ""}: clouds " +
                 "${(drewClouds - started) / 1_000_000} ms" +
-                (if (honeycomb != null) ", honeycomb ${(finished - drewClouds) / 1_000_000} ms" else ""),
+                (if (kept == null) ", lines ${frame.pixelWidth}x${frame.pixelHeight} ${(finished - drewClouds) / 1_000_000} ms" else ""),
         )
-        return CloudBake(frame, job.field, job.sprites, job.clock, clouds, honeycomb, old, leaving, freshClearings, leavingMist)
+        return CloudBake(frame, job.field, job.sprites, job.clock, clouds, lines, kept == null, old, leaving, freshClearings, leavingMist)
+    }
+
+    private fun honeycomb(job: BakeJob): BakedHoneycomb {
+        val started = System.nanoTime()
+        val frame = job.frame
+        val bounds = RectF(frame.left, frame.top, frame.right, frame.bottom)
+        val bitmap = render(frame.pixelWidth, frame.pixelHeight, frame, scratch = 2) { c ->
+            painter.drawHoneycomb(c, job.field, projection, bounds, 1f)
+        }
+        Log.d(TAG, "Honeycomb ${frame.pixelWidth}x${frame.pixelHeight}: ${(System.nanoTime() - started) / 1_000_000} ms")
+        return BakedHoneycomb(frame, bounds, bitmap)
     }
 
     /**
@@ -180,14 +222,14 @@ class CloudBaker(density: Float) {
      * scratch is drawn over again next time.
      */
     private inline fun render(width: Int, height: Int, frame: BakeFrame, scratch: Int, draw: (Canvas) -> Unit): Bitmap {
-        var bitmap = if (scratch == 0) cloudScratch else honeycombScratch
+        var bitmap = scratches[scratch]
         if (bitmap != null && (bitmap.width != width || bitmap.height != height)) {
             if (bitmap.allocationByteCount >= width * height * 4) {
                 bitmap.reconfigure(width, height, Bitmap.Config.ARGB_8888)
             } else {
                 bitmap.recycle()
                 bitmap = null
-                if (scratch == 0) cloudScratch = null else honeycombScratch = null
+                scratches[scratch] = null
             }
         }
         if (bitmap == null) {
@@ -205,21 +247,18 @@ class CloudBaker(density: Float) {
 
         val copy = if (hardware) bitmap.copy(Bitmap.Config.HARDWARE, false) else null
         if (copy != null) {
-            if (scratch == 0) cloudScratch = bitmap else honeycombScratch = bitmap
+            scratches[scratch] = bitmap
             return copy
         }
         // No hardware bitmaps here: hand this one over as it is (never to be drawn into
         // again, as the screen's using it), and start the upload now.
         hardware = false
-        if (scratch == 0) cloudScratch = null else honeycombScratch = null
+        scratches[scratch] = null
         bitmap.prepareToDraw()
         return bitmap
     }
 
     companion object {
         private const val TAG = "CloudBaker"
-
-        /** The honeycomb's only lines and flat fills, faint and moving, so it bakes a bit softer. */
-        const val HONEYCOMB_SCALE = 0.75f
     }
 }

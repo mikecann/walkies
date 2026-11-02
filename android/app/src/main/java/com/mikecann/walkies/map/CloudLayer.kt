@@ -1,6 +1,5 @@
 package com.mikecann.walkies.map
 
-import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
@@ -79,10 +78,9 @@ private class CloudScene(private val density: Float) {
     private var fading: CloudBake? = null
     private var fadeStart = 0L
     private var fadeTime = 0.0
-    /** The newest honeycomb baked, and where from. Kept apart from its bake so that can go. */
-    private var honeycomb: Bitmap? = null
-    private var honeycombFrame: BakeFrame? = null
-    private val honeycombRect = RectF()
+    /** The newest honeycomb baked, and where from. */
+    private var honeycomb: BakedHoneycomb? = null
+    private val honeycombFrame: BakeFrame? get() = honeycomb?.frame
     private var reveal: Reveal? = null
 
     private var lastTick = -1L
@@ -112,6 +110,10 @@ private class CloudScene(private val density: Float) {
         }
         val moving = dragging || now - movedAt < SETTLE
         baker.take()?.let { accept(it, now) }
+        baker.takeHoneycomb()?.let {
+            honeycomb?.bitmap?.recycle()
+            honeycomb = it
+        }
         ask(width, height, field, sprites, clock, moving, dragging)
 
         val front = front
@@ -137,36 +139,40 @@ private class CloudScene(private val density: Float) {
             // one full bake (layered one over the other, the shadows would darken).
             stats?.let { it.fades++ }
             val layer = canvas.saveLayer(0f, 0f, width, height, null)
-            drawBake(canvas, old, 1 - t, false, progress)
-            drawBake(canvas, front, t, true, progress)
+            drawBake(canvas, old, 1 - t, false, progress, CloudPainter.Part.Clouds)
+            drawBake(canvas, front, t, true, progress, CloudPainter.Part.Clouds)
             canvas.restoreToCount(layer)
+            // Lines over that, as added to the white of the clouds they'd vanish. Just the
+            // one set if it's the clouds drifting on, as the streets didn't move.
+            if (old.lines !== front.lines) drawBake(canvas, old, 1 - t, false, progress, CloudPainter.Part.Lines)
+            drawBake(canvas, front, if (old.lines === front.lines) 1.0 else t, false, progress, CloudPainter.Part.Lines)
         } else {
             if (old != null) {
                 fading = null
-                old.recycle(withHoneycomb = false)
+                old.recycle()
             }
-            drawBake(canvas, front, 1.0, false, progress)
+            drawBake(canvas, front, 1.0, false, progress, CloudPainter.Part.Clouds)
+            drawBake(canvas, front, 1.0, false, progress, CloudPainter.Part.Lines)
         }
 
         // Only while it shows: it's a whole screen of texture to draw.
         val honey = honeycomb
-        val honeyFrame = honeycombFrame
         val honeyAlpha = (honeycombOpacity * 255).toInt().coerceIn(0, 255)
-        if (honeyAlpha > 0 && honey != null && honeyFrame != null && warp.update(projection, honeyFrame)) {
+        if (honeyAlpha > 0 && honey != null && warp.update(projection, honey.frame)) {
             stats?.let { it.honeycombs++ }
             matrix.setValues(warp.values)
             paint.alpha = honeyAlpha
             paint.xfermode = null
             canvas.save()
             canvas.concat(matrix)
-            canvas.drawBitmap(honey, null, honeycombRect, paint)
+            canvas.drawBitmap(honey.bitmap, null, honey.rect, paint)
             canvas.restore()
         }
         painter.drawOver(canvas, projection, clock, you, cosmetics)
     }
 
-    /** One bake through the warp, at [alpha], added onto what's there if [plus]; with tiles clearing over it while they do. */
-    private fun drawBake(canvas: Canvas, bake: CloudBake, alpha: Double, plus: Boolean, progress: Double) {
+    /** One picture of a bake through the warp, at [alpha], added onto what's there if [plus]; with tiles clearing over it while they do. */
+    private fun drawBake(canvas: Canvas, bake: CloudBake, alpha: Double, plus: Boolean, progress: Double, part: CloudPainter.Part) {
         // Partly behind the camera: it's being baked again, so skip it for now.
         if (!warp.update(projection, bake.frame)) return
         matrix.setValues(warp.values)
@@ -175,24 +181,25 @@ private class CloudScene(private val density: Float) {
         canvas.save()
         canvas.concat(matrix)
         val reveal = reveal
+        val picture = if (part == CloudPainter.Part.Clouds) bake.clouds else bake.lines
         if (progress >= 1 || reveal == null || reveal.field !== bake.field || !patch(bake, reveal)) {
-            canvas.drawBitmap(bake.clouds, null, bake.rect, paint)
+            canvas.drawBitmap(picture, null, bake.rect, paint)
             canvas.restore()
             return
         }
         // Tiles clearing: the bake everywhere but round them, and there the clouds
-        // drawn live as they part, in the bake's own pixels, drift and camera so the
-        // two meet without a seam.
+        // drawn live as they part, in the bake's own drift and camera so the two meet
+        // without a seam.
         val layer = if (paint.alpha < 255 || plus) canvas.saveLayer(bake.rect, paint) else -1
         canvas.save()
         canvas.clipOutRect(bake.patch)
-        canvas.drawBitmap(bake.clouds, null, bake.rect, if (layer >= 0) plain else paint)
+        canvas.drawBitmap(picture, null, bake.rect, if (layer >= 0) plain else paint)
         canvas.restore()
         canvas.save()
         canvas.clipRect(bake.patch)
         painter.drawClouds(
             canvas, bake.field, reveal.leaving, reveal.freshClearings, progress, bake.frame.projection, bake.sprites,
-            bake.rect, bake.clock, bake.patch, bake.patchNear, reveal.leavingMist,
+            bake.rect, bake.clock, bake.patch, bake.patchNear, reveal.leavingMist, part,
         )
         canvas.restore()
         if (layer >= 0) canvas.restoreToCount(layer)
@@ -225,14 +232,12 @@ private class CloudScene(private val density: Float) {
 
     private fun accept(bake: CloudBake, now: Long) {
         stats?.let { it.bakes++ }
-        if (bake.honeycomb != null) {
-            // The scene owns the honeycomb from here; the bake only ever frees its clouds.
-            honeycomb?.let { if (it !== bake.honeycomb) it.recycle() }
-            honeycomb = bake.honeycomb
-            honeycombFrame = bake.frame
-            honeycombRect.set(bake.rect)
-        }
         val shown = front
+        // The clouds drifted on, with the lines of the one on screen: they're this one's now.
+        if (shown != null && shown.lines === bake.lines) {
+            shown.ownsLines = false
+            bake.ownsLines = true
+        }
         // Tiles clearing since what's on screen: open them up.
         if (shown != null && bake.previous === shown.field && bake.field !== shown.field && bake.freshClearings != null) {
             reveal = Reveal(bake.field, bake.leaving, bake.freshClearings, now, bake.leavingMist)
@@ -250,8 +255,8 @@ private class CloudScene(private val density: Float) {
         // Whatever's no longer drawn, freed now: a crossfade cut short, or the one replaced.
         val wasFading = fading
         fading = if (fadeTime > 0) shown else null
-        if (wasFading != null && wasFading !== fading) wasFading.recycle(withHoneycomb = false)
-        if (shown != null && shown !== fading) shown.recycle(withHoneycomb = false)
+        if (wasFading != null && wasFading !== fading) wasFading.recycle()
+        if (shown != null && shown !== fading) shown.recycle()
         fadeStart = now
         front = bake
     }
@@ -278,16 +283,16 @@ private class CloudScene(private val density: Float) {
             // Stopped: sharpen a rough bake, or one from a camera a little off.
             !fits || shown.frame.draft || !warp.exact(width, height) || honeycombFrame !== shown.frame ->
                 if (sameAsRequested(width, height) && lastJob?.let { !it.frame.draft && it.honeycomb } == true) null else
-                    BakeJob(newFrame(width, height, false), field, sprites, clock, honeycomb = true, previous = field)
-            // The clouds drifting on.
-            clock - shown.clock >= DRIFT_PERIOD -> BakeJob(shown.frame, field, sprites, clock, honeycomb = false, previous = field)
+                    BakeJob(newFrame(width, height, false), field, sprites, clock, honeycomb = true, previous = field, urgent = true)
+            // The clouds drifting on, under the same streets.
+            clock - shown.clock >= DRIFT_PERIOD -> BakeJob(shown.frame, field, sprites, clock, honeycomb = false, previous = field, linesFrom = shown)
             else -> null
         } ?: return
         lastJob = job
         baker.request(job)
     }
 
-    private fun newFrame(width: Float, height: Float, draft: Boolean) = BakeFrame.around(projection, width, height, draft)
+    private fun newFrame(width: Float, height: Float, draft: Boolean) = BakeFrame.around(projection, width, height, draft, density)
 
     /** Whether the camera's where it was for the last bake asked for, so asking again would get the same. */
     private fun sameAsRequested(width: Float, height: Float): Boolean {
@@ -298,9 +303,9 @@ private class CloudScene(private val density: Float) {
 
     fun close() {
         baker.close()
-        front?.recycle(withHoneycomb = false)
-        fading?.recycle(withHoneycomb = false)
-        honeycomb?.recycle()
+        front?.recycle()
+        fading?.recycle()
+        honeycomb?.bitmap?.recycle()
         front = null
         fading = null
         honeycomb = null

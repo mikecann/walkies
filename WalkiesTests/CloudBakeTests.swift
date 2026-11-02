@@ -226,16 +226,20 @@ struct CloudBakeTests {
             #expect(Double(frame.pixelWidth * frame.pixelHeight) <= BakeFrame.maxPixels * 1.01)
             #expect(frame.draft == draft)
         }
-        // An XS Max's screen and margin bakes at 2 pixels a point still, 1 moving.
-        #expect(BakeFrame.around(base.projection, size: size, displayScale: 3, draft: false).scale == 2)
-        #expect(BakeFrame.around(base.projection, size: size, displayScale: 3, draft: true).scale == 1)
-        // A 2x phone isn't baked any sharper than its screen.
-        #expect(BakeFrame.around(base.projection, size: size, displayScale: 2, draft: false).scale == 2)
+        // An XS Max's screen and margin bakes its lines at 1.5 pixels a point still, 1
+        // moving, and its clouds at 1 and a half.
+        let still = BakeFrame.around(base.projection, size: size, displayScale: 3, draft: false)
+        let moving = BakeFrame.around(base.projection, size: size, displayScale: 3, draft: true)
+        #expect(still.scale == 1.5 && still.cloudScale == 1)
+        #expect(moving.scale == 1 && moving.cloudScale == 0.5)
+        #expect(still.cloudPixelWidth * still.cloudPixelHeight < still.pixelWidth * still.pixelHeight)
+        // A 1x screen isn't baked any sharper than itself.
+        #expect(BakeFrame.around(base.projection, size: size, displayScale: 1, draft: false).scale == 1)
         // A much bigger screen bakes softer rather than bigger.
         var big = base
         big.size = CGSize(width: 1366, height: 1024)
         let frame = BakeFrame.around(big.projection, size: big.size, displayScale: 2, draft: false)
-        #expect(frame.scale < 2)
+        #expect(frame.scale < 1.5 && frame.cloudScale < 1)
         #expect(Double(frame.pixelWidth * frame.pixelHeight) <= BakeFrame.maxPixels * 1.01)
     }
 
@@ -471,7 +475,7 @@ struct CloudBakeTests {
         #expect(frame.rect.contains(patch))
         // On whole pixels of the bake.
         for edge in [patch.minX - frame.rect.minX, patch.minY - frame.rect.minY, patch.width, patch.height] {
-            let pixels = Double(edge) * frame.scale
+            let pixels = Double(edge) * frame.cloudScale
             #expect(abs(pixels - pixels.rounded()) < 1e-6)
         }
         // Round every cloud that's leaving.
@@ -547,18 +551,88 @@ struct CloudBakeTests {
         }
         func alpha(_ image: CGImage, at ground: MKMapPoint) -> Int {
             let s = frame.projection.point(ground)
-            let x = Int((s.x - frame.rect.minX) * frame.scale), y = Int((s.y - frame.rect.minY) * frame.scale)
+            let x = Int((s.x - frame.rect.minX) * frame.cloudScale), y = Int((s.y - frame.rect.minY) * frame.cloudScale)
             let data = image.dataProvider!.data! as Data
             // BGRA, premultiplied: alpha's the fourth byte.
             return Int(data[y * image.bytesPerRow + x * 4 + 3])
         }
         let (before, cloudy) = try bake(fields.before)
         let (after, cleared) = try bake(fields.after)
-        #expect(cloudy.width == frame.pixelWidth && cloudy.height == frame.pixelHeight)
-        #expect(before.honeycomb != nil && after.honeycomb != nil)
+        #expect(cloudy.width == frame.cloudPixelWidth && cloudy.height == frame.cloudPixelHeight)
+        #expect(CloudBakery.honeycomb(before.job) != nil && CloudBakery.honeycomb(after.job) != nil)
         #expect(alpha(cloudy, at: walked) > 240)
         // Only a shadow or two left over the hole.
         #expect(alpha(cleared, at: walked) < alpha(cloudy, at: walked) - 80)
+    }
+
+    /// Zoomed in there are streets and a grid: they're in their own sharper picture,
+    /// with the same holes, and a drift bake takes them from the last one.
+    @Test func theLinesAreBakedOnTheirOwnAndKeptForTheDrift() throws {
+        var field = CloudTests().clearingField().after
+        let walked = field.clearings[0].centre
+        var camera = base.zoomed(0.1)
+        camera.centre = walked
+        field.lines = [CloudField.Line(points: [
+            MKMapPoint(x: walked.x - 2000, y: walked.y), MKMapPoint(x: walked.x + 2000, y: walked.y),
+        ], kind: .road)]
+        field.outline = [[
+            MKMapPoint(x: walked.x - 5000, y: walked.y - 5000), MKMapPoint(x: walked.x + 5000, y: walked.y - 5000),
+            MKMapPoint(x: walked.x + 5000, y: walked.y + 5000), MKMapPoint(x: walked.x - 5000, y: walked.y + 5000),
+        ]]
+        let frame = BakeFrame.around(camera.projection, size: camera.size, displayScale: 3, draft: false)
+        func job(clock: Double, from: CloudBake? = nil) -> BakeJob {
+            BakeJob(
+                frame: frame, field: field, fieldKey: "a", theme: "clouds.classic", clock: clock,
+                honeycomb: false, walkTiles: [], walkKey: 0, previous: nil, previousKey: nil, linesFrom: from
+            )
+        }
+        let first = CloudBakery.bake(job(clock: 0))
+        let lines = try #require(first.lines)
+        #expect(lines.width == frame.pixelWidth && lines.height == frame.pixelHeight)
+        #expect(try #require(first.clouds).width == frame.cloudPixelWidth)
+        // The street's cut where the tile's been walked, and carries on outside it.
+        let alphas = Alphas(lines)
+        func onStreet(_ ground: MKMapPoint) -> Int {
+            let s = frame.projection.point(ground)
+            let y = (s.y - frame.rect.minY) / frame.rect.height
+            let x = (s.x - frame.rect.minX) / frame.rect.width
+            // Dashes: the most over a dash and its gap.
+            return (-12...12).map { alphas.at(x + Double($0) / Double(lines.width), y) }.max() ?? 0
+        }
+        #expect(onStreet(walked) < 8)
+        let radius = field.clearings[0].radius
+        #expect(onStreet(MKMapPoint(x: walked.x + radius * 1.5, y: walked.y)) > 60)
+        // Drifted on: new clouds, the very same lines.
+        let drifted = CloudBakery.bake(job(clock: 100, from: first))
+        #expect(drifted.lines === first.lines)
+        #expect(drifted.clouds !== first.clouds)
+        // Zoomed out far enough there aren't any, and no picture of nothing.
+        let far = base.zoomed(40)
+        let wide = BakeFrame.around(far.projection, size: far.size, displayScale: 3, draft: false)
+        let out = CloudBakery.bake(BakeJob(
+            frame: wide, field: field, fieldKey: "a", theme: "clouds.classic", clock: 0,
+            honeycomb: false, walkTiles: [], walkKey: 0, previous: nil, previousKey: nil
+        ))
+        #expect(out.lines == nil)
+    }
+
+    /// Small puffs are stamped from sprites no bigger than they need, and big ones from the biggest.
+    @Test func spritesAreChosenBySizeOnScreen() throws {
+        let sprites = CloudSprites.sprites(for: "clouds.classic")
+        let context = try #require(CGContext(
+            data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.scaleBy(x: 2, y: 2)
+        #expect(sprites.level(for: 10, on: context).tops[0].width == 24)
+        #expect(sprites.level(for: 40, on: context).tops[0].width == 96)
+        #expect(sprites.level(for: 90, on: context).bases[0].width == 192)
+        // A little bigger than the next size down still gets the size up.
+        #expect(sprites.level(for: 97, on: context).tops[0].width == 384)
+        #expect(sprites.level(for: 500, on: context).tops[0].width == 384)
+        // The smaller sprites only ever go as big as they started.
+        #expect(sprites.level(for: 90, on: context).eraser.width == 128)
+        #expect(sprites.level(for: 90, on: context).shadows[0].width == 160)
     }
 }
 
