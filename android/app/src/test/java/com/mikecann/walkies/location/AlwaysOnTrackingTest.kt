@@ -381,6 +381,23 @@ class AlwaysOnTrackingTest {
         assertEquals(GpsMode.Off, gps.mode)
     }
 
+    @Test
+    fun theWalkingFixThatClearedStillCanStillSettleYou() {
+        // Settled somewhere else before, so only the tick can settle you here.
+        val t = tracking(east(1000.0))
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
+        t.motionChanged(MotionActivity.Still, entered = true)
+        // Delivered a few seconds after it was taken, then nothing more: you've stopped.
+        val taken = now
+        now += 4
+        t.fix(TrackPoint(home.lat, home.lon, taken, 8.0, speed = 1.3))
+        repeat(4) {
+            now += 60
+            t.tick()
+        }
+        assertEquals(listOf(home), geofence.placed)
+    }
+
     /** Two minutes into a walk with no fixes yet, the minute tick settled you back on the last one, at home. */
     @Test
     fun theTickDoesNotSettleYouOnAFixFromBeforeYouSetOff() {

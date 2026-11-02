@@ -77,7 +77,7 @@ class AlwaysOnTracking(
             apply()
             return
         }
-        val fresh = clock() - point.time <= 10
+        val fresh = clock() - point.time <= FRESH
         // A "still" the chip hasn't caught up on would turn the GPS off and move the fence
         // onto you with every fix, so a walk never got going (Dad's Pixel, 1 and 2 Nov 2026).
         if (fresh && motion.still && CoverageTracer.atWalkingPace(point)) {
@@ -101,9 +101,10 @@ class AlwaysOnTracking(
     /** Every minute or so: you may have settled without any new fixes coming in. */
     fun tick() {
         // Not on a fix from before you set off: with no fixes since, that settled you back
-        // where you started two minutes into a walk.
+        // where you started two minutes into a walk. The fix that showed you moving counts,
+        // though it arrives a few seconds after it was taken.
         val last = lastFix
-        if (alwaysOn && last != null && last.time >= movedAt) settle(last, clock())
+        if (alwaysOn && last != null && last.time >= movedAt - FRESH) settle(last, clock())
         apply()
     }
 
@@ -185,6 +186,9 @@ class AlwaysOnTracking(
     companion object {
         /** Seconds the GPS stays up after you leave the fence or start moving. */
         const val WAKE_TIME = 3 * 60.0
+
+        /** Seconds old a fix can be and still count as where you are now, not a cached one. */
+        const val FRESH = 10.0
 
         fun decide(
             alwaysOn: Boolean,
