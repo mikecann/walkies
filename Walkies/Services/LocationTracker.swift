@@ -22,6 +22,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     /// The motion chip's answers (MotionMonitor).
     @ObservationIgnored var isOnWheels: () -> Bool = { false }
     @ObservationIgnored var isStill: () -> Bool = { false }
+    @ObservationIgnored var isOnFoot: () -> Bool = { false }
 
     private let manager = CLLocationManager()
     @ObservationIgnored private var backgroundSession: CLBackgroundActivitySession?
@@ -53,6 +54,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
 
     func start() {
         stopLight()
+        stopIdle()
         backgroundSession = CLBackgroundActivitySession()
         manager.allowsBackgroundLocationUpdates = true
         manager.showsBackgroundLocationIndicator = true
@@ -76,6 +78,11 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     /// You've left the fence and haven't settled anywhere since.
     @ObservationIgnored private var outside = false
     @ObservationIgnored private var lightOn = false
+    /// The idle watch's cheap location updates are running.
+    @ObservationIgnored private var idleOn = false
+    /// The chip has said you're on foot for `walkingCheck` without a break.
+    @ObservationIgnored private var walkingForAWhile = false
+    @ObservationIgnored private var walkingTimer: Task<Void, Never>?
     @ObservationIgnored private var stationary = false
     @ObservationIgnored private var pausedAt: Coordinate?
     @ObservationIgnored private var lastLocation: Coordinate?
@@ -86,35 +93,61 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         case live
         /// Wi-Fi and cell towers, every 25 m or so: enough to notice you've got out of the car.
         case light
-        /// Nothing: the fence wakes the app when you leave.
+        /// No GPS, just cell-tower updates we throw away. They keep the app running so the
+        /// motion chip can tell us you've set off. The fence is the backstop if iOS kills it.
         case idle
     }
 
+    /// How long the chip has to say you're on foot before a walk from home gets the GPS.
+    /// Long enough that crossing the kitchen doesn't count.
+    static let walkingCheck: Duration = .seconds(30)
+
     /// Always on used to run live updates whenever you were moving, which meant the GPS ran
-    /// for whole drives and every time you walked round the house (28 Oct 2026). The first
-    /// ~100 m of a walk from where you settled is missed, which Mike accepted for the battery.
+    /// for whole drives and every time you walked round the house (28 Oct 2026). Relying on the
+    /// fence alone then missed the start of walks: 270 m on 29 and 30 Oct, 10 minutes on 2 Nov,
+    /// because iOS takes its time reporting an exit. So the chip wakes the GPS inside the fence.
     nonisolated static func watch(confirmedWalk: Bool, onScreen: Bool, onWheels: Bool, insideFence: Bool,
-                                 manualWalk: Bool = false, stationary: Bool = false) -> Watch {
+                                 manualWalk: Bool = false, stationary: Bool = false,
+                                 walkingForAWhile: Bool = false) -> Watch {
         if manualWalk || onScreen { return .live }
         if onWheels { return insideFence && !confirmedWalk ? .idle : .light }
         // Keep the walk open, but use Wi-Fi/cell fixes until motion or displacement
         // says it's moving again. This also works when Core Motion isn't available.
         if stationary { return confirmedWalk || !insideFence ? .light : .idle }
         if confirmedWalk { return .live }
-        if insideFence { return .idle }
+        if insideFence { return walkingForAWhile ? .live : .idle }
         return .live
     }
 
     var watch: Watch {
         Self.watch(confirmedWalk: isOnConfirmedWalk(), onScreen: isOnScreen(), onWheels: isOnWheels(),
-                   insideFence: fence.center != nil && !outside, manualWalk: isOnManualWalk(), stationary: stationary)
+                   insideFence: fence.center != nil && !outside, manualWalk: isOnManualWalk(), stationary: stationary,
+                   walkingForAWhile: walkingForAWhile)
     }
 
     /// A fence exit can override the chip's old stationary answer until a fresh update.
     func motionChanged() {
         stationary = isStill()
         if stationary { pausedAt = pausedAt ?? lastLocation } else { pausedAt = nil }
+        noteWalking()
         refreshWatch()
+    }
+
+    private func noteWalking() {
+        guard isOnFoot() else {
+            walkingTimer?.cancel()
+            walkingTimer = nil
+            walkingForAWhile = false
+            return
+        }
+        guard walkingTimer == nil, !walkingForAWhile else { return }
+        walkingTimer = Task { [weak self] in
+            try? await Task.sleep(for: Self.walkingCheck)
+            guard let self, !Task.isCancelled else { return }
+            self.walkingTimer = nil
+            self.walkingForAWhile = true
+            self.refreshWatch()
+        }
     }
 
     private func noteMovement(_ location: CLLocation) {
@@ -136,7 +169,29 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
             liveTask?.cancel()
             liveTask = nil
         }
-        if watch == .light { startLight() } else { stopLight() }
+        // Stops first: light and idle share the manager, so stopping second would undo the start.
+        if watch != .light { stopLight() }
+        if watch != .idle { stopIdle() }
+        if watch == .light { startLight() }
+        if watch == .idle { startIdle() }
+    }
+
+    private func startIdle() {
+        guard !idleOn else { return }
+        idleOn = true
+        manager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+        manager.distanceFilter = 1000
+        manager.allowsBackgroundLocationUpdates = true
+        manager.startUpdatingLocation()
+    }
+
+    private func stopIdle() {
+        guard idleOn else { return }
+        idleOn = false
+        manager.stopUpdatingLocation()
+        manager.allowsBackgroundLocationUpdates = false
+        manager.desiredAccuracy = kCLLocationAccuracyBest
+        manager.distanceFilter = 5
     }
 
     private func startLight() {
@@ -192,7 +247,11 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         outside = false
         liveTask?.cancel()
         liveTask = nil
+        walkingTimer?.cancel()
+        walkingTimer = nil
+        walkingForAWhile = false
         stopLight()
+        stopIdle()
         manager.stopMonitoringSignificantLocationChanges()
         backgroundSession?.invalidate()
         backgroundSession = nil
@@ -272,6 +331,12 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         MainActor.assumeIsolated {
             for location in locations {
+                // Only there to keep the app running, and far too vague to record. A
+                // significant-change fix can still show you've gone, if it's clear enough.
+                if idleOn {
+                    noteOutside(location)
+                    continue
+                }
                 // Light watch and significant-change fixes, while always on.
                 if alwaysOnRunning {
                     noteOutside(location)

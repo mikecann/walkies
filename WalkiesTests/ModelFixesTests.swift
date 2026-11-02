@@ -94,6 +94,26 @@ struct ModelFixesTests {
         #expect(try #require(walk.points.first).coordinate.distance(to: coordinate(in: place, x: -280)) < 1)
     }
 
+    @Test func aWalkNoticedLateStartsWhenYouSetOff() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let place = city()
+        store.save([place])
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true)
+        await model.waitForHistory()
+        // The chip saw you leave ten minutes before the first fix (2 Nov 2026).
+        let setOff = Date.now.addingTimeInterval(-600)
+        model.querySetOff = { _ in setOff }
+        for (i, x) in [-400.0, -350, -300, -250, -200].enumerated() {
+            visit(model, in: place, x: x, seconds: Double(i) * 40)
+        }
+        for _ in 0..<100 where model.activeWalk?.startedAt != setOff { await Task.yield() }
+        let walk = try #require(model.activeWalk)
+        #expect(walk.startedAt == setOff)
+        #expect(!model.autoWalkPending)
+        #expect(try #require(walk.points.first).coordinate.distance(to: coordinate(in: place, x: -400)) < 1)
+    }
+
     @Test func anAutomaticPauseKeepsTheSameWalkAndResumesCoverage() async throws {
         let store = store()
         defer { store.wipe() }

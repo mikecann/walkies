@@ -195,4 +195,40 @@ struct LocationTrackerFenceTests {
         tracker.settle(at: fix(-33.65, 115.35), stationary: false)
         #expect(fake.placed.isEmpty)
     }
+
+    @Test func walkingForAWhileWakesTheGPSInsideTheFence() {
+        typealias T = LocationTracker
+        #expect(T.watch(confirmedWalk: false, onScreen: false, onWheels: false, insideFence: true, walkingForAWhile: true) == .live)
+        #expect(T.watch(confirmedWalk: false, onScreen: false, onWheels: false, insideFence: true, walkingForAWhile: false) == .idle)
+        // The chip's stationary and wheels answers still win.
+        #expect(T.watch(confirmedWalk: false, onScreen: false, onWheels: true, insideFence: true, walkingForAWhile: true) == .idle)
+        #expect(T.watch(confirmedWalk: false, onScreen: false, onWheels: false, insideFence: true, stationary: true, walkingForAWhile: true) == .idle)
+    }
+
+    private func stretch(_ minutesAgo: Double, _ kind: MotionMonitor.Stretch.Kind) -> MotionMonitor.Stretch {
+        .init(start: Date(timeIntervalSince1970: 100_000 - minutesAgo * 60), kind: kind)
+    }
+
+    private func setOff(_ stretches: [MotionMonitor.Stretch]) -> Double? {
+        let now = Date(timeIntervalSince1970: 100_000)
+        return MotionMonitor.setOff(in: stretches, now: now).map { now.timeIntervalSince($0) / 60 }
+    }
+
+    @Test func setOffIsWhenTheOnFootStretchBegan() {
+        #expect(setOff([stretch(60, .other), stretch(10, .onFoot)]) == 10)
+    }
+
+    @Test func setOffCarriesThroughAShortPause() {
+        #expect(setOff([stretch(60, .other), stretch(10, .onFoot), stretch(5, .other), stretch(4.5, .onFoot)]) == 10)
+    }
+
+    @Test func setOffStopsAtALongPauseOrARide() {
+        #expect(setOff([stretch(20, .onFoot), stretch(15, .other), stretch(5, .onFoot)]) == 5)
+        #expect(setOff([stretch(20, .onFoot), stretch(15, .wheels), stretch(5, .onFoot)]) == 5)
+    }
+
+    @Test func noSetOffWithoutAnyWalking() {
+        #expect(setOff([stretch(20, .other)]) == nil)
+        #expect(setOff([]) == nil)
+    }
 }
