@@ -67,7 +67,15 @@ class StationaryFenceTest {
     @Test
     fun beingStillPlacesItStraightAway() {
         val fence = StationaryFence(home)
-        assertEquals(east(500.0), fence.add(east(500.0), 0.0, 10.0, stationary = true, walking = true))
+        assertEquals(east(500.0), fence.add(east(500.0), 0.0, 10.0, stationary = true, walking = false))
+    }
+
+    @Test
+    fun itStaysPutWhileAWalkIsOpen() {
+        val fence = StationaryFence(home)
+        assertNull(fence.add(east(500.0), 0.0, 10.0, stationary = true, walking = true))
+        assertNull(fence.add(east(500.0), StationaryFence.SETTLE_TIME, 10.0, stationary = false, walking = true))
+        assertEquals(home, fence.center)
     }
 
     @Test
@@ -479,8 +487,30 @@ class AlwaysOnTrackingTest {
         assertEquals(1, geofence.placed.size)
         now += StationaryFence.SETTLE_TIME
         t.tick()
+        // Not while the walk's still open: a pause on a walk isn't settling.
+        assertEquals(1, geofence.placed.size)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
+        t.tick()
         assertEquals(listOf(home, park), geofence.placed)
         assertEquals(park, saved)
+    }
+
+    /** Dad, 2 Nov 2026: a pause 280 m out moved the fence onto him, and the rest of the walk ran on a light watch. */
+    @Test
+    fun aPauseOnAWalkDoesNotMoveTheFenceOntoYou() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.Pending)
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        t.fix(fix(east(300.0)))
+        assertEquals(GpsMode.High, gps.mode)
+        now += AlwaysOnTracking.WAKE_TIME + 10
+        t.motionChanged(MotionActivity.Still, entered = true)
+        t.fix(fix(east(300.0)))
+        now += 30
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        t.fix(fix(east(320.0)))
+        assertTrue(geofence.placed.isEmpty())
+        assertEquals(GpsMode.High, gps.mode)
     }
 
     @Test
