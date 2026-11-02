@@ -54,6 +54,10 @@ class AlwaysOnTracking(
     private var outside = false
     /** When you last started moving, so [tick] doesn't settle you on a fix from before. */
     private var movedAt = Double.NEGATIVE_INFINITY
+    /** A short burst of GPS after you start walking inside the fence, to see if you're heading out. */
+    private var probing = false
+    /** The probe's first good walking fix: walking on from it counts as leaving. */
+    private var probeFrom: Coordinate? = null
 
     val fenceCenter: Coordinate? get() = fence.center
 
@@ -84,6 +88,17 @@ class AlwaysOnTracking(
             motion.sawWalking()
             unsettle()
         }
+        if (probing && clock() >= awakeUntil) probing = false
+        // Walking on from where the probe started is heading out: on a light watch alone the
+        // fence only noticed 230 to 470 m on (Dad's walks on 2 Nov 2026).
+        if (probing && fresh && !outside && CoverageTracer.atWalkingPace(point)) {
+            val from = probeFrom
+            if (from == null) {
+                probeFrom = point.coordinate
+            } else if (from.distance(point.coordinate) > StationaryFence.SETTLE_RADIUS) {
+                leave()
+            }
+        }
         val center = fence.center
         // Out past the fence, even if the fence itself hasn't said so yet. Only if even the near
         // edge of the fix's accuracy circle is outside, so a vague Wi-Fi fix at home doesn't count.
@@ -112,11 +127,23 @@ class AlwaysOnTracking(
     fun motionChanged(activity: MotionActivity, entered: Boolean) {
         val moving = motion.transition(activity, entered)
         // A still transition doesn't cut a wake short: they come and go mid-walk, and the
-        // wake is how a walk gets its first good fixes.
+        // wake is how a walk gets its first good fixes. It does end the probe: stopping in
+        // the kitchen isn't heading out.
+        if (probing && activity == MotionActivity.Still && entered) {
+            probing = false
+            awakeUntil = Double.NEGATIVE_INFINITY
+        }
         if (moving) {
             // Moving about inside the fence (round the house, picking the phone up) only needs a
-            // light watch: leaving it is what brings the GPS up.
-            if (insideFence) unsettle() else wake()
+            // light watch: leaving it is what brings the GPS up. Walking gets a short look with
+            // the GPS too, in case it's the start of a walk.
+            if (!insideFence) {
+                wake()
+            } else {
+                unsettle()
+                val walking = activity == MotionActivity.Walking || activity == MotionActivity.Running
+                if (entered && walking) probe()
+            }
         }
         apply()
     }
@@ -132,7 +159,14 @@ class AlwaysOnTracking(
 
     private fun leave() {
         outside = true
+        probing = false
         wake()
+    }
+
+    private fun probe() {
+        awakeUntil = maxOf(awakeUntil, clock() + PROBE_TIME)
+        probing = true
+        probeFrom = null
     }
 
     private fun wake() {
@@ -186,6 +220,12 @@ class AlwaysOnTracking(
     companion object {
         /** Seconds the GPS stays up after you leave the fence or start moving. */
         const val WAKE_TIME = 3 * 60.0
+
+        /**
+         * Seconds of GPS after you start walking inside the fence. Enough for a first fix and
+         * 30 m of walking; a walk round the kitchen costs no more than this.
+         */
+        const val PROBE_TIME = 90.0
 
         /** Seconds old a fix can be and still count as where you are now, not a cached one. */
         const val FRESH = 10.0

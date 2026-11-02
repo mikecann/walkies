@@ -245,6 +245,54 @@ class AlwaysOnTrackingTest {
         assertEquals(GpsMode.High, gps.mode)
     }
 
+    private fun walking(at: Coordinate, speed: Double = 1.3) = TrackPoint(at.lat, at.lon, now, 5.0, speed = speed)
+
+    /** Dad's walks on 2 Nov 2026 started 230 and 470 m out, on a light watch until then. */
+    @Test
+    fun walkingOutFromHomeCountsAsLeavingWithinAFewSteps() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
+        t.motionChanged(MotionActivity.Still, entered = true)
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        assertEquals(GpsMode.High, gps.mode)
+        for (m in listOf(5.0, 15.0, 25.0, 40.0)) {
+            now += 8
+            t.fix(walking(east(m)))
+        }
+        // Well past the probe, still up: it counted as leaving.
+        now += AlwaysOnTracking.PROBE_TIME
+        t.fix(walking(east(80.0)))
+        assertEquals(GpsMode.High, gps.mode)
+    }
+
+    @Test
+    fun aWalkRoundTheKitchenOnlyCostsTheProbe() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
+        t.motionChanged(MotionActivity.Still, entered = true)
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        assertEquals(GpsMode.High, gps.mode)
+        repeat(6) {
+            now += 10
+            t.fix(walking(east(3.0), speed = 0.3))
+        }
+        now += AlwaysOnTracking.PROBE_TIME
+        t.tick()
+        // Two minutes round the same spot: settled again, so the GPS goes right off.
+        assertEquals(GpsMode.Off, gps.mode)
+    }
+
+    @Test
+    fun stoppingEndsTheProbe() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        assertEquals(GpsMode.High, gps.mode)
+        now += 10
+        t.motionChanged(MotionActivity.Still, entered = true)
+        assertEquals(GpsMode.Off, gps.mode)
+    }
+
     @Test
     fun potteringAboutInsideTheFenceKeepsALightWatch() {
         val t = tracking(home)
@@ -256,6 +304,9 @@ class AlwaysOnTrackingTest {
         assertEquals(GpsMode.Low, gps.mode)
         t.motionChanged(MotionActivity.Walking, entered = true)
         t.update(alwaysOn = true, onScreen = false, walk = WalkState.Pending)
+        // A short look with the GPS first, then the light watch.
+        assertEquals(GpsMode.High, gps.mode)
+        now += AlwaysOnTracking.PROBE_TIME + 1
         t.fix(fix(east(40.0)))
         assertEquals(GpsMode.Low, gps.mode)
         // A vague Wi-Fi fix that could still be inside doesn't count as leaving.
@@ -271,7 +322,6 @@ class AlwaysOnTrackingTest {
         val t = tracking(home)
         t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
         t.motionChanged(MotionActivity.Walking, entered = true)
-        assertEquals(GpsMode.Low, gps.mode)
         t.leftFence()
         assertEquals(GpsMode.High, gps.mode)
         // Still walking after the wake runs out: outside the fence, so it stays up.
@@ -285,6 +335,8 @@ class AlwaysOnTrackingTest {
         assertEquals(shops, t.fenceCenter)
         assertEquals(GpsMode.Off, gps.mode)
         t.motionChanged(MotionActivity.Walking, entered = true)
+        now += AlwaysOnTracking.PROBE_TIME + 1
+        t.tick()
         assertEquals(GpsMode.Low, gps.mode)
     }
 
@@ -304,6 +356,8 @@ class AlwaysOnTrackingTest {
         assertEquals(home, t.fenceCenter)
         assertEquals(GpsMode.Off, gps.mode)
         t.motionChanged(MotionActivity.Walking, entered = true)
+        now += AlwaysOnTracking.PROBE_TIME + 1
+        t.tick()
         assertEquals(GpsMode.Low, gps.mode)
     }
 
@@ -418,7 +472,7 @@ class AlwaysOnTrackingTest {
         assertEquals(GpsMode.Off, gps.mode)
         now += 60
         t.motionChanged(MotionActivity.Walking, entered = true)
-        assertEquals(GpsMode.Low, gps.mode)
+        assertEquals(GpsMode.High, gps.mode)
         repeat(4) {
             now += 60
             t.tick()
