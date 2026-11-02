@@ -10,8 +10,21 @@ nonisolated enum CloudRenderer: String, Sendable {
     case baked
     /// Drawn puff by puff in a SwiftUI Canvas each frame.
     case live
+    /// Prototype: every puff drawn by the GPU each frame, with only the lines baked.
+    /// Settings has a switch for it, which takes effect the next time the app opens.
+    case gpu
 
-    static let current: CloudRenderer = LaunchArguments.value(after: "-cloudRenderer") == "live" ? .live : .baked
+    /// The Settings switch for the prototype.
+    static let gpuDefaultsKey = "cloudsOnGPU"
+
+    static let current: CloudRenderer = {
+        switch LaunchArguments.value(after: "-cloudRenderer") {
+        case "live": return .live
+        case "gpu": return .gpu
+        case "baked": return .baked
+        default: return UserDefaults.standard.bool(forKey: gpuDefaultsKey) ? .gpu : .baked
+        }
+    }()
 }
 
 /// Launch arguments, read by hand: `UserDefaults` would read `-perfRun -cloudRenderer live`

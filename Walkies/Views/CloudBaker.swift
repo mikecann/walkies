@@ -27,6 +27,8 @@ nonisolated struct BakeJob: Sendable {
     /// The lines to use, when they'd come out the same: the clouds drift but the streets
     /// don't, so a drift bake only has the clouds to do.
     var keptLines: KeptLines? = nil
+    /// False when the GPU's drawing the clouds, and only the lines are wanted.
+    var drawClouds = true
 }
 
 /// A finished bake: pictures of the job's clouds and of the dashed lines over them,
@@ -123,7 +125,7 @@ nonisolated enum CloudBakery {
         let frame = job.frame
         let scene = CloudScene(field: job.field, projection: frame.projection, bounds: frame.rect, clock: job.clock, puffMargin: 0.05)
         let sceneDone = DispatchTime.now().uptimeNanoseconds
-        let clouds = render(frame.rect, scale: frame.cloudScale) { scene.drawClouds(in: $0, sprites: sprites) }
+        let clouds = job.drawClouds ? render(frame.rect, scale: frame.cloudScale) { scene.drawClouds(in: $0, sprites: sprites) } : nil
         let cloudsDone = DispatchTime.now().uptimeNanoseconds
         let lines: CGImage?
         if let kept = job.keptLines {

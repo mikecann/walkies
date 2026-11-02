@@ -2,6 +2,7 @@ import ChefKit
 import SwiftUI
 
 struct SettingsView: View {
+    @AppStorage(CloudRenderer.gpuDefaultsKey) private var cloudsOnGPU = false
     @Environment(AppModel.self) private var model
     @Environment(Account.self) private var account
     @Environment(SyncEngine.self) private var sync
@@ -134,6 +135,12 @@ struct SettingsView: View {
                     } footer: {
                         Text("Written by the server for a new suburb. Only you can see these, and they stay hidden until you approve them.")
                     }
+                }
+
+                Section {
+                    Toggle("GPU clouds (prototype)", isOn: $cloudsOnGPU)
+                } footer: {
+                    Text("Now: \(CloudRenderer.current.rawValue). Quit and reopen the app to switch.")
                 }
 
                 Section {

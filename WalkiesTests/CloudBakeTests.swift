@@ -8,7 +8,7 @@ import simd
 
 /// A stand-in for MapKit's camera: looking down on `centre` from above, turned to
 /// `heading` and tipped back by `pitch`, `zoom` screen points to the map point.
-private struct TestCamera {
+struct TestCamera {
     var centre = MKMapPoint(CLLocationCoordinate2D(latitude: -33.64, longitude: 115.39))
     var zoom = 0.5
     var heading = 0.0

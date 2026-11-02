@@ -217,6 +217,10 @@ final class PerfRun {
             "abandonedBakes": stats.abandoned,
             "overviewMsAvg": stats.overviews > 0 ? (stats.overviewMilliseconds / Double(stats.overviews) * 10).rounded() / 10 : 0,
             "liveTicks": stats.liveTicks,
+            "gpuFrames": stats.gpuFrames,
+            "gpuMsAvg": stats.gpuFrames > 0 ? (stats.gpuMilliseconds / Double(stats.gpuFrames) * 100).rounded() / 100 : 0,
+            "gpuMsMax": (stats.gpuLongest * 100).rounded() / 100,
+            "gpuEncodeMsAvg": stats.gpuFrames > 0 ? (stats.gpuEncodeMilliseconds / Double(stats.gpuFrames) * 100).rounded() / 100 : 0,
         ]
         // From the map first laid out to the overview or a bake first on it.
         fields["firstCloudsMs"] = stats.firstCloudsMilliseconds.map { $0.rounded() } ?? NSNull()
