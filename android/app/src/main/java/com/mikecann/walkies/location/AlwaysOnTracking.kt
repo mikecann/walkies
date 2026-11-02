@@ -1,6 +1,7 @@
 package com.mikecann.walkies.location
 
 import com.mikecann.walkies.grid.Coordinate
+import com.mikecann.walkies.model.CoverageTracer
 import com.mikecann.walkies.model.TrackPoint
 
 /** How hard the GPS works. */
@@ -51,6 +52,8 @@ class AlwaysOnTracking(
     private var awakeUntil = Double.NEGATIVE_INFINITY
     /** You've left the fence and haven't settled anywhere since. */
     private var outside = false
+    /** When you last started moving, so [tick] doesn't settle you on a fix from before. */
+    private var movedAt = Double.NEGATIVE_INFINITY
 
     val fenceCenter: Coordinate? get() = fence.center
 
@@ -74,6 +77,13 @@ class AlwaysOnTracking(
             apply()
             return
         }
+        val fresh = clock() - point.time <= FRESH
+        // A "still" the chip hasn't caught up on would turn the GPS off and move the fence
+        // onto you with every fix, so a walk never got going (Dad's Pixel, 1 and 2 Nov 2026).
+        if (fresh && motion.still && CoverageTracer.atWalkingPace(point)) {
+            motion.sawWalking()
+            unsettle()
+        }
         val center = fence.center
         // Out past the fence, even if the fence itself hasn't said so yet. Only if even the near
         // edge of the fix's accuracy circle is outside, so a vague Wi-Fi fix at home doesn't count.
@@ -81,7 +91,7 @@ class AlwaysOnTracking(
         // out there meant you could only settle somewhere new by putting the phone down.
         if (!outside && center != null && center.distance(point.coordinate) - point.accuracy.coerceAtLeast(0.0) > StationaryFence.RADIUS) leave()
         // Not a cached fix from wherever you were when updates started.
-        if (clock() - point.time <= 10) {
+        if (fresh) {
             lastFix = point
             settle(point, point.time)
         }
@@ -90,21 +100,23 @@ class AlwaysOnTracking(
 
     /** Every minute or so: you may have settled without any new fixes coming in. */
     fun tick() {
+        // Not on a fix from before you set off: with no fixes since, that settled you back
+        // where you started two minutes into a walk. The fix that showed you moving counts,
+        // though it arrives a few seconds after it was taken.
         val last = lastFix
-        if (alwaysOn && last != null) settle(last, clock())
+        if (alwaysOn && last != null && last.time >= movedAt - FRESH) settle(last, clock())
         apply()
     }
 
     /** An Activity Recognition transition. */
     fun motionChanged(activity: MotionActivity, entered: Boolean) {
         val moving = motion.transition(activity, entered)
-        // A new still transition is stronger evidence than the wake timer. A fence exit
-        // can still wake GPS while the chip's old answer says still.
-        if (activity == MotionActivity.Still && entered) awakeUntil = Double.NEGATIVE_INFINITY
+        // A still transition doesn't cut a wake short: they come and go mid-walk, and the
+        // wake is how a walk gets its first good fixes.
         if (moving) {
             // Moving about inside the fence (round the house, picking the phone up) only needs a
             // light watch: leaving it is what brings the GPS up.
-            if (insideFence) fence.unsettle() else wake()
+            if (insideFence) unsettle() else wake()
         }
         apply()
     }
@@ -125,6 +137,11 @@ class AlwaysOnTracking(
 
     private fun wake() {
         awakeUntil = clock() + WAKE_TIME
+        unsettle()
+    }
+
+    private fun unsettle() {
+        movedAt = clock()
         fence.unsettle()
     }
 
@@ -169,6 +186,9 @@ class AlwaysOnTracking(
     companion object {
         /** Seconds the GPS stays up after you leave the fence or start moving. */
         const val WAKE_TIME = 3 * 60.0
+
+        /** Seconds old a fix can be and still count as where you are now, not a cached one. */
+        const val FRESH = 10.0
 
         fun decide(
             alwaysOn: Boolean,

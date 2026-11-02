@@ -570,7 +570,10 @@ class AppModel(
         lastLocation = fix
         var point = fix
         if (motion.onWheels) point = point.copy(wheels = true)
-        if (motion.still) point = point.copy(still = true)
+        // Fixes marked still are ignored, so a "still" the chip hasn't caught up on yet kept
+        // whole walks from starting (Dad's Pixel, 1 and 2 Nov 2026). Not when the fix itself
+        // shows you walking.
+        if (motion.still && !CoverageTracer.atWalkingPace(fix)) point = point.copy(still = true)
         if (alwaysOn) {
             recordAlwaysOn(point)
         } else if (activeWalk != null) {
