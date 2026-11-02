@@ -266,6 +266,22 @@ class AlwaysOnTrackingTest {
     }
 
     @Test
+    fun walkingUnderThirtyMetresIsNotLeaving() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
+        t.motionChanged(MotionActivity.Still, entered = true)
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        for (m in listOf(5.0, 15.0, 25.0, 33.0)) {
+            now += 8
+            t.fix(walking(east(m)))
+        }
+        // 28 m from the first walking fix: the probe runs out and it's the light watch again.
+        now += AlwaysOnTracking.PROBE_TIME
+        t.tick()
+        assertEquals(GpsMode.Low, gps.mode)
+    }
+
+    @Test
     fun aWalkRoundTheKitchenOnlyCostsTheProbe() {
         val t = tracking(home)
         t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
