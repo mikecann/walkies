@@ -76,6 +76,11 @@ nonisolated struct Projection: Sendable {
 
     var isValid: Bool { h != nil }
 
+    /// What the GPU clouds' shader needs to do the same sums as `point`.
+    var groundMeasure: (h: [Double], origin: MKMapPoint, unit: Double, width: Double)? {
+        h.map { ($0, origin, unit, width) }
+    }
+
     /// How close to the camera's own plane the ground can come before it's treated
     /// as behind the camera. 1 is the ground at the 10%, 40% spot on screen.
     static let near = 0.02

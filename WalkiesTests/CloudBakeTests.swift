@@ -8,7 +8,7 @@ import simd
 
 /// A stand-in for MapKit's camera: looking down on `centre` from above, turned to
 /// `heading` and tipped back by `pitch`, `zoom` screen points to the map point.
-private struct TestCamera {
+struct TestCamera {
     var centre = MKMapPoint(CLLocationCoordinate2D(latitude: -33.64, longitude: 115.39))
     var zoom = 0.5
     var heading = 0.0
@@ -667,7 +667,7 @@ struct BakedLayerTests {
         camera.size = CGSize(width: 402, height: 874)
         let screen = Screen(camera)
 
-        let engine = BakedCloudEngine()
+        let engine = BakedCloudEngine(renderer: .baked)
         engine.testScreen = { (screen.camera.size, 3, screen.camera.projection) }
         let inputs = BakedCloudEngine.Inputs(
             field: field, key: "a", theme: "clouds.classic", walkTiles: [], marker: "marker.dot", reduceMotion: true
@@ -697,7 +697,7 @@ struct BakedLayerTests {
         let gate = StuckBakery()
         defer { gate.release() }
 
-        let engine = BakedCloudEngine()
+        let engine = BakedCloudEngine(renderer: .baked)
         engine.testScreen = { (screen.camera.size, 3, screen.camera.projection) }
         engine.bakery = { gate.bake($0) }
         let inputs = BakedCloudEngine.Inputs(
@@ -729,7 +729,7 @@ struct BakedLayerTests {
         let slow = SlowBakery(first: 1.5)
         var events: [String] = []
 
-        let engine = BakedCloudEngine()
+        let engine = BakedCloudEngine(renderer: .baked)
         engine.testScreen = { (screen.camera.size, 3, screen.camera.projection) }
         engine.bakery = { slow.bake($0) }
         engine.log = { events.append($0) }
@@ -798,7 +798,7 @@ struct BakedLayerTests {
             let screen = Screen(camera)
             let gate = StuckBakery()
             defer { gate.release() }
-            let engine = BakedCloudEngine()
+            let engine = BakedCloudEngine(renderer: .baked)
             if coarse { engine.overviewPixels = 400 }
             engine.testScreen = { (screen.camera.size, 3, screen.camera.projection) }
             engine.bakery = { gate.bake($0) }
@@ -843,7 +843,7 @@ struct BakedLayerTests {
         camera.centre = field.clearings[0].centre
         camera.size = CGSize(width: 402, height: 874)
         let screen = Screen(camera)
-        let engine = BakedCloudEngine()
+        let engine = BakedCloudEngine(renderer: .baked)
         engine.testScreen = { (screen.camera.size, 3, screen.camera.projection) }
         engine.update(field: field, handle: MapHandle())
         try await settle(engine, on: camera)

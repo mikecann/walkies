@@ -241,7 +241,7 @@ struct CloudLayer: View {
 
     var body: some View {
         switch CloudRenderer.current {
-        case .baked:
+        case .baked, .gpu:
             BakedCloudLayer(field: field, key: key, handle: handle, walkTiles: walkTiles)
         case .live:
             LiveCloudLayer(field: field, key: key, handle: handle, walkTiles: walkTiles)

@@ -124,6 +124,11 @@ nonisolated private final class PlainShapeLayer: CAShapeLayer {
 /// Counts from the baked renderer, for the `-perfRun` harness.
 final class CloudRenderStats {
     static let shared = CloudRenderStats()
+    /// The GPU clouds: frames drawn, the GPU's time on them, and the main thread's.
+    var gpuFrames = 0
+    var gpuMilliseconds = 0.0
+    var gpuLongest = 0.0
+    var gpuEncodeMilliseconds = 0.0
     var bakes = 0
     var drafts = 0
     var bakeMilliseconds = 0.0
@@ -203,6 +208,21 @@ final class BakedCloudEngine {
     }
 
     let status = Status()
+
+    /// The GPU draws the clouds every frame, and only the lines are baked. False for the
+    /// baked renderer, or once the GPU's failed to start.
+    private var usesGPU: Bool
+
+    init(renderer: CloudRenderer = .current) {
+        usesGPU = renderer == .gpu
+    }
+    /// Made off the main thread, as compiling its shader and making its sprites takes a
+    /// noticeable moment. Nil until it's ready, or if there's no GPU to use.
+    private var gpu: GPUClouds?
+    private var askedForGPU = false
+    private var lastGPUFrame = -Double.infinity
+    /// What the GPU last drew, to skip drawing the same again when nothing moves.
+    private var lastGPUScene: (projection: Projection, key: String, theme: String, size: CGSize, still: Bool)?
 
     /// SwiftUI makes a new engine every time the view's rebuilt and keeps only the
     /// first, so the layers are only made once one's used.
@@ -381,7 +401,7 @@ final class BakedCloudEngine {
     func tick() {
         guard let handle, let inputs else { return }
         // Needs no camera, so it's started before the map's even laid out.
-        askOverview(inputs)
+        if usesGPU { askGPU(theme: inputs.theme) } else { askOverview(inputs) }
         let map = handle.map
         let test = testScreen?()
         let size: CGSize, displayScale: Double
@@ -442,10 +462,12 @@ final class BakedCloudEngine {
         CATransaction.setDisableActions(true)
         let live = present(projection: projection, size: size, now: now, moving: moving)
         if let map { placeMarker(map: map, projection: projection, inputs: inputs) }
+        if let gpu { presentGPU(gpu, projection: projection, size: size, clock: clock, now: now, displayScale: displayScale, inputs: inputs) }
         CATransaction.commit()
         if status.needsLive != live { status.needsLive = live }
         if live { stats.liveTicks += 1 }
         if showingOverview, overviewFadeEnds == nil { stats.overviewTicks += 1 }
+        if stats.firstCloudsAt == nil, usesGPU, stats.gpuEncodeMilliseconds > 0 { stats.firstCloudsAt = now }
         if stats.firstCloudsAt == nil, showingFront || (showingOverview && !overviewRoot.isHidden) { stats.firstCloudsAt = now }
 
         // Every frame while anything's moving or fading; otherwise just often enough to
@@ -454,7 +476,11 @@ final class BakedCloudEngine {
         let busy = moving || handle.isDragging || handle.honeycomb(at: .now) > 0 || reveal != nil || fading
         if busy != linkActive, let link {
             linkActive = busy
-            link.preferredFrameRateRange = busy ? .default : CAFrameRateRange(minimum: 4, maximum: 10, preferred: 10)
+            // The GPU clouds drift by being drawn again. They move under 2 points a second,
+            // so 10 times a second is a fifth of a point a step, which can't be seen; and
+            // the GPU's time per frame is most of what the clouds cost while the map's open.
+            let idle = usesGPU && !inputs.reduceMotion ? CAFrameRateRange(minimum: 8, maximum: 15, preferred: 10) : CAFrameRateRange(minimum: 4, maximum: 10, preferred: 10)
+            link.preferredFrameRateRange = busy ? .default : idle
         }
     }
 
@@ -462,6 +488,7 @@ final class BakedCloudEngine {
     /// now. True if the live Canvas has to stand in.
     private func present(projection: Projection, size: CGSize, now: Double, moving: Bool) -> Bool {
         guard let inputs else { return true }
+        if usesGPU { return presentLinesOnly(projection: projection, size: size, now: now, moving: moving, inputs: inputs) }
         // The bake on screen, if it's of these places in this look and still shows
         // something like what's on screen: never warped off it, or to a speck.
         let warp = front.flatMap { front -> BakeWarp? in
@@ -554,6 +581,121 @@ final class BakedCloudEngine {
         return live
     }
 
+    /// With the GPU drawing the clouds there's only ever the lines to put on screen, and
+    /// nothing to stand in for them.
+    private func presentLinesOnly(projection: Projection, size: CGSize, now: Double, moving: Bool, inputs: Inputs) -> Bool {
+        // Nothing for the moment it takes the GPU to start (well under a second), while the
+        // map's own tiles load, rather than the live Canvas's whole lot of drawing.
+        if gpu == nil {
+            cloudRoot.isHidden = true
+            honeycombRoot.isHidden = true
+            showingFront = false
+            return false
+        }
+        let warp = front.flatMap { front -> BakeWarp? in
+            guard front.field.places == inputs.field.places, let warp = BakeWarp(now: projection, frame: front.frame),
+                  warp.shows(size: size, now: projection, moving: moving)
+            else { return nil }
+            return warp
+        }
+        frontCovers = warp?.covers(size: size, now: projection) ?? false
+        if let front, let warp {
+            cloudRoot.transform = warp.layerTransform
+            if !showingFront {
+                // Faded in, as the baked clouds are.
+                cloudRoot.isHidden = false
+                cloudRoot.removeAnimation(forKey: "fade")
+                let fade = CABasicAnimation(keyPath: "opacity")
+                fade.fromValue = 0
+                fade.toValue = 1
+                fade.duration = BakePolicy.fade
+                cloudRoot.add(fade, forKey: "fade")
+            }
+            showingFront = true
+            placeReveal(front: front, now: now)
+        } else {
+            cloudRoot.isHidden = true
+            showingFront = false
+        }
+        let opacity = handle?.honeycomb(at: .now) ?? 0
+        if opacity > 0, let honeycomb, let warp = BakeWarp(now: projection, frame: honeycomb.frame), warp.shows(size: size, now: projection) {
+            honeycombRoot.transform = warp.layerTransform
+            honeycombRoot.opacity = Float(opacity)
+            honeycombRoot.isHidden = false
+        } else {
+            honeycombRoot.isHidden = true
+        }
+        return false
+    }
+
+    /// The clouds of the bake on screen, so tiles open up together with their lines; or
+    /// before there's one of these places, the ones wanted.
+    private func presentGPU(_ gpu: GPUClouds, projection: Projection, size: CGSize, clock: Double, now: Double, displayScale: Double, inputs: Inputs) {
+        // The map moving ticks this as well as the display link, often several times a
+        // frame, and one drawing a refresh is all that can show. On the same run through
+        // as the camera's change, so the first of them still lands in step with the map.
+        let refresh = 1 / Double(max(60, UIScreen.main.maximumFramesPerSecond))
+        guard now - lastGPUFrame >= refresh * 0.8 else { return }
+        // Put on screen first, and drawn to from the next frame.
+        if gpu.layer.superlayer == nil {
+            layers.cloudHost.insertSublayer(gpu.layer, at: 0)
+            gpu.layer.bounds = CGRect(origin: .zero, size: size)
+            return
+        }
+        let front = front.flatMap { $0.field.places == inputs.field.places ? $0 : nil }
+        let key = front?.fieldKey ?? inputs.key
+        // With Reduce Motion the clouds don't drift, so a still map needs nothing drawn again.
+        if inputs.reduceMotion, reveal == nil, let last = lastGPUScene, last.still, last.key == key, last.theme == inputs.theme,
+           last.size == size, last.projection.matches(projection, size: size) {
+            return
+        }
+        lastGPUFrame = now
+        // Not if it's drawn with another look's sprites while its own are made, or with the
+        // clouds where they'd drifted to before Reduce Motion went on: those need drawing again.
+        lastGPUScene = gpu.hasSprites(for: inputs.theme) ? (projection, key, inputs.theme, size, inputs.reduceMotion) : nil
+        var clearing: GPUClouds.Scene.Reveal?
+        if let reveal {
+            clearing = GPUClouds.Scene.Reveal(
+                started: reveal.started, progress: min(1, (now - reveal.started) / CloudLayer.revealTime),
+                leaving: reveal.leaving, leavingMist: reveal.leavingMist, fresh: reveal.fresh
+            )
+        }
+        gpu.present(
+            GPUClouds.Scene(
+                field: front?.field ?? inputs.field, key: key, theme: inputs.theme,
+                projection: projection, size: size, clock: clock, reveal: clearing
+            ),
+            displayScale: displayScale
+        )
+    }
+
+    private func askGPU(theme: String) {
+        guard !askedForGPU else { return }
+        askedForGPU = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var made = GPUClouds()
+            made?.prepare(theme: theme)
+            // Without its sprites it can't draw anything: the baked clouds instead.
+            if let gpu = made, !gpu.hasSprites(for: theme) { made = nil }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let made {
+                    self.gpu = made
+                } else {
+                    // No GPU to draw with: the baked clouds instead, baked afresh, as
+                    // what's on hand was baked with just the lines.
+                    self.usesGPU = false
+                    self.front = nil
+                    self.lastRequest = nil
+                    // Any bake already asked for is only lines: never to be shown.
+                    self.frontRequest = self.requests
+                    self.inFlight = nil
+                }
+                self.tick()
+            }
+        }
+    }
+
     private func hideOverview() {
         overviewRoot.isHidden = true
         overviewRoot.removeAnimation(forKey: "fade")
@@ -608,8 +750,10 @@ final class BakedCloudEngine {
             projection: frame.projection, bounds: reveal.area, clock: front.clock, puffMargin: 0, reference: reveal.reference
         )
         let sprites = CloudSprites.sprites(for: front.theme)
-        patchClouds.contents = CloudBakery.render(patch, scale: frame.cloudScale) { scene.drawClouds(in: $0, sprites: sprites) }
-        patchClouds.isHidden = false
+        if !usesGPU {
+            patchClouds.contents = CloudBakery.render(patch, scale: frame.cloudScale) { scene.drawClouds(in: $0, sprites: sprites) }
+            patchClouds.isHidden = false
+        }
         if scene.hasLines || !scene.sparkles.isEmpty {
             patchLines.contents = CloudBakery.render(patch, scale: frame.scale) { scene.drawLines(in: $0, sprites: sprites) }
             patchLines.isHidden = false
@@ -686,7 +830,7 @@ final class BakedCloudEngine {
             fits: warp?.fits(size: size, now: projection, moving: moving) ?? false,
             exact: warp?.exact(size: size) ?? false,
             moving: moving, dragging: handle.isDragging, clock: clock,
-            drifts: !inputs.reduceMotion && reveal == nil, asked: asked,
+            drifts: !inputs.reduceMotion && reveal == nil && !usesGPU, asked: asked,
             flying: moving && !handle.isDragging
         ) else { return }
 
@@ -705,7 +849,8 @@ final class BakedCloudEngine {
             clock: request.clock == .shown ? front?.clock ?? clock : clock,
             honeycomb: request.honeycomb, walkTiles: inputs.walkTiles, walkKey: walkKey,
             previous: front?.field, previousKey: front?.fieldKey,
-            keptLines: sameLines ? KeptLines(image: front?.lines) : nil
+            keptLines: sameLines ? KeptLines(image: front?.lines) : nil,
+            drawClouds: !usesGPU
         )
         lastRequest = (frame, request.honeycomb)
         requests += 1

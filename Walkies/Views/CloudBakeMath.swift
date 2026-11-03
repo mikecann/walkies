@@ -3,15 +3,18 @@ import CoreGraphics
 import QuartzCore
 import simd
 
-/// Which renderer draws the clouds. `-cloudRenderer live` on launch keeps the old one,
-/// that draws every puff in a Canvas each frame, to compare the two on the same phone.
+/// Which renderer draws the clouds: the GPU, every frame. `-cloudRenderer baked` or
+/// `-cloudRenderer live` on launch (Debug builds only) keeps one of the older ones, to
+/// compare them on the same phone. The baked one also stands in should the GPU not start.
 nonisolated enum CloudRenderer: String, Sendable {
     /// Baked into a picture off the main thread, warped by Core Animation each frame.
     case baked
     /// Drawn puff by puff in a SwiftUI Canvas each frame.
     case live
+    /// Every puff drawn by the GPU each frame (`GPUClouds`), with only the lines baked.
+    case gpu
 
-    static let current: CloudRenderer = LaunchArguments.value(after: "-cloudRenderer") == "live" ? .live : .baked
+    static let current: CloudRenderer = LaunchArguments.value(after: "-cloudRenderer").flatMap(CloudRenderer.init(rawValue:)) ?? .gpu
 }
 
 /// Launch arguments, read by hand: `UserDefaults` would read `-perfRun -cloudRenderer live`
