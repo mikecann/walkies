@@ -133,12 +133,41 @@ final class PerfRun {
     private static var running = false
     /// Gives up and reports anyway after this long, in seconds: the wait for the map
     /// (up to 60), the pauses (9) and the flight (24), with room to spare.
-    static let limit = 120.0
+    static let limit = 120.0 + (stillSeconds + 10) * 2
+    /// `-perfStill 60`: first sit on the map this many seconds at street level and again
+    /// over the suburb, measuring what it costs just to have the map open.
+    static let stillSeconds = LaunchArguments.value(after: "-perfStill").flatMap(Double.init) ?? 0
     private lazy var watchdog = PerfWatchdog(limit: Self.limit)
+
+    /// The whole process's CPU time so far, in seconds.
+    private static var cpuSeconds: Double { Double(clock_gettime_nsec_np(CLOCK_PROCESS_CPUTIME_ID)) / 1e9 }
+
+    /// Waits on a still map and says what that cost.
+    private func measureStill(_ name: String, seconds: Double) async -> [String: Any] {
+        let stats = CloudRenderStats.shared
+        let (cpu, frames, gpu, bakes, bakeMs) = (Self.cpuSeconds, stats.gpuFrames, stats.gpuMilliseconds, stats.bakes, stats.bakeMilliseconds)
+        let battery = UIDevice.current.batteryLevel
+        try? await Task.sleep(for: .seconds(seconds))
+        let newFrames = stats.gpuFrames - frames, newBakes = stats.bakes - bakes
+        func round(_ v: Double) -> Double { (v * 100).rounded() / 100 }
+        return [
+            "name": name, "seconds": seconds,
+            "cpuPercentOfACore": round((Self.cpuSeconds - cpu) / seconds * 100),
+            "gpuFramesPerSecond": round(Double(newFrames) / seconds),
+            "gpuMsAvg": newFrames > 0 ? round((stats.gpuMilliseconds - gpu) / Double(newFrames)) : 0,
+            "bakes": newBakes,
+            "bakeMsAvg": newBakes > 0 ? round((stats.bakeMilliseconds - bakeMs) / Double(newBakes)) : 0,
+            "batteryFrom": battery, "batteryTo": UIDevice.current.batteryLevel,
+            "thermal": ProcessInfo.processInfo.thermalState.rawValue,
+        ]
+    }
 
     func run() async {
         guard !Self.running else { return }
         Self.running = true
+        // It sits still for minutes at a time, and the phone mustn't lock meanwhile.
+        UIApplication.shared.isIdleTimerDisabled = true
+        UIDevice.current.isBatteryMonitoringEnabled = true
         watchdog.start()
         // Wait for the map, a place and its clouds.
         watchdog.stage = "waiting for the map and clouds"
@@ -179,10 +208,26 @@ final class PerfRun {
         watchdog.stage = "waiting for the first clouds at street level"
         try? await Task.sleep(for: .seconds(4))
 
+        var still: [[String: Any]] = []
+        if Self.stillSeconds > 0 {
+            for (name, camera) in [("street", segments[0].camera(0)), ("suburb", Camera(distance: suburb, pitch: pitch))] {
+                watchdog.stage = "sitting still over the \(name)"
+                apply(camera)
+                // The map's tiles and a sharp bake in, first.
+                try? await Task.sleep(for: .seconds(8))
+                still.append(await measureStill(name, seconds: Self.stillSeconds))
+            }
+            apply(segments[0].camera(0))
+            try? await Task.sleep(for: .seconds(4))
+        }
+
+        let flightCPU = Self.cpuSeconds
+        let flightStart = CACurrentMediaTime()
         let flight = Flight(segments: segments, handle: handle, apply: apply)
         let watchdog = watchdog
         flight.entered = { watchdog.stage = "flying \($0)" }
         let results = await flight.fly()
+        let flightCPUPercent = (Self.cpuSeconds - flightCPU) / (CACurrentMediaTime() - flightStart) * 100
         watchdog.stage = "reporting"
 
         var segmentJSON: [[String: Any]] = []
@@ -206,6 +251,8 @@ final class PerfRun {
             "suburbDistance": suburb.rounded(),
             "puffs": model.cloudField.puffs.count,
             "segments": segmentJSON,
+            "still": still,
+            "flightCpuPercentOfACore": (flightCPUPercent * 10).rounded() / 10,
             "overall": FrameStats(intervals: results.flatMap(\.intervals), refresh: flight.refresh).json,
             "bakes": stats.bakes,
             "draftBakes": stats.drafts,
