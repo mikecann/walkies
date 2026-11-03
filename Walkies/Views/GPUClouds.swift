@@ -20,6 +20,16 @@ nonisolated final class GPUClouds: @unchecked Sendable {
         var size: CGSize
         var clock: Double
         var reveal: Reveal?
+        /// The clouds over the rest of the world too, outside your places.
+        var world: World?
+
+        struct World {
+            /// Your places' outlines: no world clouds inside them.
+            var rings: [WorldCloudLayout.Ring]
+            var walked: [Int64: [MKMapPoint]]
+            /// Changes whenever the walked tiles do.
+            var revision: Int
+        }
 
         /// Tiles clearing.
         struct Reveal {
@@ -48,6 +58,9 @@ nonisolated final class GPUClouds: @unchecked Sendable {
     private let invertStencil: any MTLDepthStencilState
     private let insideStencil: any MTLDepthStencilState
     private let anywhere: any MTLDepthStencilState
+    private let outsideStencil: any MTLDepthStencilState
+    /// The world's puffs for the camera they were laid out for, kept while it's near.
+    private var builtWorld: (projection: Projection, size: CGSize, walked: Int, puffs: Instances, holes: Instances, radius: Double)?
     private var stencil: (any MTLTexture)?
 
     private struct Instances {
@@ -120,8 +133,10 @@ nonisolated final class GPUClouds: @unchecked Sendable {
               // leaves it set inside the outline (even-odd) whatever its shape.
               let invertStencil = stencilState(.always, .invert),
               let insideStencil = stencilState(.notEqual, .keep),
-              let anywhere = stencilState(.always, .keep)
+              let anywhere = stencilState(.always, .keep),
+              let outsideStencil = stencilState(.equal, .keep)
         else { return nil }
+        self.outsideStencil = outsideStencil
         self.clipFill = clipFill
         self.invertStencil = invertStencil
         self.insideStencil = insideStencil
@@ -176,7 +191,8 @@ nonisolated final class GPUClouds: @unchecked Sendable {
 
     /// Draws to the layer, in the current Core Animation transaction.
     @MainActor
-    func present(_ scene: Scene, displayScale: Double) {
+    @discardableResult
+    func present(_ scene: Scene, displayScale: Double) -> Bool {
         let scale = min(displayScale, Self.maxScale)
         let drawable = CGSize(width: (scene.size.width * scale).rounded(), height: (scene.size.height * scale).rounded())
         layer.bounds = CGRect(origin: .zero, size: scene.size)
@@ -184,9 +200,9 @@ nonisolated final class GPUClouds: @unchecked Sendable {
             layer.contentsScale = scale
             layer.drawableSize = drawable
         }
-        guard drawable.width > 0, let target = layer.nextDrawable(), let commands = queue.makeCommandBuffer() else { return }
+        guard drawable.width > 0, let target = layer.nextDrawable(), let commands = queue.makeCommandBuffer() else { return false }
         let started = CACurrentMediaTime()
-        guard encode(scene, into: target.texture, on: commands) else { return }
+        guard encode(scene, into: target.texture, on: commands) else { return false }
         commands.addCompletedHandler { buffer in
             let gpu = buffer.gpuEndTime - buffer.gpuStartTime
             DispatchQueue.main.async {
@@ -200,6 +216,7 @@ nonisolated final class GPUClouds: @unchecked Sendable {
         commands.waitUntilScheduled()
         target.present()
         CloudRenderStats.shared.gpuEncodeMilliseconds += (CACurrentMediaTime() - started) * 1000
+        return true
     }
 
     /// Draws to a new texture and waits, for tests.
@@ -274,6 +291,21 @@ nonisolated final class GPUClouds: @unchecked Sendable {
         let leavingScale = Float(1 + 0.5 * ease)
         let leavingFade = Float(1 - ease)
 
+        // The world's clouds first, outside your places, under your places' own: drawn
+        // as MapKit's tiles of them were, without drifting.
+        let world = scene.world.map { worldInstances(scene, $0) }
+        let placesFilled = world != nil && fillRings(e, scene.world?.rings ?? [], scene: scene)
+        if let world {
+            e.setVertexBytes(&frame, length: MemoryLayout<FrameData>.stride, index: 1)
+            e.setRenderPipelineState(over)
+            e.setDepthStencilState(placesFilled ? outsideStencil : anywhere)
+            draw(e, world.puffs, PassData(slice: Sprite.bases, drifts: 0))
+            draw(e, world.puffs, PassData(slice: Sprite.tops, drifts: 0))
+            e.setRenderPipelineState(erase)
+            draw(e, world.holes, PassData(slice: Sprite.eraser, drifts: 0))
+            e.setDepthStencilState(anywhere)
+        }
+
         e.setRenderPipelineState(over)
         if detail > 0 {
             draw(e, data.puffs, PassData(slice: Sprite.bases, alpha: detail))
@@ -285,7 +317,7 @@ nonisolated final class GPUClouds: @unchecked Sendable {
         // Zoomed in far enough for streets, the holes stop at the places' outlines as the
         // streets do, or one by an edge would cut into the puffs spilling over it.
         // CloudScene's road clip, made the same way.
-        let clipped = data.clearings.count > 0 && centreScale > 0.05 && fillOutlines(e, scene)
+        let clipped = data.clearings.count > 0 && centreScale > 0.05 && (placesFilled || fillOutlines(e, scene))
         e.setRenderPipelineState(erase)
         e.setDepthStencilState(clipped ? insideStencil : anywhere)
         e.setVertexBytes(&frame, length: MemoryLayout<FrameData>.stride, index: 1)
@@ -299,6 +331,12 @@ nonisolated final class GPUClouds: @unchecked Sendable {
             e.setFragmentTexture(mist, index: 0)
             e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             e.setFragmentTexture(atlas, index: 0)
+        }
+        if let world {
+            e.setRenderPipelineState(under)
+            e.setDepthStencilState(placesFilled ? outsideStencil : anywhere)
+            draw(e, world.puffs, PassData(slice: Sprite.shadows, alpha: 0.35, drifts: 0, offsetX: 0.15, offsetY: 0.18))
+            e.setDepthStencilState(anywhere)
         }
         if detail > 0 {
             e.setRenderPipelineState(under)
@@ -320,8 +358,17 @@ nonisolated final class GPUClouds: @unchecked Sendable {
 
     /// The places' outlines on screen, into the stencil. False if there are none.
     private func fillOutlines(_ e: any MTLRenderCommandEncoder, _ scene: Scene) -> Bool {
+        fillPolygons(e, scene.field.outline, scene: scene)
+    }
+
+    /// The world's holes (your places, and any holes in those) into the stencil.
+    private func fillRings(_ e: any MTLRenderCommandEncoder, _ rings: [WorldCloudLayout.Ring], scene: Scene) -> Bool {
+        fillPolygons(e, rings.map(\.points), scene: scene)
+    }
+
+    private func fillPolygons(_ e: any MTLRenderCommandEncoder, _ rings: [[MKMapPoint]], scene: Scene) -> Bool {
         var triangles: [SIMD2<Float>] = []
-        for ring in scene.field.outline {
+        for ring in rings {
             // Cut where it passes behind the camera, as the CPU's own clip is.
             let points = scene.projection.polygon(ring).map { SIMD2(Float($0.x), Float($0.y)) }
             guard points.count > 2 else { continue }
@@ -337,6 +384,75 @@ nonisolated final class GPUClouds: @unchecked Sendable {
         e.setVertexBytes(&size, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
         e.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: triangles.count)
         return true
+    }
+
+    /// The world's puffs and walked holes round the camera, laid out as MapKit's tiles of
+    /// them were (`WorldCloudLayout`), each patch of ground at the spacing for how big
+    /// it is on screen, so further off they're fewer and bigger. Laid out again only once
+    /// the camera's moved a good way, as it's thousands of puffs.
+    private func worldInstances(_ scene: Scene, _ world: Scene.World) -> (puffs: Instances, holes: Instances, radius: Double) {
+        let p = scene.projection
+        let walked = world.revision
+        if let built = builtWorld, built.size == scene.size, built.walked == walked, p.matches(built.projection, size: scene.size, within: 30) {
+            return (built.puffs, built.holes, built.radius)
+        }
+        let region = BakeFrame.region(p, size: scene.size, margin: 0.25)
+        var area = MKMapRect.null
+        for corner in [CGPoint(x: region.minX, y: region.minY), CGPoint(x: region.maxX, y: region.minY),
+                       CGPoint(x: region.maxX, y: region.maxY), CGPoint(x: region.minX, y: region.maxY)] {
+            guard let g = p.ground(at: corner) else { continue }
+            area = area.union(MKMapRect(origin: g, size: MKMapSize(width: 0, height: 0)))
+        }
+        var puffs: [WorldCloudLayout.Puff] = []
+        var seen = Set<SIMD2<Double>>()
+        if !area.isNull {
+            // Square, so the patches split evenly.
+            let side = max(area.width, area.height)
+            let root = MKMapRect(x: area.midX - side / 2, y: area.midY - side / 2, width: side, height: side)
+            var patches: [(MKMapRect, Double)] = []
+            func visit(_ rect: MKMapRect, depth: Int) {
+                let corners = [MKMapPoint(x: rect.minX, y: rect.minY), MKMapPoint(x: rect.maxX, y: rect.minY),
+                               MKMapPoint(x: rect.maxX, y: rect.maxY), MKMapPoint(x: rect.minX, y: rect.maxY)]
+                let inFront = corners.filter(p.isInFront)
+                guard !inFront.isEmpty else { return }
+                let onScreen = inFront.map(p.point)
+                let xs = onScreen.map(\.x), ys = onScreen.map(\.y)
+                let box = CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+                // Partly behind the camera, or not on screen: only worth a look if it's split.
+                if inFront.count < 4 || !box.intersects(region) {
+                    if inFront.count < 4, depth < 10 { split(rect, depth) }
+                    return
+                }
+                let middle = MKMapPoint(x: rect.midX, y: rect.midY)
+                let scale = p.ellipse(centre: middle, radius: rect.width / 2).width / rect.width
+                guard scale.isFinite, scale > 0 else { return }
+                if rect.width * scale > 400, depth < 14 { split(rect, depth) } else { patches.append((rect, scale)) }
+            }
+            func split(_ rect: MKMapRect, _ depth: Int) {
+                let w = rect.width / 2, h = rect.height / 2
+                for (dx, dy) in [(0.0, 0.0), (w, 0), (0, h), (w, h)] {
+                    visit(MKMapRect(x: rect.minX + dx, y: rect.minY + dy, width: w, height: h), depth: depth + 1)
+                }
+            }
+            visit(root, depth: 0)
+            for (rect, scale) in patches {
+                for puff in WorldCloudLayout.puffs(in: rect, zoomScale: scale) where seen.insert(SIMD2(puff.centre.x, puff.centre.y)).inserted {
+                    puffs.append(puff)
+                }
+            }
+        }
+        // North first, so further south sits in front, as in each of MapKit's tiles.
+        puffs.sort { $0.centre.y < $1.centre.y }
+        let holes = area.isNull ? [] : WorldCloudLayout.walked(near: area, in: world.walked)
+        let radius = puffs.first.map { $0.box.width / 2 } ?? 0
+        let built = (
+            projection: p, size: scene.size, walked: walked,
+            puffs: Instances(device: device, puffs.map { PuffData($0.centre, radius: $0.box.width / 2, variant: $0.variant) }),
+            holes: Instances(device: device, holes.map { PuffData($0, radius: WorldCloudLayout.clearing) }),
+            radius: radius
+        )
+        builtWorld = built
+        return (built.puffs, built.holes, built.radius)
     }
 
     private func stencilTexture(like target: any MTLTexture) -> (any MTLTexture)? {

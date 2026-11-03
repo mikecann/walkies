@@ -66,6 +66,7 @@ struct FogMapView: UIViewRepresentable {
         map.pointOfInterestFilter = .excludingAll
         map.showsUserLocation = true
         handle.map = map
+        handle.world = context.coordinator.world
         return map
     }
 
@@ -108,7 +109,7 @@ struct FogMapView: UIViewRepresentable {
         private var uncovered: MKMultiPolygon?
         private var line: MKPolyline?
 
-        private let world = WorldClouds()
+        let world = WorldClouds()
         private var worldShown = false
         private var walked: Set<Hex> = []
         private var cloudTheme: String?

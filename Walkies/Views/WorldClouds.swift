@@ -19,9 +19,28 @@ final class WorldClouds: NSObject, MKOverlay {
     /// Made when the map first asks for it, then kept up to date.
     private var made: WorldCloudsRenderer?
 
+    /// Your places' outlines, the holes in the world's clouds.
+    var rings: [WorldCloudLayout.Ring] { holes }
+    /// The world tiles walked, by the square they're in.
+    var walkedBuckets: [Int64: [MKMapPoint]] { buckets }
+    /// Goes up whenever the walked tiles change, to tell when they have.
+    private(set) var walkedRevision = 0
+
+    /// Once the GPU draws the world's clouds every frame, MapKit's tiles of them draw
+    /// nothing: drawn a tile at a time in the background, they came in late as you
+    /// scrolled, in squares. They're what's shown until then, and if the GPU can't start.
+    var drawnByGPU = false {
+        didSet {
+            guard drawnByGPU != oldValue, let made else { return }
+            made.set(hidden: drawnByGPU)
+            made.setNeedsDisplay()
+        }
+    }
+
     var renderer: WorldCloudsRenderer {
         if let made { return made }
         let renderer = WorldCloudsRenderer(overlay: self)
+        renderer.set(hidden: drawnByGPU)
         renderer.set(holes: holes)
         renderer.set(walked: buckets, theme: theme ?? "clouds.classic")
         made = renderer
@@ -45,6 +64,7 @@ final class WorldClouds: NSObject, MKOverlay {
         self.walked = walked
         self.theme = theme
         buckets = WorldCloudLayout.buckets(walked)
+        walkedRevision += 1
         guard let made else { return }
         made.set(walked: buckets, theme: theme)
         // A walk adds a tile or two at a time, so only redraw round those.
@@ -67,6 +87,11 @@ nonisolated final class WorldCloudsRenderer: MKOverlayRenderer, @unchecked Senda
 
     private let lock = NSLock()
     private var snapshot = Snapshot()
+    private var hidden = false
+
+    func set(hidden: Bool) {
+        lock.withLock { self.hidden = hidden }
+    }
 
     func set(holes: [WorldCloudLayout.Ring]) {
         lock.withLock { snapshot.holes = holes }
@@ -80,7 +105,8 @@ nonisolated final class WorldCloudsRenderer: MKOverlayRenderer, @unchecked Senda
     }
 
     override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
-        let now = lock.withLock { snapshot }
+        let (now, hidden) = lock.withLock { (snapshot, self.hidden) }
+        if hidden { return }
         let puffs = WorldCloudLayout.puffs(in: mapRect, zoomScale: Double(zoomScale))
         guard !puffs.isEmpty else { return }
         let sprites = CloudSprites.sprites(for: now.theme)

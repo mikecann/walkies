@@ -222,7 +222,7 @@ final class BakedCloudEngine {
     private var askedForGPU = false
     private var lastGPUFrame = -Double.infinity
     /// What the GPU last drew, to skip drawing the same again when nothing moves.
-    private var lastGPUScene: (projection: Projection, key: String, theme: String, size: CGSize, still: Bool)?
+    private var lastGPUScene: (projection: Projection, key: String, theme: String, size: CGSize, still: Bool, world: Int)?
 
     /// SwiftUI makes a new engine every time the view's rebuilt and keeps only the
     /// first, so the layers are only made once one's used.
@@ -645,14 +645,15 @@ final class BakedCloudEngine {
         let front = front.flatMap { $0.field.places == inputs.field.places ? $0 : nil }
         let key = front?.fieldKey ?? inputs.key
         // With Reduce Motion the clouds don't drift, so a still map needs nothing drawn again.
-        if inputs.reduceMotion, reveal == nil, let last = lastGPUScene, last.still, last.key == key, last.theme == inputs.theme,
+        let worldWalked = handle?.world?.walkedRevision ?? 0
+        if inputs.reduceMotion, reveal == nil, let last = lastGPUScene, last.still, last.key == key, last.theme == inputs.theme, last.world == worldWalked,
            last.size == size, last.projection.matches(projection, size: size) {
             return
         }
         lastGPUFrame = now
         // Not if it's drawn with another look's sprites while its own are made, or with the
         // clouds where they'd drifted to before Reduce Motion went on: those need drawing again.
-        lastGPUScene = gpu.hasSprites(for: inputs.theme) ? (projection, key, inputs.theme, size, inputs.reduceMotion) : nil
+        lastGPUScene = gpu.hasSprites(for: inputs.theme) ? (projection, key, inputs.theme, size, inputs.reduceMotion, worldWalked) : nil
         var clearing: GPUClouds.Scene.Reveal?
         if let reveal {
             clearing = GPUClouds.Scene.Reveal(
@@ -660,13 +661,23 @@ final class BakedCloudEngine {
                 leaving: reveal.leaving, leavingMist: reveal.leavingMist, fresh: reveal.fresh
             )
         }
-        gpu.present(
+        let world = worldScene()
+        let drew = gpu.present(
             GPUClouds.Scene(
                 field: front?.field ?? inputs.field, key: key, theme: inputs.theme,
-                projection: projection, size: size, clock: clock, reveal: clearing
+                projection: projection, size: size, clock: clock, reveal: clearing,
+                world: world
             ),
             displayScale: displayScale
         )
+        // MapKit's tiles of the world's clouds only go once the GPU's drawn them.
+        if drew, world != nil, let worldClouds = handle?.world, !worldClouds.drawnByGPU { worldClouds.drawnByGPU = true }
+    }
+
+    /// The rest of the world's clouds, once MapKit's tiles of them are off.
+    private func worldScene() -> GPUClouds.Scene.World? {
+        guard let world = handle?.world else { return nil }
+        return GPUClouds.Scene.World(rings: world.rings, walked: world.walkedBuckets, revision: world.walkedRevision)
     }
 
     private func askGPU(theme: String) {

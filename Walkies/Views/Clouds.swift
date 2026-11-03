@@ -181,6 +181,8 @@ nonisolated struct CloudField: Sendable {
 @Observable
 final class MapHandle {
     @ObservationIgnored weak var map: MKMapView?
+    /// The clouds over the rest of the world, for the GPU to draw instead of MapKit.
+    @ObservationIgnored weak var world: WorldClouds?
     /// True while the map is being dragged, pinched or flown somewhere, so the
     /// clouds redraw every frame and keep up with it.
     var moving = false {
