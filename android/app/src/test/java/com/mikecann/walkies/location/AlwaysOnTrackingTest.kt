@@ -255,30 +255,61 @@ class AlwaysOnTrackingTest {
         t.motionChanged(MotionActivity.Still, entered = true)
         t.motionChanged(MotionActivity.Walking, entered = true)
         assertEquals(GpsMode.High, gps.mode)
-        for (m in listOf(5.0, 15.0, 25.0, 40.0)) {
-            now += 8
+        for (m in listOf(10.0, 25.0, 40.0, 60.0)) {
+            now += 12
             t.fix(walking(east(m)))
         }
         // Well past the probe, still up: it counted as leaving.
         now += AlwaysOnTracking.PROBE_TIME
-        t.fix(walking(east(80.0)))
+        t.fix(walking(east(90.0)))
         assertEquals(GpsMode.High, gps.mode)
     }
 
+    /** Dad on 3 Nov 2026: 30 m from where the probe started had him leaving all over the garden. */
     @Test
-    fun walkingUnderThirtyMetresIsNotLeaving() {
+    fun walkingRoundTheGardenIsNotLeaving() {
         val t = tracking(home)
         t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
         t.motionChanged(MotionActivity.Still, entered = true)
         t.motionChanged(MotionActivity.Walking, entered = true)
-        for (m in listOf(5.0, 15.0, 25.0, 33.0)) {
-            now += 8
+        for (m in listOf(-40.0, -20.0, 0.0, 20.0, 40.0)) {
+            now += 12
             t.fix(walking(east(m)))
         }
-        // 28 m from the first walking fix: the probe runs out and it's the light watch again.
         now += AlwaysOnTracking.PROBE_TIME
         t.tick()
         assertEquals(GpsMode.Low, gps.mode)
+    }
+
+    @Test
+    fun aVagueFixJustPastFiftyMetresIsNotLeaving() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
+        t.motionChanged(MotionActivity.Still, entered = true)
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        now += 12
+        // 60 m out, but give or take 15 m it could still be 45.
+        t.fix(TrackPoint(east(60.0).lat, east(60.0).lon, now, 15.0, speed = 1.3))
+        now += AlwaysOnTracking.PROBE_TIME
+        t.tick()
+        assertEquals(GpsMode.Low, gps.mode)
+    }
+
+    @Test
+    fun oneProbeEveryFewMinutesHoweverMuchYouPotterAbout() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        assertEquals(GpsMode.High, gps.mode)
+        now += 20
+        t.motionChanged(MotionActivity.Still, entered = true)
+        now += 60
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        assertEquals(GpsMode.Low, gps.mode)
+        now += AlwaysOnTracking.PROBE_AGAIN
+        t.motionChanged(MotionActivity.Still, entered = true)
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        assertEquals(GpsMode.High, gps.mode)
     }
 
     @Test
