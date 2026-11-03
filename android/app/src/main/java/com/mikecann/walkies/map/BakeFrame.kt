@@ -47,10 +47,11 @@ object Mat3 {
 }
 
 /**
- * Where a baked picture of the clouds was drawn from: the camera's projection at
- * the time, and the box of its screen pixels the picture covers (the screen plus a
- * margin all round, stopping short of the horizon). The picture is [pixelWidth] x
- * [pixelHeight], [scale] bitmap pixels to a screen pixel.
+ * Where baked pictures of the clouds were drawn from: the camera's projection at
+ * the time, and the box of its screen pixels they cover (the screen plus a margin all
+ * round, stopping short of the horizon). There are two: the soft clouds, [cloudPixelWidth]
+ * x [cloudPixelHeight] at [cloudScale] bitmap pixels to a screen pixel, and the crisp
+ * lines over them, [pixelWidth] x [pixelHeight] at [scale].
  */
 class BakeFrame(
     val projection: Projection,

@@ -734,6 +734,8 @@ final class BakedCloudEngine {
     }
 
     private func finishedHoneycomb(_ image: CGImage, job: BakeJob, request: Int) {
+        // One from before the bake on screen can't help, and could have old tiles on it.
+        if request < frontRequest { return }
         if let honeycomb, honeycomb.request > request { return }
         honeycomb = (image, job.frame, job.walkKey, request)
         CATransaction.begin()
