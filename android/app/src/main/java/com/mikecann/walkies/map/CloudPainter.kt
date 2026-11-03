@@ -76,6 +76,22 @@ class CloudPainter(private val density: Float) {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
     }
     private val rect = RectF()
+    /** The clouds as a handful of GPU draws, for drawing them live every frame. */
+    private val batch = SpriteBatch()
+
+    /**
+     * One sprite over [rect]: added to the batch when [batched], otherwise drawn now. The
+     * paint's alpha and blend go with it either way.
+     */
+    private fun stamp(canvas: Canvas, batched: Boolean, sprites: CloudSprites, sprite: Int, bitmap: Bitmap, paint: Paint) {
+        if (batched) {
+            batch.add(canvas, sprites, sprite, rect.left, rect.top, rect.right, rect.bottom, paint.alpha, paint.xfermode)
+        } else {
+            canvas.drawBitmap(bitmap, null, rect, paint)
+        }
+    }
+
+    fun close() = batch.close()
     private val path = Path()
     private val clip = Path()
     private val honeycombPaths = Array(5) { Path() }
@@ -184,16 +200,38 @@ class CloudPainter(private val density: Float) {
         fresh: List<DoubleArray>,
         you: YouAreHere,
         cosmetics: MapCosmetics = MapCosmetics.none,
+        /** The clouds in a few GPU draws (a hardware canvas), rather than one by one. */
+        batched: Boolean = false,
     ) {
         drawUnder(canvas, projection, width, height, clock, route, fresh, cosmetics)
         liveBounds.set(-width * 0.2f, -height * 0.2f, width * 1.2f, height * 1.2f)
         liveLayer.set(0f, 0f, width, height)
-        drawClouds(canvas, field, leaving, freshClearings, reveal, projection, sprites, liveBounds, clock, liveLayer)
+        drawClouds(canvas, field, leaving, freshClearings, reveal, projection, sprites, liveBounds, clock, liveLayer, batched = batched)
         if (honeycomb > 0) drawHoneycomb(canvas, field, projection, liveLayer, honeycomb)
         drawOver(canvas, projection, clock, you, cosmetics)
     }
     private val liveBounds = RectF()
     private val liveLayer = RectF()
+
+    /**
+     * Just the clouds, live through this frame's projection, in a few GPU draws: what
+     * the layer draws every frame on a hardware canvas, with only the lines baked.
+     */
+    fun drawCloudsLive(
+        canvas: Canvas, field: CloudField, leaving: List<CloudField.Puff>, freshClearings: BooleanArray?, reveal: Double,
+        projection: Projection, sprites: CloudSprites, width: Float, height: Float, clock: Double,
+        leavingMist: List<CloudField.MistPatch>,
+    ) {
+        liveBounds.set(-width * 0.2f, -height * 0.2f, width * 1.2f, height * 1.2f)
+        liveLayer.set(0f, 0f, width, height)
+        drawClouds(
+            canvas, field, leaving, freshClearings, reveal, projection, sprites, liveBounds, clock, liveLayer,
+            // Not batched yet: on the emulator the batch's drawVertices drew nothing, so
+            // this draws each sprite (see SpriteBatch). Fine zoomed in, but thousands of
+            // bitmap calls a frame zoomed out, which old phones can't keep up with.
+            leavingMist = leavingMist, part = Part.Clouds, batched = false,
+        )
+    }
 
     /**
      * What sits under the clouds and changes as you walk, drawn live each frame:
@@ -239,6 +277,11 @@ class CloudPainter(private val density: Float) {
         /** Mist over tiles just walked again, fading under a few sparkles. */
         leavingMist: List<CloudField.MistPatch> = emptyList(),
         part: Part = Part.All,
+        /**
+         * Every sprite added into a few big hardware draws rather than drawn one by one:
+         * fast enough to draw the clouds live every frame on a hardware canvas.
+         */
+        batched: Boolean = false,
     ) {
         val scale = projection.centreScale / density
         val clouds = part != Part.Lines
@@ -295,10 +338,11 @@ class CloudPainter(private val density: Float) {
                     val h = placedRect[i * 4 + 3] - placedRect[i * 4 + 1]
                     rect.set(placedRect[i * 4], placedRect[i * 4 + 1], placedRect[i * 4 + 2], placedRect[i * 4 + 3])
                     rect.offset(w * 0.15f, h * 0.18f)
-                    canvas.drawBitmap(sprites.shadows[placedVariant[i]], null, rect, bitmapPaint)
+                    stamp(canvas, batched, sprites, SpriteBatch.SHADOWS + placedVariant[i], sprites.shadows[placedVariant[i]], bitmapPaint)
                 }
             }
 
+            if (batched) batch.flush(canvas)
             val saved = canvas.saveLayer(layer, null)
             // Every shaded underside first, then every sunlit top, so the middle of the
             // blanket is one continuous white and the grey only shows round its edges.
@@ -306,14 +350,15 @@ class CloudPainter(private val density: Float) {
                 for (i in 0 until n) {
                     bitmapPaint.alpha = alpha(placedFade[i] * detail)
                     rect.set(placedRect[i * 4], placedRect[i * 4 + 1], placedRect[i * 4 + 2], placedRect[i * 4 + 3])
-                    canvas.drawBitmap(sprites.bases[placedVariant[i]], null, rect, bitmapPaint)
+                    stamp(canvas, batched, sprites, SpriteBatch.BASES + placedVariant[i], sprites.bases[placedVariant[i]], bitmapPaint)
                 }
             }
             if (clouds) for (i in 0 until n) {
                 bitmapPaint.alpha = alpha(placedFade[i])
                 rect.set(placedTop[i * 4], placedTop[i * 4 + 1], placedTop[i * 4 + 2], placedTop[i * 4 + 3])
-                canvas.drawBitmap(sprites.tops[placedVariant[i]], null, rect, bitmapPaint)
+                stamp(canvas, batched, sprites, SpriteBatch.TOPS + placedVariant[i], sprites.tops[placedVariant[i]], bitmapPaint)
             }
+            if (batched) batch.flush(canvas)
             bitmapPaint.alpha = 255
             if (lines) drawGrid(canvas, field, projection, scale, bounds, near)
             // Leaves the canvas clipped to the place outlines, as in Swift, so the
@@ -329,11 +374,12 @@ class CloudPainter(private val density: Float) {
                 if (!capped(projection, clearing.x, clearing.y, clearing.radius * grow)) continue
                 if (cr < visibleL || cl > visibleR || cb < visibleT || ct > visibleB) continue
                 rect.set(cl, ct, cr, cb)
-                canvas.drawBitmap(sprites.eraser, null, rect, eraserPaint)
+                stamp(canvas, batched, sprites, SpriteBatch.ERASER, sprites.eraser, eraserPaint)
             }
+            if (batched) batch.flush(canvas)
             canvas.restoreToCount(saved)
         }
-        drawMist(canvas, field, leavingMist, reveal, ease, projection, sprites, bounds, layer, near, part)
+        drawMist(canvas, field, leavingMist, reveal, ease, projection, sprites, bounds, layer, near, part, batched)
     }
 
     /**
@@ -344,6 +390,7 @@ class CloudPainter(private val density: Float) {
     private fun drawMist(
         canvas: Canvas, field: CloudField, leavingMist: List<CloudField.MistPatch>, reveal: Double, ease: Double,
         projection: Projection, sprites: CloudSprites, bounds: RectF, layer: RectF, near: DoubleArray?, part: Part,
+        batched: Boolean = false,
     ) {
         val fading = reveal < 1 && leavingMist.isNotEmpty()
         if (field.mist.isEmpty() && !fading) return
@@ -356,11 +403,12 @@ class CloudPainter(private val density: Float) {
             if (saved < 0) saved = canvas.saveLayerAlpha(layer, alpha(MIST_OPACITY))
             mistPaint.alpha = alpha(fade)
             rect.set(cl, ct, cr, cb)
-            canvas.drawBitmap(sprites.mist, null, rect, mistPaint)
+            stamp(canvas, batched, sprites, SpriteBatch.MIST, sprites.mist, mistPaint)
         }
         if (part != Part.Lines) {
             for (p in field.mist) patch(p, 1f)
             if (fading) for (p in leavingMist) patch(p, (1 - ease).toFloat())
+            if (batched) batch.flush(canvas)
             if (saved >= 0) canvas.restoreToCount(saved)
         }
         if (!fading || part == Part.Clouds) return

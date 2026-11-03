@@ -84,6 +84,12 @@ private class CloudScene(private val density: Float) {
     private var reveal: Reveal? = null
 
     private var lastTick = -1L
+    /**
+     * The clouds drawn live every frame in a few GPU draws, with only the lines baked.
+     * Decided on the first frame: only on a hardware canvas, which Compose's always is
+     * on a phone, but the baked clouds are kept for anything else.
+     */
+    private var liveClouds: Boolean? = null
     private var movedAt = 0L
     private val stats = if (BuildConfig.DEBUG) FrameStats() else null
 
@@ -100,6 +106,7 @@ private class CloudScene(private val density: Float) {
         canvas: Canvas, width: Float, height: Float, state: MapState, tick: Long, dragging: Boolean, honeycombOpacity: Float,
         field: CloudField, sprites: CloudSprites, clock: Double, route: DoubleArray, fresh: List<DoubleArray>, you: YouAreHere, cosmetics: MapCosmetics,
     ) {
+        val live = liveClouds ?: canvas.isHardwareAccelerated.also { liveClouds = it }
         if (!state.measure(width, height, ground)) return
         projection.update(ground, width, height, ground[8], ground[9])
         if (!projection.valid) return
@@ -114,7 +121,7 @@ private class CloudScene(private val density: Float) {
             honeycomb?.bitmap?.recycle()
             honeycomb = it
         }
-        ask(width, height, field, sprites, clock, moving, dragging)
+        ask(width, height, field, sprites, clock, moving, dragging, live)
 
         val front = front
         // Nothing baked yet, a place added or removed or a new look not baked yet, or the
@@ -122,7 +129,7 @@ private class CloudScene(private val density: Float) {
         // than show the map bare for a moment.
         if (front == null || front.field.places != field.places || front.sprites !== sprites || !warp.update(projection, front.frame)) {
             stats?.let { it.live++ }
-            painter.draw(canvas, field, emptyList(), null, 1.0, projection, sprites, width, height, clock, honeycombOpacity, route, fresh, you, cosmetics)
+            painter.draw(canvas, field, emptyList(), null, 1.0, projection, sprites, width, height, clock, honeycombOpacity, route, fresh, you, cosmetics, batched = live)
             return
         }
 
@@ -134,7 +141,27 @@ private class CloudScene(private val density: Float) {
 
         val old = fading
         val t = if (old == null || fadeTime <= 0) 1.0 else (now - fadeStart) / 1e9 / fadeTime
-        if (old != null && t < 1) {
+        if (live) {
+            // The clouds of the bake on screen, so tiles open up together with its lines,
+            // but through this frame's camera and drift.
+            stats?.let { it.liveClouds++ }
+            val opening = if (progress < 1 && reveal != null && reveal.field === front.field) reveal else null
+            painter.drawCloudsLive(
+                canvas, front.field, opening?.leaving ?: emptyList(), opening?.freshClearings, if (opening != null) progress else 1.0,
+                projection, sprites, width, height, clock, opening?.leavingMist ?: emptyList(),
+            )
+            if (old != null && t < 1) {
+                stats?.let { it.fades++ }
+                drawBake(canvas, old, 1 - t, false, progress, CloudPainter.Part.Lines)
+                drawBake(canvas, front, t, false, progress, CloudPainter.Part.Lines)
+            } else {
+                if (old != null) {
+                    fading = null
+                    old.recycle()
+                }
+                drawBake(canvas, front, 1.0, false, progress, CloudPainter.Part.Lines)
+            }
+        } else if (old != null && t < 1) {
             // A crossfade: the sum of both, weighted, so it never shows more of either than
             // one full bake (layered one over the other, the shadows would darken).
             stats?.let { it.fades++ }
@@ -181,7 +208,10 @@ private class CloudScene(private val density: Float) {
         canvas.save()
         canvas.concat(matrix)
         val reveal = reveal
-        val picture = if (part == CloudPainter.Part.Clouds) bake.clouds else bake.lines
+        val picture = (if (part == CloudPainter.Part.Clouds) bake.clouds else bake.lines) ?: run {
+            canvas.restore()
+            return
+        }
         if (progress >= 1 || reveal == null || reveal.field !== bake.field || !patch(bake, reveal)) {
             canvas.drawBitmap(picture, null, bake.rect, paint)
             canvas.restore()
@@ -262,7 +292,7 @@ private class CloudScene(private val density: Float) {
     }
 
     /** Asks for a new bake if the one on screen needs it, one at a time. */
-    private fun ask(width: Float, height: Float, field: CloudField, sprites: CloudSprites, clock: Double, moving: Boolean, dragging: Boolean) {
+    private fun ask(width: Float, height: Float, field: CloudField, sprites: CloudSprites, clock: Double, moving: Boolean, dragging: Boolean, live: Boolean) {
         if (!baker.idle) return
         val shown = front
         // Just taken, the newest bake's on screen: check against that.
@@ -275,17 +305,17 @@ private class CloudScene(private val density: Float) {
                 // the same drift at least.
                 val frame = if (fits) shown!!.frame else newFrame(width, height, moving)
                 val sameDrift = shown != null && (fits || moving)
-                BakeJob(frame, field, sprites, if (sameDrift) shown!!.clock else clock, honeycomb = true, previous = shown?.field)
+                BakeJob(frame, field, sprites, if (sameDrift) shown!!.clock else clock, honeycomb = true, previous = shown?.field, drawClouds = !live)
             }
             // Moving: only once the picture's about to run out, roughly, with the drift held.
             moving -> if (fits || sameAsRequested(width, height)) null else
-                BakeJob(newFrame(width, height, true), field, sprites, shown.clock, honeycomb = dragging, previous = field)
+                BakeJob(newFrame(width, height, true), field, sprites, shown.clock, honeycomb = dragging, previous = field, drawClouds = !live)
             // Stopped: sharpen a rough bake, or one from a camera a little off.
             !fits || shown.frame.draft || !warp.exact(width, height) || honeycombFrame !== shown.frame ->
                 if (sameAsRequested(width, height) && lastJob?.let { !it.frame.draft && it.honeycomb } == true) null else
-                    BakeJob(newFrame(width, height, false), field, sprites, clock, honeycomb = true, previous = field, urgent = true)
-            // The clouds drifting on, under the same streets.
-            clock - shown.clock >= DRIFT_PERIOD -> BakeJob(shown.frame, field, sprites, clock, honeycomb = false, previous = field, linesFrom = shown)
+                    BakeJob(newFrame(width, height, false), field, sprites, clock, honeycomb = true, previous = field, urgent = true, drawClouds = !live)
+            // The clouds drifting on, under the same streets. Live clouds drift by themselves.
+            !live && clock - shown.clock >= DRIFT_PERIOD -> BakeJob(shown.frame, field, sprites, clock, honeycomb = false, previous = field, linesFrom = shown)
             else -> null
         } ?: return
         lastJob = job
@@ -303,6 +333,7 @@ private class CloudScene(private val density: Float) {
 
     fun close() {
         baker.close()
+        painter.close()
         front?.recycle()
         fading?.recycle()
         honeycomb?.bitmap?.recycle()
@@ -394,6 +425,7 @@ private class FrameStats {
     var honeycombs = 0
     var reveals = 0
     var bakes = 0
+    var liveClouds = 0
 
     fun frame(started: Long, finished: Long) {
         if (frames == 0) since = started
@@ -405,10 +437,10 @@ private class FrameStats {
         val seconds = (finished - since) / 1e9
         Log.d(
             "CloudLayer",
-            "%d frames in %.1f s (%.0f fps): draw %.1f ms avg, %.1f ms worst; live %d, crossfading %d, honeycomb %d, tiles clearing %d; bakes taken %d".format(
-                frames, seconds, frames / seconds, total / frames / 1e6, worst / 1e6, live, fades, honeycombs, reveals, bakes,
+            "%d frames in %.1f s (%.0f fps): draw %.1f ms avg, %.1f ms worst; live %d, crossfading %d, honeycomb %d, tiles clearing %d; bakes taken %d; clouds drawn live on the GPU %d".format(
+                frames, seconds, frames / seconds, total / frames / 1e6, worst / 1e6, live, fades, honeycombs, reveals, bakes, liveClouds,
             ),
         )
-        frames = 0; total = 0; worst = 0; live = 0; fades = 0; honeycombs = 0; reveals = 0; bakes = 0
+        frames = 0; total = 0; worst = 0; live = 0; fades = 0; honeycombs = 0; reveals = 0; bakes = 0; liveClouds = 0
     }
 }
