@@ -282,6 +282,20 @@ class AlwaysOnTrackingTest {
     }
 
     @Test
+    fun aVagueFixJustPastFiftyMetresIsNotLeaving() {
+        val t = tracking(home)
+        t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
+        t.motionChanged(MotionActivity.Still, entered = true)
+        t.motionChanged(MotionActivity.Walking, entered = true)
+        now += 12
+        // 60 m out, but give or take 15 m it could still be 45.
+        t.fix(TrackPoint(east(60.0).lat, east(60.0).lon, now, 15.0, speed = 1.3))
+        now += AlwaysOnTracking.PROBE_TIME
+        t.tick()
+        assertEquals(GpsMode.Low, gps.mode)
+    }
+
+    @Test
     fun oneProbeEveryFewMinutesHoweverMuchYouPotterAbout() {
         val t = tracking(home)
         t.update(alwaysOn = true, onScreen = false, walk = WalkState.None)
