@@ -584,12 +584,13 @@ final class BakedCloudEngine {
     /// With the GPU drawing the clouds there's only ever the lines to put on screen, and
     /// nothing to stand in for them.
     private func presentLinesOnly(projection: Projection, size: CGSize, now: Double, moving: Bool, inputs: Inputs) -> Bool {
+        // Nothing for the moment it takes the GPU to start (well under a second), while the
+        // map's own tiles load, rather than the live Canvas's whole lot of drawing.
         if gpu == nil {
-            // The moment it takes the GPU to start, the live Canvas draws the lot, lines too.
             cloudRoot.isHidden = true
             honeycombRoot.isHidden = true
             showingFront = false
-            return true
+            return false
         }
         let warp = front.flatMap { front -> BakeWarp? in
             guard front.field.places == inputs.field.places, let warp = BakeWarp(now: projection, frame: front.frame),
@@ -600,7 +601,16 @@ final class BakedCloudEngine {
         frontCovers = warp?.covers(size: size, now: projection) ?? false
         if let front, let warp {
             cloudRoot.transform = warp.layerTransform
-            cloudRoot.isHidden = false
+            if !showingFront {
+                // Faded in, as the baked clouds are.
+                cloudRoot.isHidden = false
+                cloudRoot.removeAnimation(forKey: "fade")
+                let fade = CABasicAnimation(keyPath: "opacity")
+                fade.fromValue = 0
+                fade.toValue = 1
+                fade.duration = BakePolicy.fade
+                cloudRoot.add(fade, forKey: "fade")
+            }
             showingFront = true
             placeReveal(front: front, now: now)
         } else {
@@ -626,7 +636,12 @@ final class BakedCloudEngine {
         // as the camera's change, so the first of them still lands in step with the map.
         let refresh = 1 / Double(max(60, UIScreen.main.maximumFramesPerSecond))
         guard now - lastGPUFrame >= refresh * 0.8 else { return }
-        if gpu.layer.superlayer == nil { layers.cloudHost.insertSublayer(gpu.layer, at: 0) }
+        // Put on screen first, and drawn to from the next frame.
+        if gpu.layer.superlayer == nil {
+            layers.cloudHost.insertSublayer(gpu.layer, at: 0)
+            gpu.layer.bounds = CGRect(origin: .zero, size: size)
+            return
+        }
         let front = front.flatMap { $0.field.places == inputs.field.places ? $0 : nil }
         let key = front?.fieldKey ?? inputs.key
         // With Reduce Motion the clouds don't drift, so a still map needs nothing drawn again.

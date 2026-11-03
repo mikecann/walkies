@@ -77,7 +77,9 @@ mkdir -p "$OUT"
 for screen in "${SCREENS[@]}"; do
   xcrun simctl terminate "$UDID" "$BUNDLE" 2>/dev/null || true
   # -setupDone skips the first run; the book opens with the area that has the most finds.
-  xcrun simctl launch "$UDID" "$BUNDLE" -WalkiesScreen "${screen%-end}" -setupDone YES \
+  # The baked clouds: in the simulator the GPU clouds sometimes never reach the screen
+  # (about one launch in four, never seen on a phone), which would leave a shot bare.
+  xcrun simctl launch "$UDID" "$BUNDLE" -WalkiesScreen "${screen%-end}" -setupDone YES -cloudRenderer baked \
     -secretsBookSort mostFound -secretsBookFilter all >/dev/null
   wait=$WAIT
   # The map's satellite tiles take a while, and the walk replay plays for about 27 seconds
