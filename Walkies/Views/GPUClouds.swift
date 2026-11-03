@@ -158,6 +158,9 @@ nonisolated final class GPUClouds: @unchecked Sendable {
         spriteLock.withLock { sprites[theme] }
     }
 
+    /// Whether a look's sprites are made, so drawing it now draws it in its own colours.
+    func hasSprites(for theme: String) -> Bool { readySprites(theme) != nil }
+
     /// The look's sprites if they're made, and otherwise any look's while they're made
     /// off the main thread: a moment of the old colours rather than a stutter.
     private func sprites(for theme: String) -> (any MTLTexture)? {
