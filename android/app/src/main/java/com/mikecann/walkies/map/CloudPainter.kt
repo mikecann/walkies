@@ -226,10 +226,10 @@ class CloudPainter(private val density: Float) {
         liveLayer.set(0f, 0f, width, height)
         drawClouds(
             canvas, field, leaving, freshClearings, reveal, projection, sprites, liveBounds, clock, liveLayer,
-            // Not batched yet: on the emulator the batch's drawVertices drew nothing, so
-            // this draws each sprite (see SpriteBatch). Fine zoomed in, but thousands of
-            // bitmap calls a frame zoomed out, which old phones can't keep up with.
-            leavingMist = leavingMist, part = Part.Clouds, batched = false,
+            // Batched: a few drawVertices calls rather than thousands of bitmaps. Seen
+            // drawing nothing on an emulator with a software GPU (swiftshader), and fine
+            // with the host's GPU: 3 to 4 ms a frame zoomed out over Busselton.
+            leavingMist = leavingMist, part = Part.Clouds, batched = true,
         )
     }
 
