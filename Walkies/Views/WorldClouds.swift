@@ -23,6 +23,8 @@ final class WorldClouds: NSObject, MKOverlay {
     var rings: [WorldCloudLayout.Ring] { holes }
     /// The world tiles walked, by the square they're in.
     var walkedBuckets: [Int64: [MKMapPoint]] { buckets }
+    /// How many have been walked, to tell when more have.
+    private(set) var walkedCount = 0
 
     /// Once the GPU draws the world's clouds every frame, MapKit's tiles of them draw
     /// nothing: drawn a tile at a time in the background, they came in late as you
@@ -38,6 +40,7 @@ final class WorldClouds: NSObject, MKOverlay {
     var renderer: WorldCloudsRenderer {
         if let made { return made }
         let renderer = WorldCloudsRenderer(overlay: self)
+        renderer.set(hidden: drawnByGPU)
         renderer.set(holes: holes)
         renderer.set(walked: buckets, theme: theme ?? "clouds.classic")
         made = renderer
@@ -61,6 +64,7 @@ final class WorldClouds: NSObject, MKOverlay {
         self.walked = walked
         self.theme = theme
         buckets = WorldCloudLayout.buckets(walked)
+        walkedCount = walked.count
         guard let made else { return }
         made.set(walked: buckets, theme: theme)
         // A walk adds a tile or two at a time, so only redraw round those.

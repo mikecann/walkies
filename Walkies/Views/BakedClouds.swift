@@ -222,7 +222,7 @@ final class BakedCloudEngine {
     private var askedForGPU = false
     private var lastGPUFrame = -Double.infinity
     /// What the GPU last drew, to skip drawing the same again when nothing moves.
-    private var lastGPUScene: (projection: Projection, key: String, theme: String, size: CGSize, still: Bool)?
+    private var lastGPUScene: (projection: Projection, key: String, theme: String, size: CGSize, still: Bool, world: Int)?
 
     /// SwiftUI makes a new engine every time the view's rebuilt and keeps only the
     /// first, so the layers are only made once one's used.
@@ -645,14 +645,15 @@ final class BakedCloudEngine {
         let front = front.flatMap { $0.field.places == inputs.field.places ? $0 : nil }
         let key = front?.fieldKey ?? inputs.key
         // With Reduce Motion the clouds don't drift, so a still map needs nothing drawn again.
-        if inputs.reduceMotion, reveal == nil, let last = lastGPUScene, last.still, last.key == key, last.theme == inputs.theme,
+        let worldWalked = handle?.world?.walkedCount ?? 0
+        if inputs.reduceMotion, reveal == nil, let last = lastGPUScene, last.still, last.key == key, last.theme == inputs.theme, last.world == worldWalked,
            last.size == size, last.projection.matches(projection, size: size) {
             return
         }
         lastGPUFrame = now
         // Not if it's drawn with another look's sprites while its own are made, or with the
         // clouds where they'd drifted to before Reduce Motion went on: those need drawing again.
-        lastGPUScene = gpu.hasSprites(for: inputs.theme) ? (projection, key, inputs.theme, size, inputs.reduceMotion) : nil
+        lastGPUScene = gpu.hasSprites(for: inputs.theme) ? (projection, key, inputs.theme, size, inputs.reduceMotion, worldWalked) : nil
         var clearing: GPUClouds.Scene.Reveal?
         if let reveal {
             clearing = GPUClouds.Scene.Reveal(
