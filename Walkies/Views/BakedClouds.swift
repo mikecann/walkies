@@ -673,8 +673,10 @@ final class BakedCloudEngine {
         guard !askedForGPU else { return }
         askedForGPU = true
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let made = GPUClouds()
+            var made = GPUClouds()
             made?.prepare(theme: theme)
+            // Without its sprites it can't draw anything: the baked clouds instead.
+            if let gpu = made, !gpu.hasSprites(for: theme) { made = nil }
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let made {
