@@ -80,7 +80,8 @@ nonisolated struct Projection: Sendable {
     func ground(at p: CGPoint) -> MKMapPoint? {
         guard let m = groundToScreen, abs(m.determinant) > 1e-300 else { return nil }
         let g = m.inverse * SIMD3(Double(p.x), Double(p.y), 1)
-        guard g.z > 1e-9 else { return nil }
+        // In front of the camera, and no nearer than `near`, as `isInFront` has it.
+        guard g.z > 1e-9, g.z <= 1 / Self.near else { return nil }
         return MKMapPoint(x: g.x / g.z * unit + origin.x, y: g.y / g.z * unit + origin.y)
     }
 

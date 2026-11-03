@@ -27,6 +27,8 @@ nonisolated final class GPUClouds: @unchecked Sendable {
             /// Your places' outlines: no world clouds inside them.
             var rings: [WorldCloudLayout.Ring]
             var walked: [Int64: [MKMapPoint]]
+            /// Changes whenever the walked tiles do.
+            var revision: Int
         }
 
         /// Tiles clearing.
@@ -189,7 +191,8 @@ nonisolated final class GPUClouds: @unchecked Sendable {
 
     /// Draws to the layer, in the current Core Animation transaction.
     @MainActor
-    func present(_ scene: Scene, displayScale: Double) {
+    @discardableResult
+    func present(_ scene: Scene, displayScale: Double) -> Bool {
         let scale = min(displayScale, Self.maxScale)
         let drawable = CGSize(width: (scene.size.width * scale).rounded(), height: (scene.size.height * scale).rounded())
         layer.bounds = CGRect(origin: .zero, size: scene.size)
@@ -197,9 +200,9 @@ nonisolated final class GPUClouds: @unchecked Sendable {
             layer.contentsScale = scale
             layer.drawableSize = drawable
         }
-        guard drawable.width > 0, let target = layer.nextDrawable(), let commands = queue.makeCommandBuffer() else { return }
+        guard drawable.width > 0, let target = layer.nextDrawable(), let commands = queue.makeCommandBuffer() else { return false }
         let started = CACurrentMediaTime()
-        guard encode(scene, into: target.texture, on: commands) else { return }
+        guard encode(scene, into: target.texture, on: commands) else { return false }
         commands.addCompletedHandler { buffer in
             let gpu = buffer.gpuEndTime - buffer.gpuStartTime
             DispatchQueue.main.async {
@@ -213,6 +216,7 @@ nonisolated final class GPUClouds: @unchecked Sendable {
         commands.waitUntilScheduled()
         target.present()
         CloudRenderStats.shared.gpuEncodeMilliseconds += (CACurrentMediaTime() - started) * 1000
+        return true
     }
 
     /// Draws to a new texture and waits, for tests.
@@ -388,7 +392,7 @@ nonisolated final class GPUClouds: @unchecked Sendable {
     /// the camera's moved a good way, as it's thousands of puffs.
     private func worldInstances(_ scene: Scene, _ world: Scene.World) -> (puffs: Instances, holes: Instances, radius: Double) {
         let p = scene.projection
-        let walked = world.walked.values.reduce(0) { $0 + $1.count }
+        let walked = world.revision
         if let built = builtWorld, built.size == scene.size, built.walked == walked, p.matches(built.projection, size: scene.size, within: 30) {
             return (built.puffs, built.holes, built.radius)
         }
