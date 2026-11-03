@@ -2,6 +2,13 @@ import CoreGraphics
 import MapKit
 import SwiftUI
 
+/// The lines of the bake on screen, to use again. Only the picture rather than the bake
+/// it's from: a bake keeps its job, so holding the last bake would have every drift bake
+/// hold on to all the clouds before it for as long as the map's open.
+nonisolated struct KeptLines: @unchecked Sendable {
+    let image: CGImage?
+}
+
 /// What to bake: the clouds as `frame`'s camera sees them, drifted to `clock`.
 nonisolated struct BakeJob: Sendable {
     var frame: BakeFrame
@@ -17,9 +24,9 @@ nonisolated struct BakeJob: Sendable {
     /// The field on screen when this was asked for, to work out which clouds clear.
     var previous: CloudField?
     var previousKey: String?
-    /// The bake to take the lines from, when they'd come out the same: the clouds drift
-    /// but the streets don't, so a drift bake only has the clouds to do.
-    var linesFrom: CloudBake? = nil
+    /// The lines to use, when they'd come out the same: the clouds drift but the streets
+    /// don't, so a drift bake only has the clouds to do.
+    var keptLines: KeptLines? = nil
 }
 
 /// A finished bake: pictures of the job's clouds and of the dashed lines over them,
@@ -119,8 +126,8 @@ nonisolated enum CloudBakery {
         let clouds = render(frame.rect, scale: frame.cloudScale) { scene.drawClouds(in: $0, sprites: sprites) }
         let cloudsDone = DispatchTime.now().uptimeNanoseconds
         let lines: CGImage?
-        if let same = job.linesFrom {
-            lines = same.lines
+        if let kept = job.keptLines {
+            lines = kept.image
         } else if scene.hasLines {
             lines = render(frame.rect, scale: frame.scale) { scene.drawLines(in: $0, sprites: sprites) }
         } else {

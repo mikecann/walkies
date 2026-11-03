@@ -705,7 +705,7 @@ final class BakedCloudEngine {
             clock: request.clock == .shown ? front?.clock ?? clock : clock,
             honeycomb: request.honeycomb, walkTiles: inputs.walkTiles, walkKey: walkKey,
             previous: front?.field, previousKey: front?.fieldKey,
-            linesFrom: sameLines ? front : nil
+            keptLines: sameLines ? KeptLines(image: front?.lines) : nil
         )
         lastRequest = (frame, request.honeycomb)
         requests += 1

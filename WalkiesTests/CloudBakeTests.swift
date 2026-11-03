@@ -583,7 +583,8 @@ struct CloudBakeTests {
         func job(clock: Double, from: CloudBake? = nil) -> BakeJob {
             BakeJob(
                 frame: frame, field: field, fieldKey: "a", theme: "clouds.classic", clock: clock,
-                honeycomb: false, walkTiles: [], walkKey: 0, previous: nil, previousKey: nil, linesFrom: from
+                honeycomb: false, walkTiles: [], walkKey: 0, previous: nil, previousKey: nil,
+                keptLines: from.map { KeptLines(image: $0.lines) }
             )
         }
         let first = CloudBakery.bake(job(clock: 0))
@@ -606,6 +607,18 @@ struct CloudBakeTests {
         let drifted = CloudBakery.bake(job(clock: 100, from: first))
         #expect(drifted.lines === first.lines)
         #expect(drifted.clouds !== first.clouds)
+        // And it doesn't hold on to the bake it took them from, or a map left open would
+        // keep every drift's clouds for as long as it's open.
+        weak var gone: CloudBake?
+        var kept = drifted
+        autoreleasepool {
+            var previous: CloudBake? = CloudBakery.bake(job(clock: 200))
+            gone = previous
+            kept = CloudBakery.bake(job(clock: 300, from: previous))
+            previous = nil
+        }
+        #expect(gone == nil)
+        #expect(kept.lines != nil)
         // Zoomed out far enough there aren't any, and no picture of nothing.
         let far = base.zoomed(40)
         let wide = BakeFrame.around(far.projection, size: far.size, displayScale: 3, draft: false)
