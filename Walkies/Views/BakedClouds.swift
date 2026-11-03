@@ -663,10 +663,18 @@ final class BakedCloudEngine {
         gpu.present(
             GPUClouds.Scene(
                 field: front?.field ?? inputs.field, key: key, theme: inputs.theme,
-                projection: projection, size: size, clock: clock, reveal: clearing
+                projection: projection, size: size, clock: clock, reveal: clearing,
+                world: worldScene()
             ),
             displayScale: displayScale
         )
+    }
+
+    /// The rest of the world's clouds, once MapKit's tiles of them are off.
+    private func worldScene() -> GPUClouds.Scene.World? {
+        guard let world = handle?.world else { return nil }
+        if !world.drawnByGPU { world.drawnByGPU = true }
+        return GPUClouds.Scene.World(rings: world.rings, walked: world.walkedBuckets)
     }
 
     private func askGPU(theme: String) {

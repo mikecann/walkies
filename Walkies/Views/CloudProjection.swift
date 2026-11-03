@@ -76,6 +76,14 @@ nonisolated struct Projection: Sendable {
 
     var isValid: Bool { h != nil }
 
+    /// The ground under a screen point, or nil if it's sky or behind the camera.
+    func ground(at p: CGPoint) -> MKMapPoint? {
+        guard let m = groundToScreen, abs(m.determinant) > 1e-300 else { return nil }
+        let g = m.inverse * SIMD3(Double(p.x), Double(p.y), 1)
+        guard g.z > 1e-9 else { return nil }
+        return MKMapPoint(x: g.x / g.z * unit + origin.x, y: g.y / g.z * unit + origin.y)
+    }
+
     /// What the GPU clouds' shader needs to do the same sums as `point`.
     var groundMeasure: (h: [Double], origin: MKMapPoint, unit: Double, width: Double)? {
         h.map { ($0, origin, unit, width) }
