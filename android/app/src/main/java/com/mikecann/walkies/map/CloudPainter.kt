@@ -68,6 +68,9 @@ class SpyglassRing(lat: Double, lon: Double, metres: Double) {
  * nothing; the buffers only grow when the field does.
  */
 class CloudPainter(private val density: Float) {
+    /** Which of [drawClouds] to draw: a bake keeps the soft part and the crisp part in separate pictures. */
+    enum class Part { All, Clouds, Lines }
+
     private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
     private val eraserPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG).apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
@@ -235,9 +238,12 @@ class CloudPainter(private val density: Float) {
         near: DoubleArray? = null,
         /** Mist over tiles just walked again, fading under a few sparkles. */
         leavingMist: List<CloudField.MistPatch> = emptyList(),
+        part: Part = Part.All,
     ) {
         val scale = projection.centreScale / density
-        drawBoundary(canvas, field, projection, near)
+        val clouds = part != Part.Lines
+        val lines = part != Part.Clouds
+        if (lines) drawBoundary(canvas, field, projection, near)
 
         val visibleL = bounds.left
         val visibleT = bounds.top
@@ -282,7 +288,7 @@ class CloudPainter(private val density: Float) {
             // Shadows on the ground, with the sun to the north-west. Straight onto the
             // map rather than through a layer of their own, which costs a whole extra
             // screen of drawing.
-            if (detail > 0) {
+            if (clouds && detail > 0) {
                 for (i in 0 until n) {
                     bitmapPaint.alpha = alpha(0.35f * placedFade[i] * detail)
                     val w = placedRect[i * 4 + 2] - placedRect[i * 4]
@@ -296,23 +302,24 @@ class CloudPainter(private val density: Float) {
             val saved = canvas.saveLayer(layer, null)
             // Every shaded underside first, then every sunlit top, so the middle of the
             // blanket is one continuous white and the grey only shows round its edges.
-            if (detail > 0) {
+            if (clouds && detail > 0) {
                 for (i in 0 until n) {
                     bitmapPaint.alpha = alpha(placedFade[i] * detail)
                     rect.set(placedRect[i * 4], placedRect[i * 4 + 1], placedRect[i * 4 + 2], placedRect[i * 4 + 3])
                     canvas.drawBitmap(sprites.bases[placedVariant[i]], null, rect, bitmapPaint)
                 }
             }
-            for (i in 0 until n) {
+            if (clouds) for (i in 0 until n) {
                 bitmapPaint.alpha = alpha(placedFade[i])
                 rect.set(placedTop[i * 4], placedTop[i * 4 + 1], placedTop[i * 4 + 2], placedTop[i * 4 + 3])
                 canvas.drawBitmap(sprites.tops[placedVariant[i]], null, rect, bitmapPaint)
             }
             bitmapPaint.alpha = 255
-            drawGrid(canvas, field, projection, scale, bounds, near)
+            if (lines) drawGrid(canvas, field, projection, scale, bounds, near)
             // Leaves the canvas clipped to the place outlines, as in Swift, so the
             // clearings below are too.
-            drawRoads(canvas, field, projection, scale, bounds, near)
+            clipToPlaces(canvas, field, projection, scale, near)
+            if (lines) drawRoads(canvas, field, projection, scale, bounds, near)
 
             // Soft holes over walked tiles. New ones open up rather than just appearing.
             for (i in field.clearings.indices) {
@@ -326,7 +333,7 @@ class CloudPainter(private val density: Float) {
             }
             canvas.restoreToCount(saved)
         }
-        drawMist(canvas, field, leavingMist, reveal, ease, projection, sprites, bounds, layer, near)
+        drawMist(canvas, field, leavingMist, reveal, ease, projection, sprites, bounds, layer, near, part)
     }
 
     /**
@@ -336,7 +343,7 @@ class CloudPainter(private val density: Float) {
      */
     private fun drawMist(
         canvas: Canvas, field: CloudField, leavingMist: List<CloudField.MistPatch>, reveal: Double, ease: Double,
-        projection: Projection, sprites: CloudSprites, bounds: RectF, layer: RectF, near: DoubleArray?,
+        projection: Projection, sprites: CloudSprites, bounds: RectF, layer: RectF, near: DoubleArray?, part: Part,
     ) {
         val fading = reveal < 1 && leavingMist.isNotEmpty()
         if (field.mist.isEmpty() && !fading) return
@@ -351,10 +358,12 @@ class CloudPainter(private val density: Float) {
             rect.set(cl, ct, cr, cb)
             canvas.drawBitmap(sprites.mist, null, rect, mistPaint)
         }
-        for (p in field.mist) patch(p, 1f)
-        if (fading) for (p in leavingMist) patch(p, (1 - ease).toFloat())
-        if (saved >= 0) canvas.restoreToCount(saved)
-        if (!fading) return
+        if (part != Part.Lines) {
+            for (p in field.mist) patch(p, 1f)
+            if (fading) for (p in leavingMist) patch(p, (1 - ease).toFloat())
+            if (saved >= 0) canvas.restoreToCount(saved)
+        }
+        if (!fading || part == Part.Clouds) return
         for (p in leavingMist) {
             if (away(near, p.x, p.y, p.radius * 1.5)) continue
             if (!capped(projection, p.x, p.y, p.radius)) continue
@@ -719,14 +728,6 @@ class CloudPainter(private val density: Float) {
     /** The hidden streets as light dashed lines, inside the place only. */
     private fun drawRoads(canvas: Canvas, field: CloudField, projection: Projection, scale: Double, bounds: RectF, near: DoubleArray?) {
         if (scale <= 0.05) return
-        clip.rewind()
-        for (r in field.outline.indices) {
-            if (away(near, field.outlineBounds, r)) continue
-            projection.polygon(field.outline[r]) { x, y, first -> if (first) clip.moveTo(x, y) else clip.lineTo(x, y) }
-            clip.close()
-        }
-        canvas.clipPath(clip)
-
         // Only the bits on screen. Zoomed in, every street in every place adds up to
         // hundreds of thousands of points of dashed line, which is slow to dash.
         val pad = 20 * density
@@ -765,6 +766,18 @@ class CloudPainter(private val density: Float) {
             }
             canvas.drawPath(path, if (kind == RoadLine.Kind.Road) roadPaint else pathPaint)
         }
+    }
+
+    /** At the zoom the streets show, they and the holes only go as far as the places' outlines. */
+    private fun clipToPlaces(canvas: Canvas, field: CloudField, projection: Projection, scale: Double, near: DoubleArray?) {
+        if (scale <= 0.05) return
+        clip.rewind()
+        for (r in field.outline.indices) {
+            if (away(near, field.outlineBounds, r)) continue
+            projection.polygon(field.outline[r]) { x, y, first -> if (first) clip.moveTo(x, y) else clip.lineTo(x, y) }
+            clip.close()
+        }
+        canvas.clipPath(clip)
     }
 
     /** The place's outline, which MapKit draws as a map overlay under the clouds. */

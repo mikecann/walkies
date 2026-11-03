@@ -2,6 +2,13 @@ import CoreGraphics
 import MapKit
 import SwiftUI
 
+/// The lines of the bake on screen, to use again. Only the picture rather than the bake
+/// it's from: a bake keeps its job, so holding the last bake would have every drift bake
+/// hold on to all the clouds before it for as long as the map's open.
+nonisolated struct KeptLines: @unchecked Sendable {
+    let image: CGImage?
+}
+
 /// What to bake: the clouds as `frame`'s camera sees them, drifted to `clock`.
 nonisolated struct BakeJob: Sendable {
     var frame: BakeFrame
@@ -17,19 +24,26 @@ nonisolated struct BakeJob: Sendable {
     /// The field on screen when this was asked for, to work out which clouds clear.
     var previous: CloudField?
     var previousKey: String?
+    /// The lines to use, when they'd come out the same: the clouds drift but the streets
+    /// don't, so a drift bake only has the clouds to do.
+    var keptLines: KeptLines? = nil
 }
 
-/// A finished bake: pictures of the job's clouds and honeycomb, each covering the
-/// frame's box of its camera's screen.
+/// A finished bake: pictures of the job's clouds and of the dashed lines over them,
+/// each covering the frame's box of its camera's screen. The honeycomb comes after it,
+/// from `CloudBakery.honeycomb`, as the clouds shouldn't wait for it.
 nonisolated final class CloudBake: @unchecked Sendable {
     let job: BakeJob
     let clouds: CGImage?
-    let honeycomb: CGImage?
+    /// The streets and grid, cut by the same holes. Nil if nothing's drawn at this zoom.
+    let lines: CGImage?
     /// The clouds in the previous field that aren't in this one, if it's tiles clearing.
     let leaving: [CloudField.Puff]
     /// Mist in the previous field that's gone from this one: tiles walked again.
     let leavingMist: [CloudField.MistPatch]
     let milliseconds: Double
+    /// Where the time went, for the `-perfRun` harness: working out the scene, then each picture.
+    var stages = (scene: 0.0, clouds: 0.0, lines: 0.0)
 
     var frame: BakeFrame { job.frame }
     var field: CloudField { job.field }
@@ -38,12 +52,12 @@ nonisolated final class CloudBake: @unchecked Sendable {
     var clock: Double { job.clock }
 
     init(
-        job: BakeJob, clouds: CGImage?, honeycomb: CGImage?, leaving: [CloudField.Puff],
+        job: BakeJob, clouds: CGImage?, lines: CGImage?, leaving: [CloudField.Puff],
         leavingMist: [CloudField.MistPatch] = [], milliseconds: Double
     ) {
         self.job = job
         self.clouds = clouds
-        self.honeycomb = honeycomb
+        self.lines = lines
         self.leaving = leaving
         self.leavingMist = leavingMist
         self.milliseconds = milliseconds
@@ -92,8 +106,9 @@ nonisolated final class CloudOverview: @unchecked Sendable {
 
 /// Draws bakes into bitmaps, off the main thread.
 nonisolated enum CloudBakery {
-    /// The honeycomb's only lines and flat fills, faint and moving, so it bakes a bit softer.
-    static let honeycombScale = 0.75
+    /// The honeycomb's only lines and flat fills, faint and moving, so it needn't be as
+    /// sharp as the lines: pixels per point, for each of the clouds'.
+    static let honeycombScale = 1.5
 
     static func bake(_ job: BakeJob) -> CloudBake {
         let started = DispatchTime.now().uptimeNanoseconds
@@ -107,14 +122,28 @@ nonisolated enum CloudBakery {
         }
         let frame = job.frame
         let scene = CloudScene(field: job.field, projection: frame.projection, bounds: frame.rect, clock: job.clock, puffMargin: 0.05)
-        let clouds = render(frame.rect, scale: frame.scale) { scene.draw(in: $0, sprites: sprites) }
-        var honeycomb: CGImage?
-        if job.honeycomb {
-            let tiles = HoneycombScene(field: job.field, walkTiles: job.walkTiles, projection: frame.projection, bounds: frame.rect)
-            honeycomb = render(frame.rect, scale: frame.scale * honeycombScale) { tiles.draw(in: $0) }
+        let sceneDone = DispatchTime.now().uptimeNanoseconds
+        let clouds = render(frame.rect, scale: frame.cloudScale) { scene.drawClouds(in: $0, sprites: sprites) }
+        let cloudsDone = DispatchTime.now().uptimeNanoseconds
+        let lines: CGImage?
+        if let kept = job.keptLines {
+            lines = kept.image
+        } else if scene.hasLines {
+            lines = render(frame.rect, scale: frame.scale) { scene.drawLines(in: $0, sprites: sprites) }
+        } else {
+            lines = nil
         }
-        let took = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6
-        return CloudBake(job: job, clouds: clouds, honeycomb: honeycomb, leaving: leaving, leavingMist: leavingMist, milliseconds: took)
+        let finished = DispatchTime.now().uptimeNanoseconds
+        let bake = CloudBake(job: job, clouds: clouds, lines: lines, leaving: leaving, leavingMist: leavingMist, milliseconds: Double(finished - started) / 1e6)
+        bake.stages = (Double(sceneDone - started) / 1e6, Double(cloudsDone - sceneDone) / 1e6, Double(finished - cloudsDone) / 1e6)
+        return bake
+    }
+
+    /// The honeycomb, for while you drag, for the same frame as the bake.
+    static func honeycomb(_ job: BakeJob) -> CGImage? {
+        let frame = job.frame
+        let tiles = HoneycombScene(field: job.field, walkTiles: job.walkTiles, projection: frame.projection, bounds: frame.rect)
+        return render(frame.rect, scale: frame.cloudScale * honeycombScale) { tiles.draw(in: $0) }
     }
 
     /// The overview's most pixels, 1.2 MB at 4 bytes each. It's only ever soft.
@@ -214,8 +243,8 @@ nonisolated enum CloudBakery {
         }
         box = box.intersection(frame.rect)
         guard !box.isNull, !box.isEmpty else { return nil }
-        // Out to whole pixels of the bake, so the patch lines up with it exactly.
-        let s = frame.scale, o = frame.rect.origin
+        // Out to whole pixels of the clouds, so the patch lines up with them exactly.
+        let s = frame.cloudScale, o = frame.rect.origin
         let x0 = ((box.minX - o.x) * s).rounded(.down), y0 = ((box.minY - o.y) * s).rounded(.down)
         let x1 = ((box.maxX - o.x) * s).rounded(.up), y1 = ((box.maxY - o.y) * s).rounded(.up)
         return CGRect(x: o.x + x0 / s, y: o.y + y0 / s, width: (x1 - x0) / s, height: (y1 - y0) / s)

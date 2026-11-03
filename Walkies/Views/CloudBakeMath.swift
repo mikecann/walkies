@@ -36,31 +36,41 @@ nonisolated enum LaunchArguments {
     }
 }
 
-/// Where a baked picture of the clouds was drawn from: the camera's projection at the
-/// time, and the box of its screen the picture covers (the screen plus a margin all
-/// round, stopping short of the horizon), in screen points. The picture is `scale`
-/// pixels to the point.
+/// Where baked pictures of the clouds were drawn from: the camera's projection at the
+/// time, and the box of its screen they cover (the screen plus a margin all round,
+/// stopping short of the horizon), in screen points. There are two: the soft clouds at
+/// `cloudScale` pixels to the point, and the thin dashed lines over them at `scale`.
 nonisolated struct BakeFrame: Sendable {
     let id: Int
     let projection: Projection
     let rect: CGRect
+    /// The lines' pixels per point, which need to stay crisp.
     let scale: Double
+    /// The clouds' pixels per point. They're blurry blobs, so a quarter of the pixels of
+    /// a 2x picture looks the same on a 3x screen, and that's most of a bake's time.
+    let cloudScale: Double
     /// Drawn rough and wide while the camera moved, to keep up. Redone sharp once it stops.
     let draft: Bool
 
     var pixelWidth: Int { max(1, Int((Double(rect.width) * scale).rounded(.up))) }
     var pixelHeight: Int { max(1, Int((Double(rect.height) * scale).rounded(.up))) }
+    var cloudPixelWidth: Int { max(1, Int((Double(rect.width) * cloudScale).rounded(.up))) }
+    var cloudPixelHeight: Int { max(1, Int((Double(rect.height) * cloudScale).rounded(.up))) }
 
     /// How far past each edge of the screen a bake reaches, as a fraction of its size.
     static let margin = 0.12
-    /// A still bake's pixels per point: the phone's own, up to 2. The clouds are soft,
-    /// so 2 looks the same on a 3x screen and is under half the pixels to bake.
-    static let maxScale = 2.0
+    /// A still bake's lines, in pixels per point: the phone's own, up to 1.5, which
+    /// side by side on a 3x screen looks the same as 2 and is under 6 MB of lines.
+    static let maxScale = 1.5
+    /// And its clouds.
+    static let maxCloudScale = 1.0
     /// While the map's moving: further, so a pan doesn't run off the edge before the next one's ready.
     static let draftMargin = 0.45
     /// And a point a pixel, as it takes a fraction of the time.
     static let draftScale = 1.0
-    /// The most pixels in a bake, 12 MB at 4 bytes each: a bigger screen bakes a touch softer.
+    /// With the clouds softer still: it's mid-gesture, and half the screen's off the picture.
+    static let draftCloudScale = 0.5
+    /// The most pixels of lines, 12 MB at 4 bytes each: a bigger screen bakes a touch softer.
     static let maxPixels = 3_000_000.0
     /// No bigger than this either way, which every GPU can hold as one texture.
     static let maxSide = 4096.0
@@ -79,11 +89,12 @@ nonisolated struct BakeFrame: Sendable {
         return lastID
     }
 
-    init(projection: Projection, rect: CGRect, scale: Double, draft: Bool) {
+    init(projection: Projection, rect: CGRect, scale: Double, cloudScale: Double, draft: Bool) {
         id = Self.nextID()
         self.projection = projection
         self.rect = rect
         self.scale = scale
+        self.cloudScale = cloudScale
         self.draft = draft
     }
 
@@ -92,11 +103,14 @@ nonisolated struct BakeFrame: Sendable {
     static func around(_ projection: Projection, size: CGSize, displayScale: Double, draft: Bool) -> BakeFrame {
         let region = region(projection, size: size, margin: draft ? draftMargin : margin)
         let left = Double(region.minX), right = Double(region.maxX), top = Double(region.minY), bottom = Double(region.maxY)
-        var scale = draft ? min(draftScale, displayScale) : min(maxScale, displayScale)
+        let wanted = draft ? min(draftScale, displayScale) : min(maxScale, displayScale)
+        var scale = wanted
         let pixels = (right - left) * scale * (bottom - top) * scale
         if pixels > maxPixels { scale *= (maxPixels / pixels).squareRoot() }
         scale = min(scale, maxSide / max(right - left, bottom - top))
-        return BakeFrame(projection: projection, rect: region, scale: scale, draft: draft)
+        // Softened along with the lines on a screen too big for them.
+        let cloudScale = (draft ? draftCloudScale : maxCloudScale) * scale / wanted
+        return BakeFrame(projection: projection, rect: region, scale: scale, cloudScale: cloudScale, draft: draft)
     }
 
     /// A screen of `size` and `margin` of its size all round, in screen points,

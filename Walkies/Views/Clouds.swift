@@ -704,6 +704,12 @@ nonisolated final class CloudSprites: @unchecked Sendable {
     let eraser: CGImage
     /// A soft pale disc for the mist, the same for every look.
     let mist: CGImage
+    /// How many pixels across the bases and tops are.
+    private let size: Int
+    /// The same set shrunk by half each time, smallest first. Drawn down from a big
+    /// sprite, Core Graphics reads every pixel of it however small the puff is, which
+    /// zoomed out is most of a bake.
+    private let levels: [CloudSprites]
 
     private init(theme: String) {
         let palette = Self.palette(theme)
@@ -719,16 +725,43 @@ nonisolated final class CloudSprites: @unchecked Sendable {
         self.bases = bases
         self.tops = tops
         self.shadows = shadows
-        eraser = Self.eraser(size: 128)
-        mist = Self.mist(size: 128)
+        let eraser = Self.eraser(size: 128)
+        let mist = Self.mist(size: 128)
+        self.eraser = eraser
+        self.mist = mist
+        size = 384
+        levels = [12, 24, 48, 96, 192].map { size in
+            func shrink(_ image: CGImage) -> CGImage { Self.shrink(image, to: min(size, image.width)) }
+            return CloudSprites(
+                bases: bases.map(shrink), tops: tops.map(shrink), shadows: shadows.map(shrink),
+                eraser: shrink(eraser), mist: shrink(mist), size: size
+            )
+        }
     }
 
-    private init(bases: [CGImage], tops: [CGImage], shadows: [CGImage], eraser: CGImage, mist: CGImage) {
+    private init(bases: [CGImage], tops: [CGImage], shadows: [CGImage], eraser: CGImage, mist: CGImage, size: Int) {
         self.bases = bases
         self.tops = tops
         self.shadows = shadows
         self.eraser = eraser
         self.mist = mist
+        self.size = size
+        levels = []
+    }
+
+    /// The set to draw something `points` wide from on this context: the smallest
+    /// that's still at least as many pixels across as it'll be.
+    func level(for points: CGFloat, on context: CGContext) -> CloudSprites {
+        let pixels = points * abs(context.ctm.a)
+        return levels.first { CGFloat($0.size) >= pixels } ?? self
+    }
+
+    private static func shrink(_ image: CGImage, to size: Int) -> CGImage {
+        guard size < image.width else { return image }
+        let context = bitmap(size)
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: size, height: size))
+        return context.makeImage() ?? image
     }
 
     /// The tops, eraser and mist shrunk to `pixels` across, for stamping thousands of
@@ -737,13 +770,8 @@ nonisolated final class CloudSprites: @unchecked Sendable {
     /// which tiny puffs don't draw, are left as they are.
     func shrunk(to pixels: Int) -> CloudSprites {
         let size = max(2, min(pixels, 384))
-        func shrink(_ image: CGImage) -> CGImage {
-            let context = Self.bitmap(size)
-            context.interpolationQuality = .high
-            context.draw(image, in: CGRect(x: 0, y: 0, width: size, height: size))
-            return context.makeImage() ?? image
-        }
-        return CloudSprites(bases: bases, tops: tops.map(shrink), shadows: shadows, eraser: shrink(eraser), mist: shrink(mist))
+        func shrink(_ image: CGImage) -> CGImage { Self.shrink(image, to: size) }
+        return CloudSprites(bases: bases, tops: tops.map(shrink), shadows: shadows, eraser: shrink(eraser), mist: shrink(mist), size: size)
     }
 
     private static func palette(_ theme: String) -> (top: CGColor, alternate: CGColor, edge: CGColor, underside: CGColor) {
@@ -849,10 +877,14 @@ nonisolated final class CloudSprites: @unchecked Sendable {
         return context.makeImage()!
     }
 
+    /// One for all of them: making a new one for each blur was most of the time it took
+    /// to make a look's sprites, which the first bake waits for.
+    private static let blurContext = CIContext()
+
     private static func blur(_ cgImage: CGImage, sigma: Double) -> CGImage {
         let image = CIImage(cgImage: cgImage)
         let blurred = image.clampedToExtent().applyingGaussianBlur(sigma: sigma).cropped(to: image.extent)
-        return CIContext().createCGImage(blurred, from: image.extent)!
+        return blurContext.createCGImage(blurred, from: image.extent)!
     }
 
     private static func bitmap(_ size: Int) -> CGContext {

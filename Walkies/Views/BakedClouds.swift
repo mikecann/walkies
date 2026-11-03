@@ -127,6 +127,10 @@ final class CloudRenderStats {
     var bakes = 0
     var drafts = 0
     var bakeMilliseconds = 0.0
+    /// The same split up: working out the scene, then the clouds, then the lines.
+    var sceneMilliseconds = 0.0
+    var cloudMilliseconds = 0.0
+    var lineMilliseconds = 0.0
     var longestBake = 0.0
     /// Bakes given up on for taking too long.
     var abandoned = 0
@@ -162,10 +166,14 @@ final class CloudRenderStats {
 /// - once it's been still a quarter of a second: a sharp one from exactly there;
 /// - still for 2.5 s: the same picture with the clouds drifted on, cross-faded in.
 ///
+/// A bake is two pictures warped as one: the soft clouds at low resolution, and the
+/// crisp lines over them. Then, on the same thread but without holding the clouds up,
+/// the honeycomb for dragging.
+///
 /// One bake at a time, on a background thread. One that's taking far longer than
 /// they have been is given up on (see `BakePolicy.giveUp`), but still shown if it
-/// turns up before a newer one. One for a camera that's since gone far off isn't
-/// waited for once the camera's still again.
+/// turns up before a newer one. A rough one, or one for a camera that's since gone
+/// far off, isn't waited for once the camera's still again.
 ///
 /// Under the bake, wherever it doesn't reach (or there isn't one fit to show yet),
 /// the overview: every place's clouds from above, small, made once from the tiles
@@ -206,9 +214,13 @@ final class BakedCloudEngine {
         let overviewImage = PlainLayer()
         /// The bake's box, warped onto the screen.
         let cloudRoot = PlainLayer()
+        /// The two pictures, so a hole can be cut in both at once while tiles clear.
+        let bakeGroup = PlainLayer()
         let cloudImage = PlainLayer()
-        /// The clouds round tiles clearing, drawn each frame over a hole in `cloudImage`.
-        let patchLayer = PlainLayer()
+        let linesImage = PlainLayer()
+        /// The clouds and lines round tiles clearing, drawn each frame over a hole in `bakeGroup`.
+        let patchClouds = PlainLayer()
+        let patchLines = PlainLayer()
         let honeycombRoot = PlainLayer()
         let marker = MarkerLayers()
 
@@ -221,7 +233,9 @@ final class BakedCloudEngine {
             overviewRoot.masksToBounds = true
             overviewImage.anchorPoint = .zero
             overviewImage.position = .zero
+            bakeGroup.anchorPoint = .zero
             cloudImage.anchorPoint = .zero
+            linesImage.anchorPoint = .zero
             if LaunchArguments.has("-bakeOutline") {
                 // `-bakeOutline`: a red edge round the bake, to see where it's warped to,
                 // and a blue one round the bit of the overview that's showing.
@@ -230,11 +244,16 @@ final class BakedCloudEngine {
                 overviewRoot.borderWidth = 3
                 overviewRoot.borderColor = UIColor.systemBlue.cgColor
             }
-            patchLayer.anchorPoint = .zero
-            patchLayer.isHidden = true
+            for patch in [patchClouds, patchLines] {
+                patch.anchorPoint = .zero
+                patch.isHidden = true
+            }
             overviewRoot.addSublayer(overviewImage)
-            cloudRoot.addSublayer(cloudImage)
-            cloudRoot.addSublayer(patchLayer)
+            bakeGroup.addSublayer(cloudImage)
+            bakeGroup.addSublayer(linesImage)
+            cloudRoot.addSublayer(bakeGroup)
+            cloudRoot.addSublayer(patchClouds)
+            cloudRoot.addSublayer(patchLines)
             cloudHost.addSublayer(overviewRoot)
             cloudHost.addSublayer(cloudRoot)
             cloudHost.addSublayer(honeycombRoot)
@@ -248,8 +267,11 @@ final class BakedCloudEngine {
     private var overviewRoot: CALayer { layers.overviewRoot }
     private var overviewImage: CALayer { layers.overviewImage }
     private var cloudRoot: CALayer { layers.cloudRoot }
+    private var bakeGroup: CALayer { layers.bakeGroup }
     private var cloudImage: CALayer { layers.cloudImage }
-    private var patchLayer: CALayer { layers.patchLayer }
+    private var linesImage: CALayer { layers.linesImage }
+    private var patchClouds: CALayer { layers.patchClouds }
+    private var patchLines: CALayer { layers.patchLines }
     private var honeycombRoot: CALayer { layers.honeycombRoot }
     private var marker: MarkerLayers { layers.marker }
 
@@ -260,7 +282,7 @@ final class BakedCloudEngine {
     private var linkActive = true
 
     private(set) var front: CloudBake?
-    private var honeycomb: (image: CGImage, frame: BakeFrame, walkKey: Int)?
+    private var honeycomb: (image: CGImage, frame: BakeFrame, walkKey: Int, request: Int)?
     private var lastRequest: (frame: BakeFrame, honeycomb: Bool)?
     /// Every bake asked for is numbered, so one that turns up late can't replace a newer one.
     private var requests = 0
@@ -277,6 +299,8 @@ final class BakedCloudEngine {
 
     /// Makes a bake, on a background thread. Tests stand in for it.
     var bakery: @Sendable (BakeJob) -> CloudBake = { CloudBakery.bake($0) }
+    /// Makes the honeycomb for a bake, straight after it.
+    var honeycombBakery: @Sendable (BakeJob) -> CGImage? = { CloudBakery.honeycomb($0) }
     /// Notes what the engine asks for and gets, for tests to check the order of.
     var log: ((String) -> Void)?
 
@@ -399,10 +423,11 @@ final class BakedCloudEngine {
                 abandoned += 1
                 CloudRenderStats.shared.abandoned += 1
                 log?("give up #\(inFlight.request)")
-            } else if !moving, !(BakeWarp(now: projection, frame: inFlight.frame)?.shows(size: size, now: projection) ?? false) {
-                // From a camera that's since gone far off (the map opening on you while
-                // the first bake was being made): no use waiting for it once it's still.
-                // It's left to finish, and dropped if a newer one's in by then.
+            } else if !moving, inFlight.frame.draft || !(BakeWarp(now: projection, frame: inFlight.frame)?.shows(size: size, now: projection) ?? false) {
+                // A rough one, with the sharp one due now, or from a camera that's since
+                // gone far off (the map opening on you while the first bake was being
+                // made): no use waiting for it once it's still. It's left to finish, and
+                // dropped if a newer one's in by then.
                 self.inFlight = nil
                 superseded += 1
                 log?("supersede #\(inFlight.request)")
@@ -545,9 +570,8 @@ final class BakedCloudEngine {
         let progress = (now - reveal.started) / CloudLayer.revealTime
         if progress >= 1 {
             self.reveal = nil
-            cloudImage.mask = nil
-            patchLayer.isHidden = true
-            patchLayer.contents = nil
+            bakeGroup.mask = nil
+            hidePatch()
             return
         }
         let frame = front.frame
@@ -569,11 +593,12 @@ final class BakedCloudEngine {
                 mask.path = path
                 mask.fillRule = .evenOdd
                 mask.fillColor = UIColor.black.cgColor
-                cloudImage.mask = mask
-                patchLayer.frame = local
+                bakeGroup.mask = mask
+                patchClouds.frame = local
+                patchLines.frame = local
             } else {
-                cloudImage.mask = nil
-                patchLayer.isHidden = true
+                bakeGroup.mask = nil
+                hidePatch()
             }
             self.reveal = reveal
         }
@@ -583,9 +608,22 @@ final class BakedCloudEngine {
             projection: frame.projection, bounds: reveal.area, clock: front.clock, puffMargin: 0, reference: reveal.reference
         )
         let sprites = CloudSprites.sprites(for: front.theme)
-        patchLayer.contents = CloudBakery.render(patch, scale: frame.scale) { scene.draw(in: $0, sprites: sprites) }
-        patchLayer.isHidden = false
+        patchClouds.contents = CloudBakery.render(patch, scale: frame.cloudScale) { scene.drawClouds(in: $0, sprites: sprites) }
+        patchClouds.isHidden = false
+        if scene.hasLines || !scene.sparkles.isEmpty {
+            patchLines.contents = CloudBakery.render(patch, scale: frame.scale) { scene.drawLines(in: $0, sprites: sprites) }
+            patchLines.isHidden = false
+        } else {
+            patchLines.isHidden = true
+        }
         CloudRenderStats.shared.revealFrames += 1
+    }
+
+    private func hidePatch() {
+        for patch in [patchClouds, patchLines] {
+            patch.isHidden = true
+            patch.contents = nil
+        }
     }
 
     // MARK: Baking
@@ -660,29 +698,51 @@ final class BakedCloudEngine {
         case .fresh(let draft):
             frame = BakeFrame.around(projection, size: size, displayScale: displayScale, draft: draft)
         }
+        // Same picture and tiles, so the only change is the drift, which the lines don't have.
+        let sameLines = request.frame == .shown && front?.fieldKey == inputs.key
         let job = BakeJob(
             frame: frame, field: inputs.field, fieldKey: inputs.key, theme: inputs.theme,
             clock: request.clock == .shown ? front?.clock ?? clock : clock,
             honeycomb: request.honeycomb, walkTiles: inputs.walkTiles, walkKey: walkKey,
-            previous: front?.field, previousKey: front?.fieldKey
+            previous: front?.field, previousKey: front?.fieldKey,
+            keptLines: sameLines ? KeptLines(image: front?.lines) : nil
         )
         lastRequest = (frame, request.honeycomb)
         requests += 1
         let id = requests
         let askedAt = CACurrentMediaTime()
         inFlight = (id, frame, askedAt)
-        // Quickly while something's standing in for it; otherwise behind the main
-        // thread and MapKit for the big cores. On a Dispatch queue rather than Swift's
-        // shared threads, which the app's other background work can keep busy for
-        // seconds on end (and the simulator has fewer of), and which a slow bake would hold up.
-        let urgent = !frontCovers
+        // Quickly while something's standing in for it, or for the sharp one you're
+        // waiting to see once the map stops. Otherwise (the rough ones mid-gesture, and
+        // the drift, which nobody's waiting for and goes on for as long as the map's
+        // open) behind the main thread and MapKit for the big cores. On a Dispatch queue
+        // rather than Swift's shared threads, which the app's other background work can
+        // keep busy for seconds on end (and the simulator has fewer of), and which a
+        // slow bake would hold up.
+        let urgent = !frontCovers || request.frame == .fresh(draft: false)
         let qos: DispatchQoS.QoSClass = urgent ? .userInitiated : .utility
         log?("ask #\(id) \(request.frame == .shown ? "same frame" : frame.draft ? "draft" : "sharp")\(urgent ? " urgent" : "")")
         let bakery = bakery
+        let honeycombBakery = honeycombBakery
         DispatchQueue.global(qos: qos).async { [weak self] in
             let bake = bakery(job)
             DispatchQueue.main.async { self?.finished(bake, request: id, asked: askedAt) }
+            // After handing the clouds over: it only shows while you drag, and they shouldn't wait for it.
+            guard job.honeycomb, let image = honeycombBakery(job) else { return }
+            DispatchQueue.main.async { self?.finishedHoneycomb(image, job: job, request: id) }
         }
+    }
+
+    private func finishedHoneycomb(_ image: CGImage, job: BakeJob, request: Int) {
+        // One from before the bake on screen can't help, and could have old tiles on it.
+        if request < frontRequest { return }
+        if let honeycomb, honeycomb.request > request { return }
+        honeycomb = (image, job.frame, job.walkKey, request)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        honeycombRoot.contents = image
+        honeycombRoot.bounds = CGRect(origin: .zero, size: job.frame.rect.size)
+        CATransaction.commit()
     }
 
     private func finished(_ bake: CloudBake, request: Int, asked: Double) {
@@ -704,15 +764,13 @@ final class BakedCloudEngine {
         stats.bakes += 1
         if bake.frame.draft { stats.drafts += 1 }
         stats.bakeMilliseconds += bake.milliseconds
+        stats.sceneMilliseconds += bake.stages.scene
+        stats.cloudMilliseconds += bake.stages.clouds
+        stats.lineMilliseconds += bake.stages.lines
         stats.longestBake = max(stats.longestBake, bake.milliseconds)
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        if let image = bake.honeycomb {
-            honeycomb = (image, bake.frame, bake.job.walkKey)
-            honeycombRoot.contents = image
-            honeycombRoot.bounds = CGRect(origin: .zero, size: bake.frame.rect.size)
-        }
         let old = front
         if let old, bake.job.previousKey == old.fieldKey, bake.fieldKey != old.fieldKey,
            !bake.leaving.isEmpty || !bake.leavingMist.isEmpty, old.field.places == bake.field.places {
@@ -723,14 +781,17 @@ final class BakedCloudEngine {
             )
         } else if old == nil || old?.field.places != bake.field.places {
             reveal = nil
-            cloudImage.mask = nil
-            patchLayer.isHidden = true
+            bakeGroup.mask = nil
+            hidePatch()
         }
         if var reveal { reveal.frameID = nil; self.reveal = reveal }
 
         cloudRoot.bounds = CGRect(origin: .zero, size: bake.frame.rect.size)
+        bakeGroup.frame = cloudRoot.bounds
         cloudImage.frame = cloudRoot.bounds
         cloudImage.contents = bake.clouds
+        linesImage.frame = cloudRoot.bounds
+        linesImage.contents = bake.lines
         // The same picture with the clouds drifted on: cross-faded, as it'd be a jump.
         // Anything else is the same clouds from a slightly different camera, or new
         // tiles that open up by themselves, so it's swapped straight in.

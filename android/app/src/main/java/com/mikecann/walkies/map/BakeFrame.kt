@@ -47,10 +47,11 @@ object Mat3 {
 }
 
 /**
- * Where a baked picture of the clouds was drawn from: the camera's projection at
- * the time, and the box of its screen pixels the picture covers (the screen plus a
- * margin all round, stopping short of the horizon). The picture is [pixelWidth] x
- * [pixelHeight], [scale] bitmap pixels to a screen pixel.
+ * Where baked pictures of the clouds were drawn from: the camera's projection at
+ * the time, and the box of its screen pixels they cover (the screen plus a margin all
+ * round, stopping short of the horizon). There are two: the soft clouds, [cloudPixelWidth]
+ * x [cloudPixelHeight] at [cloudScale] bitmap pixels to a screen pixel, and the crisp
+ * lines over them, [pixelWidth] x [pixelHeight] at [scale].
  */
 class BakeFrame(
     val projection: Projection,
@@ -58,28 +59,42 @@ class BakeFrame(
     val top: Float,
     val right: Float,
     val bottom: Float,
+    /** The dashed lines' bitmap pixels per screen pixel, which need to stay crisp. */
     val scale: Float,
+    /**
+     * The clouds' bitmap pixels per screen pixel. They're blurry blobs, so far fewer
+     * pixels look the same, and those are most of a bake's time.
+     */
+    val cloudScale: Float = scale,
     /** Drawn rough and wide while the camera moved, to keep up. Redone sharp once it stops. */
     val draft: Boolean = false,
 ) {
     val pixelWidth = max(1, ceil((right - left) * scale).toInt())
     val pixelHeight = max(1, ceil((bottom - top) * scale).toInt())
+    val cloudPixelWidth = max(1, ceil((right - left) * cloudScale).toInt())
+    val cloudPixelHeight = max(1, ceil((bottom - top) * cloudScale).toInt())
 
     companion object {
         /** How far past each edge of the screen a bake reaches, as a fraction of its size. */
         const val MARGIN = 0.12f
         /**
-         * A still bake's bitmap pixels per screen pixel. The clouds are soft, so a bit
-         * under 1 looks the same and bakes and uploads in two thirds of the time.
+         * The most a still bake's lines get, in bitmap pixels per screen pixel. Under 1
+         * looks the same and bakes and uploads in two thirds of the time.
          */
         const val SCALE = 0.8f
+        /** Sharper than this isn't worth it, whatever the screen: the iPhone's, per dp. */
+        const val LINE_PIXELS_PER_DP = 1.5f
+        const val CLOUD_PIXELS_PER_DP = 1f
         /** While the map's moving: further, so a pan doesn't run off the edge before the next one's ready. */
         const val DRAFT_MARGIN = 0.45f
-        /** While the map's moving, a bake is this sharp, as it takes a fraction of the time. */
+        /** While the map's moving, a bake is this sharp at most, as it takes a fraction of the time. */
         const val DRAFT_SCALE = 0.45f
+        /** And per dp, the clouds softer still: it's mid-gesture, and half the screen's off the picture. */
+        const val DRAFT_LINE_PIXELS_PER_DP = 1f
+        const val DRAFT_CLOUD_PIXELS_PER_DP = 0.5f
 
         /**
-         * The most pixels in a bake, a bit more than the tablet's still bake: bigger
+         * The most pixels of lines, a bit more than the tablet's still bake: bigger
          * phone screens bake a touch softer rather than slower. 4 bytes each.
          */
         const val MAX_PIXELS = 3_000_000
@@ -95,9 +110,10 @@ class BakeFrame(
 
         /**
          * The frame for baking what [projection] sees on a [width] x [height] screen.
-         * [projection] is copied, so the caller can keep updating its own.
+         * [projection] is copied, so the caller can keep updating its own. [density] is
+         * screen pixels per dp.
          */
-        fun around(projection: Projection, width: Float, height: Float, draft: Boolean): BakeFrame {
+        fun around(projection: Projection, width: Float, height: Float, draft: Boolean, density: Float = 1f): BakeFrame {
             val margin = if (draft) DRAFT_MARGIN else MARGIN
             val left = -width * margin
             val right = width * (1 + margin)
@@ -108,13 +124,17 @@ class BakeFrame(
                 val row = projection.nearestRowWithin(u.toDouble(), FAR)
                 if (row.isFinite() && row > top) top = min(row.toFloat(), bottom - 1)
             }
-            var scale = if (draft) DRAFT_SCALE else SCALE
+            val most = if (draft) DRAFT_SCALE else SCALE
+            val wanted = min(most, (if (draft) DRAFT_LINE_PIXELS_PER_DP else LINE_PIXELS_PER_DP) / density)
+            val clouds = min(most, (if (draft) DRAFT_CLOUD_PIXELS_PER_DP else CLOUD_PIXELS_PER_DP) / density)
+            var scale = wanted
             val w = (right - left) * scale
             val h = (bottom - top) * scale
             if (w * h > MAX_PIXELS) scale *= sqrt(MAX_PIXELS / (w * h))
             scale = min(scale, MAX_SIDE / max(right - left, bottom - top))
             val copy = Projection().also { it.copyFrom(projection) }
-            return BakeFrame(copy, left, top, right, bottom, scale, draft)
+            // Softened along with the lines on a screen too big for them.
+            return BakeFrame(copy, left, top, right, bottom, scale, clouds * scale / wanted, draft)
         }
     }
 }

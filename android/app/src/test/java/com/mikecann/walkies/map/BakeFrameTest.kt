@@ -165,6 +165,7 @@ class BakeFrameTest {
         // The tablet's screen plus its margin is under the budget: baked at the usual scale.
         val full = BakeFrame.around(projection(camera()), width, height, draft = false)
         assertEquals(BakeFrame.SCALE, full.scale, 0.001f)
+        assertEquals(BakeFrame.SCALE, full.cloudScale, 0.001f)
         // A much bigger screen bakes softer rather than bigger.
         val big = BakeFrame.around(projection(camera { width = 2560f; height = 3200f }), 2560f, 3200f, draft = false)
         assertTrue(big.scale < 1f)
@@ -199,5 +200,19 @@ class BakeFrameTest {
         }
         assertEquals(p.centreScale, copy.centreScale, 0.0)
         assertTrue(abs(p.centreScale) > 0)
+    }
+
+    /** On a phone's dense screen the clouds get far fewer pixels than the lines, sharp or rough. */
+    @Test
+    fun cloudsBakeSofterThanLinesOnADenseScreen() {
+        val p = projection(camera())
+        val density = 3f
+        val still = BakeFrame.around(p, 1344f, 2992f, false, density)
+        assertEquals(1.5f / density, still.scale, 0.001f)
+        assertEquals(1f / density, still.cloudScale, 0.001f)
+        assertTrue(still.cloudPixelWidth < still.pixelWidth && still.cloudPixelHeight < still.pixelHeight)
+        val moving = BakeFrame.around(p, 1344f, 2992f, true, density)
+        assertEquals(1f / density, moving.scale, 0.001f)
+        assertEquals(0.5f / density, moving.cloudScale, 0.001f)
     }
 }

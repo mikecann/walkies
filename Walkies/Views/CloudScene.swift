@@ -82,6 +82,8 @@ nonisolated struct CloudScene {
     var sparkles: [Sparkle] = []
 
     var isEmpty: Bool { placed.isEmpty && mist.isEmpty && sparkles.isEmpty }
+    /// Whether any streets or grid are drawn at this zoom.
+    var hasLines: Bool { !(grid?.isEmpty ?? true) || roads.contains { !$0.path.isEmpty } }
 
     /// `bounds` is what's being drawn, in screen points; puffs are kept if they reach
     /// within `puffMargin` of its size of it.
@@ -289,18 +291,38 @@ nonisolated struct CloudScene {
     /// Into a bitmap, in the same order and with the same blending as the Canvas.
     func draw(in context: CGContext, sprites: CloudSprites) {
         guard !isEmpty else { return }
-        drawClouds(in: context, sprites: sprites)
+        drawBlanket(in: context, sprites: sprites, lines: true)
+        drawMist(in: context, sprites: sprites)
+        drawSparkles(in: context)
+    }
+
+    /// Just the soft part, for a picture of its own at a much lower resolution.
+    func drawClouds(in context: CGContext, sprites: CloudSprites) {
+        guard !isEmpty else { return }
+        drawBlanket(in: context, sprites: sprites, lines: false)
         drawMist(in: context, sprites: sprites)
     }
 
-    private func drawClouds(in context: CGContext, sprites: CloudSprites) {
+    /// Just the crisp part, to go over `drawClouds`: the same streets and grid, with the
+    /// same holes cut in them, and the sparkles.
+    func drawLines(in context: CGContext, sprites: CloudSprites) {
+        if !placed.isEmpty {
+            context.saveGState()
+            strokeLines(in: context)
+            cutHoles(in: context, sprites: sprites)
+            context.restoreGState()
+        }
+        drawSparkles(in: context)
+    }
+
+    private func drawBlanket(in context: CGContext, sprites: CloudSprites, lines: Bool) {
         guard !placed.isEmpty else { return }
         // Shadows on the ground, with the sun to the north-west.
         if detail > 0 {
             for p in placed {
                 context.setAlpha(0.35 * p.fade * detail)
                 let r = p.rect
-                Self.draw(sprites.shadows[p.variant], in: r.offsetBy(dx: r.width * 0.15, dy: r.height * 0.18), on: context)
+                Self.draw(sprites.level(for: r.width, on: context).shadows[p.variant], in: r.offsetBy(dx: r.width * 0.15, dy: r.height * 0.18), on: context)
             }
             context.setAlpha(1)
         }
@@ -312,14 +334,29 @@ nonisolated struct CloudScene {
         if detail > 0 {
             for p in placed {
                 context.setAlpha(p.fade * detail)
-                Self.draw(sprites.bases[p.variant], in: p.rect, on: context)
+                Self.draw(sprites.level(for: p.rect.width, on: context).bases[p.variant], in: p.rect, on: context)
             }
         }
         for p in placed {
             context.setAlpha(p.fade)
-            Self.draw(sprites.tops[p.variant], in: p.top, on: context)
+            Self.draw(sprites.level(for: p.top.width, on: context).tops[p.variant], in: p.top, on: context)
         }
         context.setAlpha(1)
+        if lines { strokeLines(in: context) } else { clipToPlaces(context) }
+        cutHoles(in: context, sprites: sprites)
+        context.restoreGState()
+        context.endTransparencyLayer()
+    }
+
+    /// The holes only go as far as the places' outlines, as the streets do.
+    private func clipToPlaces(_ context: CGContext) {
+        guard let roadClip else { return }
+        context.addPath(roadClip.cgPath)
+        context.clip()
+    }
+
+    /// Leaves the context clipped to the places, for the holes.
+    private func strokeLines(in context: CGContext) {
         context.setLineCap(.round)
         if let grid {
             context.addPath(grid.cgPath)
@@ -328,29 +365,29 @@ nonisolated struct CloudScene {
             context.setLineDash(phase: 0, lengths: [3, 4])
             context.strokePath()
         }
-        if let roadClip {
-            // Stays for the holes too, as it does in the Canvas.
-            context.addPath(roadClip.cgPath)
-            context.clip()
-            for road in roads {
-                let style = Self.roadStyle(road.kind)
-                context.addPath(road.path.cgPath)
-                context.setStrokeColor(Self.roadColour.cg(style.alpha))
-                context.setLineWidth(style.width)
-                context.setLineDash(phase: 0, lengths: style.dash)
-                context.strokePath()
-            }
+        // Stays for the holes too, as it does in the Canvas.
+        clipToPlaces(context)
+        guard roadClip != nil else { return }
+        for road in roads {
+            let style = Self.roadStyle(road.kind)
+            context.addPath(road.path.cgPath)
+            context.setStrokeColor(Self.roadColour.cg(style.alpha))
+            context.setLineWidth(style.width)
+            context.setLineDash(phase: 0, lengths: style.dash)
+            context.strokePath()
         }
-        context.setBlendMode(.destinationOut)
-        for rect in erasers {
-            Self.draw(sprites.eraser, in: rect, on: context)
-        }
-        context.restoreGState()
-        context.endTransparencyLayer()
     }
 
-    /// The haze on a layer of its own, so overlapping patches make one even wash,
-    /// then the sparkles. As `drawMist` in Clouds.swift's CloudPainter.
+    private func cutHoles(in context: CGContext, sprites: CloudSprites) {
+        context.setBlendMode(.destinationOut)
+        for rect in erasers {
+            Self.draw(sprites.level(for: rect.width, on: context).eraser, in: rect, on: context)
+        }
+        context.setBlendMode(.normal)
+    }
+
+    /// The haze on a layer of its own, so overlapping patches make one even wash.
+    /// As `drawMist` in Clouds.swift's CloudPainter.
     private func drawMist(in context: CGContext, sprites: CloudSprites) {
         if !mist.isEmpty {
             context.saveGState()
@@ -358,11 +395,14 @@ nonisolated struct CloudScene {
             context.beginTransparencyLayer(auxiliaryInfo: nil)
             for patch in mist {
                 context.setAlpha(patch.fade)
-                Self.draw(sprites.mist, in: patch.rect, on: context)
+                Self.draw(sprites.level(for: patch.rect.width, on: context).mist, in: patch.rect, on: context)
             }
             context.endTransparencyLayer()
             context.restoreGState()
         }
+    }
+
+    private func drawSparkles(in context: CGContext) {
         guard !sparkles.isEmpty else { return }
         context.saveGState()
         context.setLineDash(phase: 0, lengths: [])
