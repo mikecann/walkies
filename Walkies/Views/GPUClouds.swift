@@ -2,15 +2,14 @@ import MapKit
 import Metal
 import QuartzCore
 
-/// A prototype of drawing the clouds on the GPU every frame rather than baking pictures.
-/// Every puff, hole and patch of mist is a quad from a sprite array, placed by the vertex
-/// shader from one buffer that only changes when the tiles do and the camera's homography,
-/// so moving the map or drifting the clouds does no per-puff work on the CPU at all.
+/// The clouds, drawn on the GPU every frame rather than baked into pictures. Every puff,
+/// hole and patch of mist is a quad from a sprite array, placed by the vertex shader from
+/// one buffer that only changes when the tiles do and the camera's homography, so moving
+/// the map or drifting the clouds does no per-puff work on the CPU at all. On Mike's
+/// iPhone 15 Pro Max, with 17,000 puffs, that took a still map from about 25% of a core
+/// (baking every 2.5 s for the drift) to 5%, for 2 to 4 ms of GPU a frame.
 ///
 /// Only the clouds: the dashed lines still come from a bake, warped over this.
-///
-/// One known difference from the baked clouds, as it's a prototype: holes aren't clipped
-/// to the places' outlines, so one on an edge can cut into a puff that spills over it.
 nonisolated final class GPUClouds: @unchecked Sendable {
     /// What to draw.
     struct Scene {
@@ -44,6 +43,12 @@ nonisolated final class GPUClouds: @unchecked Sendable {
     private let under: any MTLRenderPipelineState
     private let mistWash: any MTLRenderPipelineState
     private let mistUnder: any MTLRenderPipelineState
+    /// The places' outlines into the stencil, and where holes may be cut.
+    private let clipFill: any MTLRenderPipelineState
+    private let invertStencil: any MTLDepthStencilState
+    private let insideStencil: any MTLDepthStencilState
+    private let anywhere: any MTLDepthStencilState
+    private var stencil: (any MTLTexture)?
 
     private struct Instances {
         var buffer: (any MTLBuffer)?
@@ -57,6 +62,7 @@ nonisolated final class GPUClouds: @unchecked Sendable {
     }
 
     private var sprites: [String: any MTLTexture] = [:]
+    private var preparing: Set<String> = []
     private let spriteLock = NSLock()
     private var built: (key: String, puffs: Instances, clearings: Instances, mist: Instances, radius: Double?, freshKey: Double?)?
     private var builtReveal: (started: Double, leaving: Instances, mist: Instances)?
@@ -69,15 +75,26 @@ nonisolated final class GPUClouds: @unchecked Sendable {
         self.device = device
         self.queue = queue
 
-        func pipeline(_ vertex: String, _ fragment: String, _ configure: (MTLRenderPipelineColorAttachmentDescriptor) -> Void) -> (any MTLRenderPipelineState)? {
+        /// `stencil` for the main pass, which has one to clip the holes with.
+        func pipeline(_ vertex: String, _ fragment: String, stencil: Bool = true, _ configure: (MTLRenderPipelineColorAttachmentDescriptor) -> Void) -> (any MTLRenderPipelineState)? {
             let d = MTLRenderPipelineDescriptor()
             d.vertexFunction = library.makeFunction(name: vertex)
             d.fragmentFunction = library.makeFunction(name: fragment)
+            if stencil { d.stencilAttachmentPixelFormat = .stencil8 }
             let colour = d.colorAttachments[0]!
             colour.pixelFormat = .bgra8Unorm
             colour.isBlendingEnabled = true
             configure(colour)
             return try? device.makeRenderPipelineState(descriptor: d)
+        }
+        func stencilState(_ compare: MTLCompareFunction, _ pass: MTLStencilOperation) -> (any MTLDepthStencilState)? {
+            let s = MTLStencilDescriptor()
+            s.stencilCompareFunction = compare
+            s.depthStencilPassOperation = pass
+            let d = MTLDepthStencilDescriptor()
+            d.frontFaceStencil = s
+            d.backFaceStencil = s
+            return device.makeDepthStencilState(descriptor: d)
         }
         func both(_ c: MTLRenderPipelineColorAttachmentDescriptor, _ source: MTLBlendFactor, _ destination: MTLBlendFactor) {
             c.sourceRGBBlendFactor = source
@@ -92,13 +109,23 @@ nonisolated final class GPUClouds: @unchecked Sendable {
               // whole extra picture to composite the clouds in. The same result.
               let under = pipeline("puffVertex", "puffFragment", { both($0, .oneMinusDestinationAlpha, .one) }),
               // Where patches of mist overlap, one even wash rather than building up.
-              let mistWash = pipeline("puffVertex", "puffFragment", {
+              let mistWash = pipeline("puffVertex", "puffFragment", stencil: false, {
                   both($0, .one, .one)
                   $0.rgbBlendOperation = .max
                   $0.alphaBlendOperation = .max
               }),
-              let mistUnder = pipeline("wholeVertex", "wholeFragment", { both($0, .oneMinusDestinationAlpha, .one) })
+              let mistUnder = pipeline("wholeVertex", "wholeFragment", { both($0, .oneMinusDestinationAlpha, .one) }),
+              let clipFill = pipeline("clipVertex", "clipFragment", { $0.writeMask = [] }),
+              // Each outline as a fan of triangles, flipping the stencil as they overlap,
+              // leaves it set inside the outline (even-odd) whatever its shape.
+              let invertStencil = stencilState(.always, .invert),
+              let insideStencil = stencilState(.notEqual, .keep),
+              let anywhere = stencilState(.always, .keep)
         else { return nil }
+        self.clipFill = clipFill
+        self.invertStencil = invertStencil
+        self.insideStencil = insideStencil
+        self.anywhere = anywhere
         self.over = over
         self.erase = erase
         self.under = under
@@ -119,9 +146,29 @@ nonisolated final class GPUClouds: @unchecked Sendable {
     /// Makes a look's sprite array ahead of time, off the main thread: it's the slow part
     /// of the first frame.
     func prepare(theme: String) {
-        spriteLock.lock()
-        defer { spriteLock.unlock() }
-        _ = spriteArray(theme)
+        if readySprites(theme) != nil { return }
+        let made = makeSpriteArray(theme)
+        spriteLock.withLock {
+            sprites[theme] = made
+            preparing.remove(theme)
+        }
+    }
+
+    private func readySprites(_ theme: String) -> (any MTLTexture)? {
+        spriteLock.withLock { sprites[theme] }
+    }
+
+    /// The look's sprites if they're made, and otherwise any look's while they're made
+    /// off the main thread: a moment of the old colours rather than a stutter.
+    private func sprites(for theme: String) -> (any MTLTexture)? {
+        let (ready, start) = spriteLock.withLock { () -> ((any MTLTexture)?, Bool) in
+            if let made = sprites[theme] { return (made, false) }
+            let start = !preparing.contains(theme)
+            preparing.insert(theme)
+            return (sprites.values.first, start)
+        }
+        if start { DispatchQueue.global(qos: .userInitiated).async { self.prepare(theme: theme) } }
+        return ready
     }
 
     /// Draws to the layer, in the current Core Animation transaction.
@@ -154,6 +201,7 @@ nonisolated final class GPUClouds: @unchecked Sendable {
 
     /// Draws to a new texture and waits, for tests.
     func picture(_ scene: Scene, scale: Double) -> (any MTLTexture)? {
+        prepare(theme: scene.theme)
         let d = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm, width: Int(scene.size.width * scale), height: Int(scene.size.height * scale), mipmapped: false
         )
@@ -172,10 +220,7 @@ nonisolated final class GPUClouds: @unchecked Sendable {
     /// Blanket first, then holes, then what goes under it, which is why there's no layer
     /// to composite: the same picture `CloudScene` makes with one.
     private func encode(_ scene: Scene, into target: any MTLTexture, on commands: any MTLCommandBuffer) -> Bool {
-        spriteLock.lock()
-        let array = spriteArray(scene.theme)
-        spriteLock.unlock()
-        guard let uniforms = FrameData(scene), let atlas = array else { return false }
+        guard let uniforms = FrameData(scene), let atlas = sprites(for: scene.theme), let stencil = stencilTexture(like: target) else { return false }
         let data = instances(scene)
         var frame = uniforms
         let centreScale = scene.projection.centreScale
@@ -209,7 +254,12 @@ nonisolated final class GPUClouds: @unchecked Sendable {
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
         pass.colorAttachments[0].storeAction = .store
+        pass.stencilAttachment.texture = stencil
+        pass.stencilAttachment.loadAction = .clear
+        pass.stencilAttachment.clearStencil = 0
+        pass.stencilAttachment.storeAction = .dontCare
         guard let e = commands.makeRenderCommandEncoder(descriptor: pass) else { return false }
+        e.setDepthStencilState(anywhere)
         e.setVertexBytes(&frame, length: MemoryLayout<FrameData>.stride, index: 1)
         e.setFragmentTexture(atlas, index: 0)
 
@@ -229,8 +279,15 @@ nonisolated final class GPUClouds: @unchecked Sendable {
         draw(e, data.puffs, PassData(slice: Sprite.tops, phaseShift: 0.7))
         draw(e, leaving.puffs, PassData(slice: Sprite.tops, alpha: leavingFade, radiusScale: leavingScale, phaseShift: 0.7))
 
+        // Zoomed in far enough for streets, the holes stop at the places' outlines as the
+        // streets do, or one by an edge would cut into the puffs spilling over it.
+        // CloudScene's road clip, made the same way.
+        let clipped = data.clearings.count > 0 && centreScale > 0.05 && fillOutlines(e, scene)
         e.setRenderPipelineState(erase)
+        e.setDepthStencilState(clipped ? insideStencil : anywhere)
+        e.setVertexBytes(&frame, length: MemoryLayout<FrameData>.stride, index: 1)
         draw(e, data.clearings, PassData(slice: Sprite.eraser, drifts: 0))
+        e.setDepthStencilState(anywhere)
 
         if misty, let mist = mistTarget {
             e.setRenderPipelineState(mistUnder)
@@ -256,6 +313,36 @@ nonisolated final class GPUClouds: @unchecked Sendable {
         e.setVertexBuffer(buffer, offset: 0, index: 0)
         e.setVertexBytes(&pass, length: MemoryLayout<PassData>.stride, index: 2)
         e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: instances.count)
+    }
+
+    /// The places' outlines on screen, into the stencil. False if there are none.
+    private func fillOutlines(_ e: any MTLRenderCommandEncoder, _ scene: Scene) -> Bool {
+        var triangles: [SIMD2<Float>] = []
+        for ring in scene.field.outline {
+            // Cut where it passes behind the camera, as the CPU's own clip is.
+            let points = scene.projection.polygon(ring).map { SIMD2(Float($0.x), Float($0.y)) }
+            guard points.count > 2 else { continue }
+            for i in 1..<(points.count - 1) { triangles += [points[0], points[i], points[i + 1]] }
+        }
+        guard !triangles.isEmpty,
+              let buffer = device.makeBuffer(bytes: triangles, length: triangles.count * MemoryLayout<SIMD2<Float>>.stride, options: .storageModeShared)
+        else { return false }
+        var size = SIMD2(Float(scene.size.width), Float(scene.size.height))
+        e.setRenderPipelineState(clipFill)
+        e.setDepthStencilState(invertStencil)
+        e.setVertexBuffer(buffer, offset: 0, index: 0)
+        e.setVertexBytes(&size, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+        e.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: triangles.count)
+        return true
+    }
+
+    private func stencilTexture(like target: any MTLTexture) -> (any MTLTexture)? {
+        if let stencil, stencil.width == target.width, stencil.height == target.height { return stencil }
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .stencil8, width: target.width, height: target.height, mipmapped: false)
+        d.usage = [.renderTarget]
+        d.storageMode = .private
+        stencil = device.makeTexture(descriptor: d)
+        return stencil
     }
 
     private func mistTexture(like target: any MTLTexture) -> (any MTLTexture)? {
@@ -314,9 +401,8 @@ nonisolated final class GPUClouds: @unchecked Sendable {
         static let mist = eraser + 1
     }
 
-    /// The look's sprites in one mipmapped texture array, made the first time it's used.
-    private func spriteArray(_ theme: String) -> (any MTLTexture)? {
-        if let made = sprites[theme] { return made }
+    /// The look's sprites in one mipmapped texture array.
+    private func makeSpriteArray(_ theme: String) -> (any MTLTexture)? {
         let source = CloudSprites.sprites(for: theme)
         let images = source.bases + source.tops + source.shadows + [source.eraser, source.mist]
         let side = 256
@@ -348,12 +434,11 @@ nonisolated final class GPUClouds: @unchecked Sendable {
         blit.endEncoding()
         commands.commit()
         commands.waitUntilCompleted()
-        sprites[theme] = texture
         return texture
     }
 }
 
-/// As `Puff` in GPUClouds.metal.
+/// As `Puff` in the shader.
 nonisolated private struct PuffData {
     var cell: SIMD2<Float>
     var offset: SIMD2<Float>
@@ -371,7 +456,7 @@ nonisolated private struct PuffData {
     }
 }
 
-/// As `Pass` in GPUClouds.metal. Which sprites to draw and how.
+/// As `Pass` in the shader. Which sprites to draw and how.
 nonisolated private struct PassData {
     var slice: Float
     var alpha: Float = 1
@@ -383,7 +468,7 @@ nonisolated private struct PassData {
     var pad: Float = 0
 }
 
-/// As `Frame` in GPUClouds.metal.
+/// As `Frame` in the shader.
 nonisolated private struct FrameData {
     var row0: (Float, Float, Float, Float)
     var row1: (Float, Float, Float, Float)
@@ -426,8 +511,9 @@ nonisolated private struct FrameData {
     }
 }
 
-/// Compiled when the app first needs it, so the prototype doesn't taskpolicy -b make every machine that
-/// builds Walkies install Xcode's Metal toolchain. A real version would be a `.metal` file.
+/// Compiled when the app first needs it (off the main thread, and quick), so that no
+/// machine building Walkies needs Xcode's separate Metal toolchain installed. The shader
+/// test compiles it too, so a mistake in it fails the tests rather than leaving the map bare.
 nonisolated private let gpuCloudsShader = #"""
 #include <metal_stdlib>
 using namespace metal;
@@ -566,6 +652,18 @@ vertex WholeOut wholeVertex(uint vid [[vertex_id]]) {
     out.position = float4(corner.x * 2 - 1, 1 - corner.y * 2, 0, 1);
     out.uv = corner;
     return out;
+}
+
+vertex WholeOut clipVertex(uint vid [[vertex_id]], constant float2 *points [[buffer(0)]], constant float2 &size [[buffer(1)]]) {
+    float2 p = points[vid];
+    WholeOut out;
+    out.position = float4(p.x / size.x * 2 - 1, 1 - p.y / size.y * 2, 0, 1);
+    out.uv = float2(0);
+    return out;
+}
+
+fragment float4 clipFragment() {
+    return float4(0);
 }
 
 fragment float4 wholeFragment(WholeOut in [[stage_in]], texture2d<float> picture [[texture(0)]], constant float &alpha [[buffer(0)]]) {

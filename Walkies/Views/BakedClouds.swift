@@ -209,13 +209,20 @@ final class BakedCloudEngine {
 
     let status = Status()
 
-    /// The prototype: the GPU draws the clouds every frame, and only the lines are baked.
-    private let usesGPU = CloudRenderer.current == .gpu
+    /// The GPU draws the clouds every frame, and only the lines are baked. False for the
+    /// baked renderer, or once the GPU's failed to start.
+    private var usesGPU: Bool
+
+    init(renderer: CloudRenderer = .current) {
+        usesGPU = renderer == .gpu
+    }
     /// Made off the main thread, as compiling its shader and making its sprites takes a
     /// noticeable moment. Nil until it's ready, or if there's no GPU to use.
     private var gpu: GPUClouds?
     private var askedForGPU = false
     private var lastGPUFrame = -Double.infinity
+    /// What the GPU last drew, to skip drawing the same again when nothing moves.
+    private var lastGPUScene: (projection: Projection, key: String, theme: String, size: CGSize)?
 
     /// SwiftUI makes a new engine every time the view's rebuilt and keeps only the
     /// first, so the layers are only made once one's used.
@@ -469,8 +476,10 @@ final class BakedCloudEngine {
         let busy = moving || handle.isDragging || handle.honeycomb(at: .now) > 0 || reveal != nil || fading
         if busy != linkActive, let link {
             linkActive = busy
-            // The GPU clouds drift by being drawn again, a few points a second, so 20 a second's plenty.
-            let idle = usesGPU && !inputs.reduceMotion ? CAFrameRateRange(minimum: 15, maximum: 30, preferred: 20) : CAFrameRateRange(minimum: 4, maximum: 10, preferred: 10)
+            // The GPU clouds drift by being drawn again. They move under 2 points a second,
+            // so 10 times a second is a fifth of a point a step, which can't be seen; and
+            // the GPU's time per frame is most of what the clouds cost while the map's open.
+            let idle = usesGPU && !inputs.reduceMotion ? CAFrameRateRange(minimum: 8, maximum: 15, preferred: 10) : CAFrameRateRange(minimum: 4, maximum: 10, preferred: 10)
             link.preferredFrameRateRange = busy ? .default : idle
         }
     }
@@ -575,6 +584,13 @@ final class BakedCloudEngine {
     /// With the GPU drawing the clouds there's only ever the lines to put on screen, and
     /// nothing to stand in for them.
     private func presentLinesOnly(projection: Projection, size: CGSize, now: Double, moving: Bool, inputs: Inputs) -> Bool {
+        if gpu == nil {
+            // The moment it takes the GPU to start, the live Canvas draws the lot, lines too.
+            cloudRoot.isHidden = true
+            honeycombRoot.isHidden = true
+            showingFront = false
+            return true
+        }
         let warp = front.flatMap { front -> BakeWarp? in
             guard front.field.places == inputs.field.places, let warp = BakeWarp(now: projection, frame: front.frame),
                   warp.shows(size: size, now: projection, moving: moving)
@@ -610,9 +626,16 @@ final class BakedCloudEngine {
         // as the camera's change, so the first of them still lands in step with the map.
         let refresh = 1 / Double(max(60, UIScreen.main.maximumFramesPerSecond))
         guard now - lastGPUFrame >= refresh * 0.8 else { return }
-        lastGPUFrame = now
         if gpu.layer.superlayer == nil { layers.cloudHost.insertSublayer(gpu.layer, at: 0) }
         let front = front.flatMap { $0.field.places == inputs.field.places ? $0 : nil }
+        let key = front?.fieldKey ?? inputs.key
+        // With Reduce Motion the clouds don't drift, so a still map needs nothing drawn again.
+        if inputs.reduceMotion, reveal == nil, let last = lastGPUScene, last.key == key, last.theme == inputs.theme,
+           last.size == size, last.projection.matches(projection, size: size) {
+            return
+        }
+        lastGPUFrame = now
+        lastGPUScene = (projection, key, inputs.theme, size)
         var clearing: GPUClouds.Scene.Reveal?
         if let reveal {
             clearing = GPUClouds.Scene.Reveal(
@@ -622,7 +645,7 @@ final class BakedCloudEngine {
         }
         gpu.present(
             GPUClouds.Scene(
-                field: front?.field ?? inputs.field, key: front?.fieldKey ?? inputs.key, theme: inputs.theme,
+                field: front?.field ?? inputs.field, key: key, theme: inputs.theme,
                 projection: projection, size: size, clock: clock, reveal: clearing
             ),
             displayScale: displayScale
@@ -636,8 +659,17 @@ final class BakedCloudEngine {
             let made = GPUClouds()
             made?.prepare(theme: theme)
             DispatchQueue.main.async {
-                self?.gpu = made
-                self?.tick()
+                guard let self else { return }
+                if let made {
+                    self.gpu = made
+                } else {
+                    // No GPU to draw with: the baked clouds instead, baked afresh, as
+                    // what's on hand was baked with just the lines.
+                    self.usesGPU = false
+                    self.front = nil
+                    self.lastRequest = nil
+                }
+                self.tick()
             }
         }
     }
