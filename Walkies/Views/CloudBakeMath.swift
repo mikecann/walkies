@@ -30,25 +30,22 @@ nonisolated enum CloudRenderer: String, Sendable {
 /// Launch arguments, read by hand: `UserDefaults` would read `-perfRun -cloudRenderer live`
 /// as perfRun = "-cloudRenderer". They're for testing, so Release builds ignore them all.
 nonisolated enum LaunchArguments {
-    /// Allowed in Release on this prototype branch only, to time the two renderers on a
-    /// real phone with its real places, without swapping its build for a Debug one.
-    private static let timing: Set<String> = ["-perfRun", "-perfStay", "-perfStill", "-cloudRenderer"]
-
     static func has(_ flag: String) -> Bool {
         #if DEBUG
         ProcessInfo.processInfo.arguments.contains(flag)
         #else
-        timing.contains(flag) && ProcessInfo.processInfo.arguments.contains(flag)
+        false
         #endif
     }
 
     static func value(after flag: String) -> String? {
-        #if !DEBUG
-        guard timing.contains(flag) else { return nil }
-        #endif
+        #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         guard let i = arguments.firstIndex(of: flag), i + 1 < arguments.count else { return nil }
         return arguments[i + 1]
+        #else
+        nil
+        #endif
     }
 }
 
