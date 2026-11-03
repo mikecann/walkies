@@ -127,6 +127,10 @@ final class CloudRenderStats {
     var bakes = 0
     var drafts = 0
     var bakeMilliseconds = 0.0
+    /// The same split up: working out the scene, then the clouds, then the lines.
+    var sceneMilliseconds = 0.0
+    var cloudMilliseconds = 0.0
+    var lineMilliseconds = 0.0
     var longestBake = 0.0
     /// Bakes given up on for taking too long.
     var abandoned = 0
@@ -758,6 +762,9 @@ final class BakedCloudEngine {
         stats.bakes += 1
         if bake.frame.draft { stats.drafts += 1 }
         stats.bakeMilliseconds += bake.milliseconds
+        stats.sceneMilliseconds += bake.stages.scene
+        stats.cloudMilliseconds += bake.stages.clouds
+        stats.lineMilliseconds += bake.stages.lines
         stats.longestBake = max(stats.longestBake, bake.milliseconds)
 
         CATransaction.begin()

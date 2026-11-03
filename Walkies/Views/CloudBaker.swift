@@ -35,6 +35,8 @@ nonisolated final class CloudBake: @unchecked Sendable {
     /// Mist in the previous field that's gone from this one: tiles walked again.
     let leavingMist: [CloudField.MistPatch]
     let milliseconds: Double
+    /// Where the time went, for the `-perfRun` harness: working out the scene, then each picture.
+    var stages = (scene: 0.0, clouds: 0.0, lines: 0.0)
 
     var frame: BakeFrame { job.frame }
     var field: CloudField { job.field }
@@ -113,7 +115,9 @@ nonisolated enum CloudBakery {
         }
         let frame = job.frame
         let scene = CloudScene(field: job.field, projection: frame.projection, bounds: frame.rect, clock: job.clock, puffMargin: 0.05)
+        let sceneDone = DispatchTime.now().uptimeNanoseconds
         let clouds = render(frame.rect, scale: frame.cloudScale) { scene.drawClouds(in: $0, sprites: sprites) }
+        let cloudsDone = DispatchTime.now().uptimeNanoseconds
         let lines: CGImage?
         if let same = job.linesFrom {
             lines = same.lines
@@ -122,8 +126,10 @@ nonisolated enum CloudBakery {
         } else {
             lines = nil
         }
-        let took = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6
-        return CloudBake(job: job, clouds: clouds, lines: lines, leaving: leaving, leavingMist: leavingMist, milliseconds: took)
+        let finished = DispatchTime.now().uptimeNanoseconds
+        let bake = CloudBake(job: job, clouds: clouds, lines: lines, leaving: leaving, leavingMist: leavingMist, milliseconds: Double(finished - started) / 1e6)
+        bake.stages = (Double(sceneDone - started) / 1e6, Double(cloudsDone - sceneDone) / 1e6, Double(finished - cloudsDone) / 1e6)
+        return bake
     }
 
     /// The honeycomb, for while you drag, for the same frame as the bake.
