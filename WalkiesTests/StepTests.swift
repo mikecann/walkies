@@ -148,4 +148,27 @@ struct WalkStepFinishTests {
         #expect(model.walks.first?.endedAt == last)
         #expect(store.loadWalks().first?.steps == 400)
     }
+
+    @Test func aCutOffAutomaticWalkOnlyCountsIfItsLongEnough() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let start = Date.now.addingTimeInterval(-3600)
+        // 81 m up the street, like Mike's walk on 3 Nov, then about 450 m.
+        func walk(to lat: Double) -> Walk {
+            let points = stride(from: 0.0, through: lat, by: 0.0001).enumerated().map { i, dlat in
+                TrackPoint(lat: -33.65 + dlat, lon: 115.35, time: start.timeIntervalSince1970 + Double(i) * 8, accuracy: 5)
+            }
+            var walk = Walk(startedAt: start, points: points)
+            walk.automatic = true
+            return walk
+        }
+        let short = walk(to: 0.00073), long = walk(to: 0.004)
+        store.save(short)
+        store.save(long)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false, stepQuery: { _, _ in 100 })
+        await model.waitForHistory()
+        #expect(model.walks.map(\.id) == [long.id])
+        #expect(store.loadWalks().map(\.id) == [long.id])
+        #expect(model.walks.first?.endedAt != nil)
+    }
 }

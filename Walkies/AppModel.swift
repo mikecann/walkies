@@ -251,6 +251,14 @@ final class AppModel {
         historyTask = Task {
             // Unfinished files stay out of sync until their final count is known.
             for var walk in recoveredWalks {
+                // Cut off by the app being stopped (an install, or iOS), it gets the same
+                // test as a walk that ended by itself. Mike's 13 m and 81 m "walks" on
+                // 2-3 Nov came from here.
+                if walk.isAutomatic, !Self.countsAsAutoWalk(walk.points) {
+                    walks.removeAll { $0.id == walk.id }
+                    store.delete(walk)
+                    continue
+                }
                 let end = walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt
                 let setting = stepSettingRevision
                 if countSteps {
@@ -832,6 +840,11 @@ final class AppModel {
     /// How far a pending walk has got from where it started, in metres.
     var pendingWalkDistance: Double {
         activeWalk.map { Self.displacement(of: $0.points) } ?? 0
+    }
+
+    /// Far enough from where it started, and long enough, to be a walk.
+    static func countsAsAutoWalk(_ points: [TrackPoint]) -> Bool {
+        displacement(of: points) >= autoWalkConfirmDistance && CoverageTracer.distance(for: points) >= minimumAutoWalk
     }
 
     /// How far the furthest point gets from the first, in metres.

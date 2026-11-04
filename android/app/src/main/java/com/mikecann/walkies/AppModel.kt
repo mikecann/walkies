@@ -365,6 +365,15 @@ class AppModel(
         if (generation != dataGeneration) return
         val walk = recovered.getOrNull(index)
         if (walk == null) { prepareHistory(); return }
+        // Cut off by the app being stopped (an install, or the system), it gets the same
+        // test as a walk that ended by itself. Mike's 13 m and 81 m "walks" on his iPhone
+        // on 2-3 Nov came from here.
+        if (walk.isAutomatic && !countsAsAutoWalk(walk.points)) {
+            walks = walks.filter { it.id != walk.id }
+            store.delete(walk)
+            finishRecovered(recovered, index + 1, generation)
+            return
+        }
         val end = walk.points.lastOrNull()?.let { SwiftDate.epoch(it.time) } ?: walk.startedAt
         val setting = stepSettingRevision
         val done: (Int?) -> Unit = { count ->
@@ -2165,6 +2174,10 @@ class AppModel(
                 }
             }
         }
+
+        /** Far enough from where it started, and long enough, to be a walk. */
+        fun countsAsAutoWalk(points: List<TrackPoint>): Boolean =
+            displacement(points) >= AUTO_WALK_CONFIRM_DISTANCE && CoverageTracer.distance(points) >= MINIMUM_AUTO_WALK
 
         /** How far the furthest point gets from the first, in metres. */
         fun displacement(points: List<TrackPoint>): Double {
