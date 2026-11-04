@@ -74,6 +74,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 @main
 struct WalkiesApp: App {
     @UIApplicationDelegateAdaptor private var delegate: AppDelegate
+    @Environment(\.scenePhase) private var scenePhase
 
     /// `-skipSignIn` on a simulator debug build goes straight in, for checking screens
     /// without an Apple or Google account. Nothing syncs. Screenshot mode does too.
@@ -101,7 +102,12 @@ struct WalkiesApp: App {
                 }
             }
             // The cream-paper look is a light design, so the app stays light.
-            .onOpenURL { delegate.model.openTeamURL($0) }
+            .onOpenURL { url in
+                // Safari finishing a sign-in that iOS wouldn't open in the sheet.
+                if SignInSheet.browserReturned(url) { return }
+                delegate.model.openTeamURL(url)
+            }
+            .onChange(of: scenePhase) { _, phase in SignInSheet.scenePhaseChanged(to: phase) }
             .preferredColorScheme(.light)
             .tint(Color.burnt)
             .environment(delegate.model)

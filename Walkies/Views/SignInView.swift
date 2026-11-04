@@ -116,6 +116,9 @@ struct SignInView: View {
                 // Closed the sheet: nothing to say.
             } catch let error as URLError {
                 errorMessage = "Can't reach Walkies (\(error.code.rawValue)). Check your connection and try again."
+            } catch let error as ConvexError where error.code != nil {
+                // The server's own words, like "Apple didn't confirm who you are".
+                errorMessage = error.localizedDescription
             } catch is ConvexError {
                 errorMessage = "Something went wrong on the Walkies server. Try again in a minute."
             } catch {

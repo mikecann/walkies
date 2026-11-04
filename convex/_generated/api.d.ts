@@ -9,6 +9,7 @@
  */
 
 import type * as accountDeletion from "../accountDeletion.js";
+import type * as appleIdentityToken from "../appleIdentityToken.js";
 import type * as auth from "../auth.js";
 import type * as chef from "../chef.js";
 import type * as crons from "../crons.js";
@@ -43,6 +44,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   accountDeletion: typeof accountDeletion;
+  appleIdentityToken: typeof appleIdentityToken;
   auth: typeof auth;
   chef: typeof chef;
   crons: typeof crons;

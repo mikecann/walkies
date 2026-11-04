@@ -6,6 +6,11 @@
 	     own domain, which serves /.well-known/apple-app-site-association (convex/http.ts),
 	     for passwords and passkeys later. Sign-in doesn't rely on it: it comes back on
 	     walkies://. Debug builds use Walkies-Debug.entitlements, which adds dev. -->
+	<!-- Native Sign in with Apple (Walkies/Services/AppleSignIn.swift). -->
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
 		<string>webcredentials:savory-bee-296.ap-southeast-2.convex.site</string>

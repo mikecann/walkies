@@ -3,6 +3,7 @@ import Foundation
 import Observation
 import OSLog
 import Security
+import SwiftUI
 import UIKit
 
 /// Session tokens from Convex Auth, plus who they belong to.
@@ -19,10 +20,11 @@ nonisolated struct Session: Codable, Sendable {
     var picture: String?
 }
 
-/// Signing in with Apple or Google through Convex Auth v2. Their sign-in pages run
-/// in a secure sheet that ends on the deployment's own site, which bounces to
-/// walkies://signed-in so the sheet hands the one-time code straight back. The
-/// session lives in the Keychain.
+/// Signing in with Apple or Google through Convex Auth v2. Apple uses the iPhone's own
+/// Sign in with Apple sheet (`AppleSignIn`). Google's sign-in page (and Apple's, if the
+/// native sheet fails) runs in a secure sheet that ends on the deployment's own site,
+/// which bounces to walkies://signed-in so the sheet hands the one-time code straight
+/// back. The session lives in the Keychain.
 @Observable
 final class Account {
     enum Provider: String {
@@ -79,6 +81,7 @@ final class Account {
     }
 
     @ObservationIgnored private let sheet = SignInSheet()
+    @ObservationIgnored private let apple = AppleSignIn()
     @ObservationIgnored private var refreshing: Task<Session?, Never>?
     #if DEBUG && targetEnvironment(simulator)
     @ObservationIgnored private var automaticTestSignInRequested = false
@@ -135,6 +138,40 @@ final class Account {
             return
         }
         #endif
+        if provider == .apple {
+            try await signInWithNativeApple()
+            return
+        }
+        try await signInOnTheWeb(with: provider)
+    }
+
+    /// The iPhone's own Sign in with Apple sheet, then its identity token to the server. Only
+    /// if that sheet itself fails (not a cancel, and not the server saying no) does it fall
+    /// back to Apple's web page.
+    private func signInWithNativeApple() async throws {
+        let nonce = AppleSignInNonce.make()
+        let credential: AppleSignIn.Credential
+        do {
+            credential = try await apple.authorize(nonce: nonce)
+        } catch SignInError.cancelled {
+            throw SignInError.cancelled
+        } catch {
+            log.error("Apple: native sheet failed (\(String(describing: error), privacy: .public)), trying the web page")
+            try await signInOnTheWeb(with: .apple)
+            return
+        }
+        // Apple only passes the name on the first time someone signs in to Walkies.
+        var args = ["identityToken": credential.identityToken, "nonce": nonce.raw]
+        if let first = credential.firstName, !first.isEmpty { args["firstName"] = first }
+        if let last = credential.lastName, !last.isEmpty { args["lastName"] = last }
+        let result: CompleteResult = try await ConvexClient().action("auth:signInWithAppleNative", args)
+        log.info("Apple (native): finished with \(result.status, privacy: .public)")
+        try await finishSignIn(result)
+    }
+
+    /// Apple's or Google's web page: in the secure sheet, or in Safari when iOS won't open
+    /// the sheet (Apple's review devices refuse it), then the code back to Convex Auth.
+    private func signInOnTheWeb(with provider: Provider) async throws {
         let returnTo = Backend.site.appending(path: "app/signed-in")
         log.info("\(provider.rawValue, privacy: .public): starting on \(Backend.site.host() ?? "?", privacy: .public)")
         let start: StartResult = try await ConvexClient().mutation(
@@ -143,7 +180,13 @@ final class Account {
         guard let page = URL(string: start.redirect) else { throw SignInError.failed }
 
         log.info("\(provider.rawValue, privacy: .public): opening \(page.host() ?? "?", privacy: .public)")
-        let landed = try await sheet.open(page)
+        let landed: URL
+        do {
+            landed = try await sheet.open(page)
+        } catch SignInError.sheet(let code) {
+            log.error("\(provider.rawValue, privacy: .public): sheet refused (\(code, privacy: .public)), opening Safari")
+            landed = try await sheet.openInBrowser(page)
+        }
         log.info("\(provider.rawValue, privacy: .public): back on \(landed.scheme ?? "?", privacy: .public)://\(landed.host() ?? "", privacy: .public)")
         let query = URLComponents(url: landed, resolvingAgainstBaseURL: false)?.queryItems ?? []
         if let error = query.first(where: { $0.name == "convexAuthError" })?.value {
@@ -277,12 +320,18 @@ nonisolated enum SignInError: LocalizedError {
     case failed
     /// The sign-in sheet couldn't open, with iOS's error code.
     case sheet(Int)
+    /// The iPhone's own Sign in with Apple sheet failed, with its error code.
+    case nativeApple(Int)
+    /// Safari wouldn't open the sign-in page either.
+    case browser
 
     var errorDescription: String? {
         switch self {
         case .cancelled: nil
         case .failed: "Something went wrong signing in. Try again."
         case .sheet(let code): "Couldn't open the sign-in page (\(code)). Try again."
+        case .nativeApple(let code): "Couldn't sign in with Apple (\(code)). Try again."
+        case .browser: "Couldn't open Safari to sign in. Try again."
         }
     }
 }
@@ -329,13 +378,16 @@ final class SignInSheet: NSObject, ASWebAuthenticationPresentationContextProvidi
     /// which the sheet catches.
     func open(_ page: URL) async throws -> URL {
         let opened = Date.now
-        return try await withCheckedThrowingContinuation { continuation in
+        let result: Result<URL, SignInError> = await withCheckedContinuation { continuation in
+            // start() can say no and the completion handler still fire with an error, and
+            // resuming twice crashes the app (Poddle's PODDLE-8), so the first ending wins.
+            let finish = FirstAnswer<Result<URL, SignInError>> { continuation.resume(returning: $0) }
             let session = ASWebAuthenticationSession(
                 url: page,
                 callback: .customScheme("walkies")
             ) { url, error in
                 if let url {
-                    continuation.resume(returning: url)
+                    finish(.success(url))
                     return
                 }
                 let nsError = error.map { $0 as NSError }
@@ -344,25 +396,72 @@ final class SignInSheet: NSObject, ASWebAuthenticationPresentationContextProvidi
                 // iOS refusing to open it, not someone closing it.
                 if let error = error as? ASWebAuthenticationSessionError, error.code == .canceledLogin,
                    Date.now.timeIntervalSince(opened) > 1.5 {
-                    continuation.resume(throwing: SignInError.cancelled)
+                    finish(.failure(.cancelled))
                 } else {
-                    continuation.resume(throwing: SignInError.sheet(nsError?.code ?? 0))
+                    finish(.failure(.sheet(nsError?.code ?? 0)))
                 }
             }
             session.presentationContextProvider = self
             self.session = session
             if !session.start() {
                 log.error("Sheet refused to start")
-                continuation.resume(throwing: SignInError.sheet(-1))
+                finish(.failure(.sheet(-1)))
             }
         }
+        session = nil
+        return try result.get()
     }
 
     nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        MainActor.assumeIsolated {
-            UIApplication.shared.connectedScenes
-                .compactMap { ($0 as? UIWindowScene)?.keyWindow }
-                .first ?? ASPresentationAnchor()
+        MainActor.assumeIsolated { Self.appWindow() }
+    }
+
+    /// The app's window to show a sign-in sheet over.
+    static func appWindow() -> UIWindow {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }
+            .first ?? ASPresentationAnchor()
+    }
+
+    // MARK: Safari, when iOS won't open the sheet
+
+    /// Waiting for Safari to come back on walkies://signed-in, and whether Walkies has gone
+    /// to the background since (so coming back to the foreground means they've returned).
+    private static var browserWait: FirstAnswer<Result<URL, SignInError>>?
+    private static var leftForBrowser = false
+
+    /// The same sign-in page in Safari. Its last stop (/app/signed-in) sends Safari on to
+    /// walkies://signed-in, which reopens Walkies and comes in through `browserReturned`.
+    func openInBrowser(_ page: URL) async throws -> URL {
+        let result: Result<URL, SignInError> = await withCheckedContinuation { continuation in
+            let finish = FirstAnswer<Result<URL, SignInError>> { continuation.resume(returning: $0) }
+            Self.browserWait = finish
+            Self.leftForBrowser = false
+            UIApplication.shared.open(page) { opened in
+                if !opened { finish(.failure(.browser)) }
+            }
+        }
+        Self.browserWait = nil
+        return try result.get()
+    }
+
+    /// walkies://signed-in, from Safari. True when it was ours to handle.
+    static func browserReturned(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "walkies", url.host?.lowercased() == "signed-in" else { return false }
+        browserWait?(.success(url))
+        return true
+    }
+
+    /// Back in Walkies without Safari sending them back on the link: they gave up, so the
+    /// buttons come back. A short wait first, since the link and the app becoming active can
+    /// arrive in either order.
+    static func scenePhaseChanged(to phase: ScenePhase) {
+        guard let waiting = browserWait else { return }
+        if phase == .background { leftForBrowser = true }
+        guard phase == .active, leftForBrowser else { return }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            waiting(.failure(.cancelled))
         }
     }
 }
