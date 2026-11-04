@@ -81,7 +81,9 @@ Suburb street data is shared across accounts in `placeData`, keyed by OSM relati
 
 Offline cache checks: `node scripts/test-places.mjs` and `bash scripts/test-places-model.sh`. The latter runs the real Swift builder and HTTP fallback tests on macOS when Simulator is unavailable.
 
-Sign-in runs Apple's or Google's page in an `ASWebAuthenticationSession`. Convex Auth's callback (`/oauth/apple/callback`, `/oauth/google/callback`) sends the browser on to `/app/signed-in?convexAuthCode=…` on the same deployment, which the sheet catches (the app is linked to that domain through `/.well-known/apple-app-site-association` in `convex/http.ts` and `Config/Walkies.entitlements`). The app then calls `completeSignInWith…` with the code.
+Sign in with Apple uses the iPhone's own sheet (`ASAuthorizationAppleIDProvider`, `Walkies/Services/AppleSignIn.swift`, with the `com.apple.developer.applesignin` entitlement). It hands the app an identity token, which `auth:signInWithAppleNative` checks against Apple's keys (issuer, the `com.mikecann.walkies` audience, expiry and the sign-in's nonce, in `convex/appleIdentityToken.ts`) before signing in on the same "apple" provider as the web page, so one Apple ID is one account either way. This is because Apple's App Review devices refused the web sign-in sheet outright for Poddle. If the native sheet itself fails, it falls back to Apple's web page.
+
+Google (and Apple's fallback) runs the provider's page in an `ASWebAuthenticationSession`. Convex Auth's callback (`/oauth/apple/callback`, `/oauth/google/callback`) sends the browser on to `/app/signed-in?convexAuthCode=…` on the same deployment, which bounces to `walkies://signed-in?…` for the sheet to catch. The app then calls `completeSignInWith…` with the code. When iOS won't open the sheet at all, the page opens in Safari instead and comes back on the same `walkies://signed-in` link.
 
 ### Setting up Apple and Google sign-in
 
