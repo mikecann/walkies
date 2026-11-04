@@ -1,4 +1,4 @@
-import { createLocalJWKSet, jwtVerify } from "jose";
+import { createLocalJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
 import { ConvexError } from "convex/values";
 import type { normalizeAppleProfile } from "@convex-dev/auth/methods/apple/server";
 
@@ -30,10 +30,13 @@ export async function sha256Hex(value: string): Promise<string> {
  * Anything else throws the same "Apple didn't confirm" error.
  */
 export async function verifyAppleIdentityToken(token: string, nonce: string): Promise<AppleClaims> {
-  // Fetched each time rather than cached: signing in is rare, and Apple rotates its keys.
-  const res = await fetch(KEYS_URL);
-  if (!res.ok) throw new ConvexError({ code: "appleUnavailable", message: "Couldn't reach Apple. Try again." });
-  const keys = createLocalJWKSet(await res.json());
+  // Something that isn't even an RS256 JWT is refused without asking Apple anything.
+  try {
+    if (decodeProtectedHeader(token).alg !== "RS256") throw refused();
+  } catch {
+    throw refused();
+  }
+  const keys = await appleKeys();
   let payload;
   try {
     ({ payload } = await jwtVerify(token, keys, { issuer: ISSUER, audience: APPLE_BUNDLE_ID, algorithms: ["RS256"] }));
@@ -43,6 +46,22 @@ export async function verifyAppleIdentityToken(token: string, nonce: string): Pr
   if (typeof payload.sub !== "string" || payload.sub === "") throw refused();
   if (payload.nonce !== (await sha256Hex(nonce))) throw refused();
   return payload as AppleClaims;
+}
+
+/**
+ * Apple's published signing keys. Fetched each time rather than cached: signing in is rare
+ * and Apple rotates its keys. Apple being down, or sending something that isn't a key set,
+ * is the same "try again" either way.
+ */
+async function appleKeys() {
+  const unavailable = () => new ConvexError({ code: "appleUnavailable", message: "Couldn't reach Apple. Try again." });
+  try {
+    const res = await fetch(KEYS_URL);
+    if (!res.ok) throw unavailable();
+    return createLocalJWKSet(await res.json());
+  } catch {
+    throw unavailable();
+  }
 }
 
 /** The name the phone passed on (Apple only gives it the first time), cleaned like Convex Auth's web flow does. */

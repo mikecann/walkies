@@ -132,10 +132,21 @@ describe("native Sign in with Apple", () => {
     expect(await users(t)).toHaveLength(0);
   });
 
-  test("garbage instead of a token is refused", async () => {
+  test("Apple's key server being down is a try-again, not a refusal", async () => {
     const t = await setup();
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("fetch failed"); }));
+    await expect(t.action(api.auth.signInWithAppleNative, { identityToken: await identityToken(), nonce: "nonce-1" })).rejects.toThrow(
+      /Couldn't reach Apple/,
+    );
+  });
+
+  test("garbage instead of a token is refused without asking Apple", async () => {
+    const t = await setup();
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
     await expect(t.action(api.auth.signInWithAppleNative, { identityToken: "not-a-jwt", nonce: "nonce-1" })).rejects.toThrow(
       /Apple didn't confirm/,
     );
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
