@@ -148,4 +148,58 @@ struct WalkStepFinishTests {
         #expect(model.walks.first?.endedAt == last)
         #expect(store.loadWalks().first?.steps == 400)
     }
+
+    @Test func aCutOffAutomaticWalkOnlyCountsIfItsLongEnough() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let start = Date.now.addingTimeInterval(-3600)
+        // 81 m up the street, like Mike's walk on 3 Nov, about 220 m (far enough from the
+        // start, but not long enough), then about 450 m.
+        func walk(to lat: Double) -> Walk {
+            let points = stride(from: 0.0, through: lat, by: 0.0001).enumerated().map { i, dlat in
+                TrackPoint(lat: -33.65 + dlat, lon: 115.35, time: start.timeIntervalSince1970 + Double(i) * 8, accuracy: 5)
+            }
+            var walk = Walk(startedAt: start, points: points)
+            walk.automatic = true
+            return walk
+        }
+        let short = walk(to: 0.00073), middling = walk(to: 0.002), long = walk(to: 0.004)
+        store.save(short)
+        store.save(middling)
+        store.save(long)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false, stepQuery: { _, _ in 100 })
+        await model.waitForHistory()
+        #expect(model.walks.map(\.id) == [long.id])
+        #expect(store.loadWalks().map(\.id) == [long.id])
+        #expect(model.walks.first?.endedAt != nil)
+    }
+
+    @Test func aCutOffShortAutomaticWalkKeepsOnlyItsTileCredit() async throws {
+        let store = store()
+        defer { store.wipe() }
+        let grid = HexGrid.world
+        let origin = Coordinate(lat: -33.65, lon: 115.35)
+        let base = grid.hex(containing: origin)
+        let ring = [SIMD2(-1000.0, -1000), SIMD2(1000.0, -1000), SIMD2(1000.0, 1000), SIMD2(-1000.0, 1000)].map { grid.projection.unproject(grid.centre(of: base) + $0) }
+        let place = City(id: UUID(), name: "Geographe", detail: "Busselton",
+                         boundary: Boundary(polygons: [GeoPolygon(outer: ring, holes: [])]),
+                         tiles: Set((0..<10).map { Hex(q: base.q + Int32($0), r: base.r) }), visited: [])
+        store.save([place])
+        // Left open when the app was stopped, and only 80 m long.
+        let start = Date.now.addingTimeInterval(-3600)
+        let points = (0...8).map { i in
+            TrackPoint(lat: -33.65 + Double(i) * 0.0001, lon: 115.35, time: start.timeIntervalSince1970 + Double(i) * 8, accuracy: 5)
+        }
+        let hexes: Set<Hex> = [base, Hex(q: base.q + 1, r: base.r)]
+        var walk = Walk(startedAt: start, points: points)
+        walk.automatic = true
+        walk.newTileHexesByPlace = [place.id.uuidString: hexes]
+        store.save(walk)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false, stepQuery: { _, _ in 100 })
+        await model.waitForHistory()
+        #expect(model.walks.isEmpty)
+        #expect(store.loadWalks().isEmpty)
+        #expect(model.cities.first?.tileCredits?.map(\.hexes) == [hexes])
+        #expect(store.loadCities().first?.tileCredits?.map(\.hexes) == [hexes])
+    }
 }
