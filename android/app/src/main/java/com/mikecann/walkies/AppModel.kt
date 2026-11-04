@@ -369,6 +369,19 @@ class AppModel(
         // test as a walk that ended by itself. Mike's 13 m and 81 m "walks" on his iPhone
         // on 2-3 Nov came from here.
         if (walk.isAutomatic && !countsAsAutoWalk(walk.points)) {
+            // Like completeAutoWalk, the tiles it uncovered still count for quests.
+            val credited = cities.map { city ->
+                val hexes = walk.newTileHexesByPlace?.get(city.id.uuidString)
+                if (hexes.isNullOrEmpty()) city
+                else city.copy(
+                    tileCredits = city.tileCredits.orEmpty() + City.TileCredit(walk.id, walk.startedAt, hexes),
+                    updatedAt = now(),
+                )
+            }
+            if (credited != cities) {
+                cities = credited
+                store.save(cities)
+            }
             walks = walks.filter { it.id != walk.id }
             store.delete(walk)
             finishRecovered(recovered, index + 1, generation)

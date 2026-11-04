@@ -404,4 +404,26 @@ class ProgressionModelTest {
         now += 3 * 3600.0
         assertEquals(null, model.activeSpyglassRing)
     }
+
+    @Test
+    fun cutOffShortAutomaticWalkKeepsOnlyItsTileCredit() {
+        val (store, _) = tempStore()
+        val place = city(visited = 0)
+        store.save(listOf(place))
+        // Left open when the app was stopped, and only 80 m long.
+        val began = SwiftDate.epoch(now - 3600.0)
+        val points = listOf(0.0, 40.0, 80.0).mapIndexed { i, x ->
+            val c = place.grid.projection.unproject(offset(place) + Vec2(x, 0.0))
+            TrackPoint(c.lat, c.lon, began.epochSeconds + i * 30, 5.0, speed = 1.3)
+        }
+        val hexes = setOf(hex(0, 0), hex(1, 0))
+        store.save(Walk(startedAt = began, points = points, automatic = true, newTileHexesByPlace = mapOf(place.id.uuidString to hexes)))
+        store.flush()
+        val model = model(store)
+        assertTrue(model.walks.isEmpty())
+        store.flush()
+        assertTrue(store.loadWalks().isEmpty())
+        assertEquals(hexes, model.cities[0].tileCredits?.single()?.hexes)
+        assertEquals(hexes, model(store).cities[0].tileCredits?.single()?.hexes)
+    }
 }

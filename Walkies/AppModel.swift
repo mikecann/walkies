@@ -255,6 +255,17 @@ final class AppModel {
                 // test as a walk that ended by itself. Mike's 13 m and 81 m "walks" on
                 // 2-3 Nov came from here.
                 if walk.isAutomatic, !Self.countsAsAutoWalk(walk.points) {
+                    // Like completeAutoWalk, the tiles it uncovered still count for quests.
+                    var credited = false
+                    for i in cities.indices {
+                        guard let hexes = walk.newTileHexesByPlace?[cities[i].id.uuidString], !hexes.isEmpty else { continue }
+                        cities[i].tileCredits = (cities[i].tileCredits ?? []) + [
+                            City.TileCredit(id: walk.id, at: walk.startedAt, hexes: hexes)
+                        ]
+                        cities[i].updatedAt = .now
+                        credited = true
+                    }
+                    if credited { store.save(cities) }
                     walks.removeAll { $0.id == walk.id }
                     store.delete(walk)
                     continue
