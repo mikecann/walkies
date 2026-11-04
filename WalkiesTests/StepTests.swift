@@ -153,7 +153,8 @@ struct WalkStepFinishTests {
         let store = store()
         defer { store.wipe() }
         let start = Date.now.addingTimeInterval(-3600)
-        // 81 m up the street, like Mike's walk on 3 Nov, then about 450 m.
+        // 81 m up the street, like Mike's walk on 3 Nov, about 220 m (far enough from the
+        // start, but not long enough), then about 450 m.
         func walk(to lat: Double) -> Walk {
             let points = stride(from: 0.0, through: lat, by: 0.0001).enumerated().map { i, dlat in
                 TrackPoint(lat: -33.65 + dlat, lon: 115.35, time: start.timeIntervalSince1970 + Double(i) * 8, accuracy: 5)
@@ -162,8 +163,9 @@ struct WalkStepFinishTests {
             walk.automatic = true
             return walk
         }
-        let short = walk(to: 0.00073), long = walk(to: 0.004)
+        let short = walk(to: 0.00073), middling = walk(to: 0.002), long = walk(to: 0.004)
         store.save(short)
+        store.save(middling)
         store.save(long)
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false, stepQuery: { _, _ in 100 })
         await model.waitForHistory()

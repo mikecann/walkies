@@ -149,15 +149,18 @@ class StepTest {
     @Test fun aCutOffAutomaticWalkOnlyCountsIfItsLongEnough() {
         val (store, root) = tempStore()
         try {
-            // 81 m up the street, like Mike's iPhone walk on 3 Nov, then about 450 m.
+            // 81 m up the street, like Mike's iPhone walk on 3 Nov, about 220 m (far enough
+            // from the start, but not long enough), then about 450 m.
             fun walk(steps: Int) = Walk(
                 startedAt = SwiftDate.epoch(100.0),
                 points = (0..steps).map { TrackPoint(-33.65 + it * 0.0001, 115.35, 100.0 + it * 8, 5.0) },
                 automatic = true,
             )
             val short = walk(7)
+            val middling = walk(20)
             val long = walk(40)
             store.save(short)
+            store.save(middling)
             store.save(long)
             val model = AppModel(store, FakeSettings(), FakeLocation(), stepQuery = { _, _, done -> done(100) })
             assertTrue(model.historyReady)
