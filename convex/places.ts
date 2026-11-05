@@ -22,9 +22,10 @@ const requestSpacing = 1100;
 // runs at a time. Overpass turns away callers that run several queries at once.
 const workerId = -1;
 // Every Overpass query, the worker's or someone opening a place, holds this slot
-// while it runs. Longer than both 135-second attempts, so a crash frees it.
+// while it runs. Longer than both 135-second attempts plus the Node action starting
+// up and saving a big suburb's file (placeStreets.ts), and a crash still frees it.
 const overpassId = -2;
-const overpassLease = 5 * 60 * 1000;
+const overpassLease = 7 * 60 * 1000;
 // Someone opening a place waits this long for the worker's query to finish, so
 // the whole call stays inside the app's 6-minute timeout. The worker waits longer.
 const overpassWait = 45_000;

@@ -19,13 +19,16 @@ export const download = internalAction({
   handler: async (ctx, args) => {
     const boundary = JSON.parse(args.boundary) as PlaceData["boundary"];
     const body = new URLSearchParams({ data: walkableQuery(boundary) }).toString();
+    let ways: PlaceData["ways"] | undefined;
     let lastError: unknown;
     for (const endpoint of overpassEndpoints) {
       try {
-        const ways = waysFromOverpass(await fetchJSON(endpoint, 135_000, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body }));
-        return await ctx.storage.store(new Blob([JSON.stringify({ boundary, ways } satisfies PlaceData)], { type: "application/json" }));
+        ways = waysFromOverpass(await fetchJSON(endpoint, 135_000, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body }));
+        break;
       } catch (error) { lastError = error; }
     }
-    throw lastError ?? new Error("No street data");
+    if (!ways) throw lastError ?? new Error("No street data");
+    // Outside the loop, so a failed save doesn't run the whole query again on the other server.
+    return await ctx.storage.store(new Blob([JSON.stringify({ boundary, ways } satisfies PlaceData)], { type: "application/json" }));
   },
 });

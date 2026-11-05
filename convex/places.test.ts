@@ -121,7 +121,7 @@ test("only one Overpass query runs at a time, and a crashed one frees the slot",
   expect(await t.mutation(internal.places.takeOverpass, { lease: first + 2 })).toBeGreaterThan(0);
   await t.mutation(internal.places.releaseOverpass, { lease: first });
   expect(await t.mutation(internal.places.takeOverpass, { lease: first + 3 })).toBe(0);
-  vi.setSystemTime(first + 3 + 5 * 60 * 1000 + 1);
+  vi.setSystemTime(first + 3 + 7 * 60 * 1000 + 1);
   expect(await t.mutation(internal.places.takeOverpass, { lease: Date.now() })).toBe(0);
 });
 
