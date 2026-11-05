@@ -27,12 +27,13 @@ class WorldCloudTiles {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, List<CloudBlanket.Puff>>?) = size > 96
     }
     private val tiles = ArrayList<Long>()
-    val tileCount get() = tiles.size
-    val tileKeys get() = tiles.joinToString { "z${it ushr 50}" }
     private var lastTiles: List<Long> = emptyList()
     private val box = FloatArray(4)
     private var top = 0f
     private var coarsest = 0
+    private var minSpacing = 0f
+    private val candidates = ArrayList<Pair<Long, Float>>()
+    private val ground = DoubleArray(4)
 
     /** Works out the tiles on a [width] x [height] pixel screen through [projection]. */
     fun update(projection: Projection, width: Float, height: Float, density: Float) {
@@ -51,18 +52,39 @@ class WorldCloudTiles {
         // of puffs: they're left out.
         val worldPixels = MapPoints.WORLD * projection.centreScale
         coarsest = if (worldPixels > 0) (ln(worldPixels / (CloudBlanket.TILE_POINTS * density)) / ln(2.0)).toInt() - COARSER else 0
-        visit(projection, 0, 0, 0, width, height, CloudBlanket.TILE_POINTS * density)
+        // The ground the screen can see, out to the horizon cut: only tiles touching it are
+        // looked at. A tile the camera's over is partly behind it, with its corners in front
+        // all off screen, so its corners alone can't say whether it's on screen.
+        ground[0] = Double.POSITIVE_INFINITY; ground[1] = Double.POSITIVE_INFINITY
+        ground[2] = Double.NEGATIVE_INFINITY; ground[3] = Double.NEGATIVE_INFINITY
+        for (fx in floatArrayOf(-MARGIN, 0.5f, 1 + MARGIN)) for (fy in floatArrayOf(0f, 0.5f, 1f)) {
+            val v = max(top + 1, -height * MARGIN) + (height * (1 + MARGIN) - max(top + 1, -height * MARGIN)) * fy
+            if (!projection.unproject((width * fx).toDouble(), v.toDouble())) continue
+            ground[0] = min(ground[0], projection.groundX); ground[1] = min(ground[1], projection.groundY)
+            ground[2] = max(ground[2], projection.groundX); ground[3] = max(ground[3], projection.groundY)
+        }
+        if (ground[0] > ground[2]) { lastTiles = emptyList(); puffs = emptyArray(); return }
+        candidates.clear()
+        minSpacing = MIN_SPACING * density
+        // Tiles split until they're this big on screen, smaller than Mapbox's, so less of
+        // each is off the screen: the puffs are spaced by size on screen, not by tile.
+        visit(projection, 0, 0, 0, width, height, TILE_SCREEN * density)
+        // The biggest on screen first, so a cap drops specks by the horizon, never what's
+        // right in front of you.
+        candidates.sortByDescending { it.second }
+        for (i in 0 until min(MAX_TILES, candidates.size)) tiles.add(candidates[i].first)
         if (tiles == lastTiles) return
         lastTiles = ArrayList(tiles)
         val seen = HashSet<Long>()
         val out = ArrayList<CloudBlanket.Puff>()
         for (key in tiles) {
             val list = cache.getOrPut(key) {
-                val z = (key ushr 50).toInt()
+                val level = (key ushr 55).toInt()
+                val z = ((key ushr 50) and 0x1F).toInt()
                 val x = ((key ushr 25) and 0x1FFFFFF).toInt()
                 val y = (key and 0x1FFFFFF).toInt()
                 val b = CloudBlanket.tileBox(z, x, y)
-                CloudBlanket.puffs(CloudBlanket.level(z), b[0], b[1], b[2], b[3])
+                CloudBlanket.puffs(level, b[0], b[1], b[2], b[3])
             }
             // A puff reaching into two tiles of the same level is in both: once is enough.
             if (out.size >= MAX_PUFFS) break
@@ -74,6 +96,7 @@ class WorldCloudTiles {
 
     private fun visit(projection: Projection, z: Int, x: Int, y: Int, width: Float, height: Float, limit: Float) {
         val b = CloudBlanket.tileBox(z, x, y)
+        if (b[2] < ground[0] || b[0] > ground[2] || b[3] < ground[1] || b[1] > ground[3]) return
         var inFront = 0
         box[0] = Float.POSITIVE_INFINITY; box[1] = Float.POSITIVE_INFINITY
         box[2] = Float.NEGATIVE_INFINITY; box[3] = Float.NEGATIVE_INFINITY
@@ -86,12 +109,16 @@ class WorldCloudTiles {
             box[0] = min(box[0], projection.x); box[1] = min(box[1], projection.y)
             box[2] = max(box[2], projection.x); box[3] = max(box[3], projection.y)
         }
-        if (inFront == 0 || tiles.size >= MAX_TILES) return
+        if (inFront == 0 || candidates.size >= MAX_CANDIDATES) return
         val onScreen = box[2] >= -width * MARGIN && box[0] <= width * (1 + MARGIN) && box[3] >= top && box[1] <= height * (1 + MARGIN)
         // Partly behind the camera: only some of it can be on screen, so look closer, but
         // only so far, as the ground right under a tilted camera is off the bottom anyway.
         if (inFront < 4) {
-            if (z < PARTLY_BEHIND_ZOOM) split(projection, z, x, y, width, height, limit)
+            // Only worth splitting if what's in front of the camera reaches the screen. Down
+            // to a few zooms finer than the middle of the screen, as the ground right in
+            // front of a tilted camera is close and big, and skipping it left the bottom
+            // of the screen bare.
+            if (z < coarsest + COARSER + PARTLY_BEHIND_FINER) split(projection, z, x, y, width, height, limit)
             return
         }
         if (!onScreen) return
@@ -100,7 +127,14 @@ class WorldCloudTiles {
             return
         }
         if (z < coarsest) return
-        tiles.add((z.toLong() shl 50) or (x.toLong() shl 25) or y.toLong())
+        // The puffs no closer together on screen than [MIN_SPACING], as the iPhone's are: a
+        // tile out by the horizon is small on screen, and at its zoom's level it'd be
+        // hundreds of specks.
+        val size = max(box[2] - box[0], box[3] - box[1])
+        val span = b[2] - b[0]
+        var level = CloudBlanket.level(z)
+        while (CloudBlanket.hexSize(level) * SQRT3 * size / span < minSpacing && level < 30) level++
+        candidates.add(((level.toLong() shl 55) or (z.toLong() shl 50) or (x.toLong() shl 25) or y.toLong()) to size)
         area[0] = min(area[0], b[0]); area[1] = min(area[1], b[1])
         area[2] = max(area[2], b[2]); area[3] = max(area[3], b[3])
     }
@@ -108,14 +142,21 @@ class WorldCloudTiles {
     private companion object {
         /** How far past each edge of the screen tiles are kept, as a share of its size. */
         const val MARGIN = 0.2f
-        /** Deepest a tile partly behind the camera is split. */
-        const val PARTLY_BEHIND_ZOOM = 12
+        /** How many zooms finer than the middle of the screen a tile partly behind the camera is split to. */
+        const val PARTLY_BEHIND_FINER = 3
         /** Never more than this many, whatever the camera: each holds a few hundred puffs. */
-        const val MAX_TILES = 64
+        const val MAX_TILES = 160
         /** How many zooms coarser than the middle of the screen a tile can be. */
         const val COARSER = 3
+        /** Tiles looked at before choosing, as a safety net. */
+        const val MAX_CANDIDATES = 400
+        /** Closest a tile's puffs get on screen, in dp. */
+        const val MIN_SPACING = 18f
+        private val SQRT3 = kotlin.math.sqrt(3.0)
         /** And never more puffs than this a frame. */
-        const val MAX_PUFFS = 6000
+        const val MAX_PUFFS = 12000
+        /** Biggest a tile gets on screen, in dp, before it's split. */
+        const val TILE_SCREEN = 256f
     }
 
     private fun split(projection: Projection, z: Int, x: Int, y: Int, width: Float, height: Float, limit: Float) {

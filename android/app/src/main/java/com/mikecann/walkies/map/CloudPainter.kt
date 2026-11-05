@@ -103,10 +103,7 @@ class CloudPainter(private val density: Float) {
      * everything else on the layer, as Mapbox's layer was under it.
      */
     fun drawWorld(canvas: Canvas, projection: Projection, sprites: CloudSprites, width: Float, height: Float, places: BlanketPlaces, walked: WalkedIndex) {
-        val t0 = System.nanoTime()
-        dbgDrawn = 0
         worldTiles.update(projection, width, height, density)
-        val t1 = System.nanoTime()
         val puffs = worldTiles.puffs
         if (puffs.isEmpty()) return
         canvas.save()
@@ -127,7 +124,6 @@ class CloudPainter(private val density: Float) {
                 if (!capped(projection, puff.x, puff.y, puff.radius)) continue
                 if (cr < -width * 0.2f || cl > width * 1.2f || cb < -height * 0.2f || ct > height * 1.2f) continue
                 rect.set(cl, ct, cr, cb)
-                if (layer == 1) dbgDrawn++
                 if (layer == 0) stamp(canvas, true, sprites, SpriteBatch.BASES + puff.variant, sprites.bases[puff.variant], bitmapPaint)
                 else stamp(canvas, true, sprites, SpriteBatch.TOPS + puff.variant, sprites.tops[puff.variant], bitmapPaint)
             }
@@ -145,10 +141,7 @@ class CloudPainter(private val density: Float) {
         batch.flush(canvas)
         canvas.restoreToCount(saved)
         canvas.restore()
-        if (++dbgFrames % 30 == 0) android.util.Log.d("WorldDbg", "drawn=$dbgDrawn first=${puffs.firstOrNull()?.let { projection.point(it.x, it.y); "${projection.x},${projection.y} r=${it.radius}" }} places=${places.places.size} puffs=${puffs.size} tiles=${worldTiles.tileCount} keys=${worldTiles.tileKeys} layout=${(t1 - t0) / 1000}us draw=${(System.nanoTime() - t1) / 1000}us")
     }
-    private var dbgFrames = 0
-    private var dbgDrawn = 0
     private val path = Path()
     private val clip = Path()
     private val honeycombPaths = Array(5) { Path() }
