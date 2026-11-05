@@ -1,7 +1,8 @@
 import UIKit
 import UserNotifications
 
-/// Local notifications for secrets found while the phone's in your pocket.
+/// Local notifications: secrets found while the phone's in your pocket, and the nudge to
+/// open the app when you head out.
 enum Notifier {
     static func requestPermission() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
@@ -35,5 +36,24 @@ enum Notifier {
         let url = URL.temporaryDirectory.appending(path: "sticker-\(entry.id).png")
         guard (try? png.write(to: url)) != nil else { return nil }
         return try? UNNotificationAttachment(identifier: entry.id, url: url)
+    }
+
+    private static let walkQuestion = "walk-question"
+
+    /// Opening the app from this is what lets the GPS follow you (see LocationTracker).
+    static func askToStartWalk() {
+        guard UIApplication.shared.applicationState != .active else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Out for a walk?"
+        content.body = "Tap to start recording it."
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: walkQuestion, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    static func withdrawWalkQuestion() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [walkQuestion])
+        center.removeDeliveredNotifications(withIdentifiers: [walkQuestion])
     }
 }
