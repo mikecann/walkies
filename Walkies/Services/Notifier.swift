@@ -40,6 +40,15 @@ enum Notifier {
 
     private static let walkQuestion = "walk-question"
 
+    /// Whether notifications can be shown, read when the app opens. Always on only relies
+    /// on the walk question when they can.
+    @MainActor private(set) static var allowed = false
+
+    @MainActor static func refreshAllowed() async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        allowed = [.authorized, .provisional, .ephemeral].contains(settings.authorizationStatus)
+    }
+
     /// Opening the app from this is what lets the GPS follow you (see LocationTracker).
     static func askToStartWalk() {
         guard UIApplication.shared.applicationState != .active else { return }
