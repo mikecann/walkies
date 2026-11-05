@@ -141,10 +141,11 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         return insideFence ? .idle : .light
     }
 
-    /// Only once you've left where you settled, and not from the car. Walking round the
-    /// garden for half a minute isn't worth a notification.
-    nonisolated static func shouldAskToStartWalk(insideFence: Bool, onWheels: Bool, asked: Bool) -> Bool {
-        !insideFence && !onWheels && !asked
+    /// Only once you've plainly left where you settled, on foot. Walking round the garden
+    /// for half a minute isn't worth a notification, and nor is the moment at launch before
+    /// the fence has loaded: that asked Mike while he sat at his desk (5 Nov 2026).
+    nonisolated static func shouldAskToStartWalk(leftFence: Bool, onFoot: Bool, onWheels: Bool, asked: Bool) -> Bool {
+        leftFence && onFoot && !onWheels && !asked
     }
 
     private var insideFence: Bool { fence.center != nil && !outside }
@@ -195,7 +196,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         var watch = watch
         refreshSession(live: watch == .live)
         if watch == .live, backgroundSession == nil {
-            if Self.shouldAskToStartWalk(insideFence: insideFence, onWheels: isOnWheels(), asked: askedThisOuting) {
+            if Self.shouldAskToStartWalk(leftFence: outside, onFoot: isOnFoot(), onWheels: isOnWheels(), asked: askedThisOuting) {
                 askedThisOuting = true
                 askToStartWalk()
             }
