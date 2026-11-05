@@ -6,7 +6,17 @@
 
 type Ctx = { sh: (command: string) => Promise<string> };
 type Version = { version: string; state: string };
-type Request = { number: number; title?: string; description?: string; state: string; changelog?: string; completedAt?: number };
+type Request = {
+  number: number;
+  title?: string;
+  description?: string;
+  state: string;
+  kind?: string;
+  mergedInto?: string;
+  changelog?: string;
+  completedAt?: number;
+  _creationTime: number;
+};
 
 const APP_ID = "6826001880";
 const CONNECT = `https://appstoreconnect.apple.com/apps/${APP_ID}/distribution`;
@@ -38,7 +48,32 @@ const requests = kept(async (sh) =>
     .map((line) => JSON.parse(line) as Request),
 );
 
-const isOpen = (r: Request) => r.state !== "completed" && r.state !== "rejected";
+// A refinement is Chef's agent asking the requester a question, and a merged
+// one lives on in the request it went into, so neither is a request to build.
+const isRequest = (r: Request) => r.kind !== "refinement" && !r.mergedInto;
+const isOpen = (r: Request) => isRequest(r) && r.state !== "completed" && r.state !== "rejected";
+
+const STAGE: Record<string, string> = {
+  submitted: "Needs your OK",
+  requested: "Ready to build",
+  planned: "Planned",
+  inProgress: "Being built",
+};
+
+// "5d" at the end of a row: how long ago, as short as it'll go.
+function ago(ms: number) {
+  const mins = Math.max(0, (Date.now() - ms) / 60_000);
+  if (mins < 60) return `${Math.max(1, Math.round(mins))}m`;
+  if (mins < 60 * 24) return `${Math.round(mins / 60)}h`;
+  const days = Math.round(mins / (60 * 24));
+  if (days < 14) return `${days}d`;
+  if (days < 60) return `${Math.round(days / 7)}w`;
+  return `${Math.round(days / 30)}mo`;
+}
+
+// Chef cuts a long first sentence off with "…" to make a title; the
+// description is the whole thing, and the panel cuts it to fit.
+const titleOf = (r: Request) => (r.title && !r.title.endsWith("…") ? r.title : r.description || r.title || `#${r.number}`).trim();
 const needsMike = (state: string) => state === "PENDING_DEVELOPER_RELEASE" || state.endsWith("REJECTED");
 
 const WORDS: Record<string, string> = {
@@ -117,15 +152,31 @@ export default {
       title: "Chef requests",
       icon: "text.bubble",
       badge: async ({ sh }: Ctx) => (await requests(sh)).filter(isOpen).length,
+      // Mike picked this layout on 5 Nov 2026: Waiting and Shipped under
+      // headings with counts, what changed on two lines, and how long ago at
+      // the end. With nothing waiting there's no Waiting heading at all.
       items: async ({ sh }: Ctx) => {
-        const all = await requests(sh);
-        const open = all.filter(isOpen).map((r) => ({ title: `#${r.number} ${r.title ?? r.description ?? ""}`.trim(), detail: r.state, icon: "text.bubble", tone: "attention" }));
+        const all = (await requests(sh)).filter(isRequest);
+        const open = all.filter(isOpen).sort((a, b) => a._creationTime - b._creationTime);
         const shipped = all
           .filter((r) => r.state === "completed" && r.changelog)
-          .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0))
-          .slice(0, 5)
-          .map((r) => ({ title: `#${r.number} ${r.title ?? ""}`.trim(), detail: r.changelog, icon: "checkmark.circle" }));
-        return [...(open.length ? open : [{ title: "Nothing waiting", tone: "done" }]), ...shipped];
+          .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0));
+        const waiting = `Waiting · ${open.length}`;
+        const done = `Shipped · ${shipped.length}`;
+        return [
+          ...open.map((r) => {
+            const title = titleOf(r);
+            const asked = r.description && r.description.trim() !== title ? ` ${r.description.trim()}` : "";
+            return { title, detail: `${STAGE[r.state] ?? r.state}.${asked}`, tone: "attention", section: waiting, trailing: ago(r._creationTime) };
+          }),
+          ...shipped.slice(0, 40).map((r) => ({
+            title: titleOf(r),
+            detail: r.changelog,
+            tone: "done",
+            section: done,
+            trailing: r.completedAt ? ago(r.completedAt) : undefined,
+          })),
+        ];
       },
     },
   ],
