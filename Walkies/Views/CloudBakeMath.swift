@@ -284,7 +284,7 @@ nonisolated struct BakeWarp {
             let screen = CGPoint(x: fx * width, y: fy * height)
             if now.isFar(screen, far: BakeFrame.far) { continue }
             guard let b = unmap(screen), frame.rect.contains(b) else { continue }
-            return looksRight(at: b, stretch: Self.movingShowable)
+            if looksRight(at: b, stretch: Self.movingShowable) { return true }
         }
         return false
     }
