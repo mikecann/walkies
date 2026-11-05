@@ -9,8 +9,6 @@ import schema from "./schema";
 
 // The iPhone's own Sign in with Apple sheet hands the app an identity token (a JWT Apple
 // signs, for the app's bundle ID), and auth:signInWithAppleNative swaps it for a session.
-// Apple's review devices refuse the web sign-in sheet outright (seen in Poddle), so this is
-// the way in that doesn't need a browser.
 
 const modules = import.meta.glob(["./**/*.{ts,js}", "!./**/*.test.ts"]);
 
