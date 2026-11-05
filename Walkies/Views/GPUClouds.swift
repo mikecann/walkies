@@ -55,7 +55,23 @@ nonisolated final class GPUClouds: @unchecked Sendable {
     /// The most pixels a point. The clouds are soft, and each extra pixel is many puffs' fill.
     static let maxScale = 1.5
 
-    let layer = CAMetalLayer()
+    /// Made the first time it's asked for, on the main thread, though the rest of this is
+    /// made off it. A Core Animation layer made on a background thread was left out of
+    /// what's on screen on Mike's phone: every frame drawn to it for the first 3 to 8
+    /// seconds after opening Walkies was lost, so the clouds came in late.
+    @MainActor private(set) lazy var layer: CAMetalLayer = {
+        let layer = CAMetalLayer()
+        layer.device = device
+        layer.pixelFormat = .bgra8Unorm
+        layer.isOpaque = false
+        layer.anchorPoint = .zero
+        layer.position = .zero
+        layer.maximumDrawableCount = 3
+        // In step with the Core Animation transaction the lines' warp is in, or the
+        // clouds would be a frame off the lines, and the map, as you drag.
+        layer.presentsWithTransaction = true
+        return layer
+    }()
     private let device: any MTLDevice
     private let queue: any MTLCommandQueue
     private let over: any MTLRenderPipelineState
@@ -184,16 +200,6 @@ nonisolated final class GPUClouds: @unchecked Sendable {
         self.under = under
         self.mistWash = mistWash
         self.mistUnder = mistUnder
-
-        layer.device = device
-        layer.pixelFormat = .bgra8Unorm
-        layer.isOpaque = false
-        layer.anchorPoint = .zero
-        layer.position = .zero
-        layer.maximumDrawableCount = 3
-        // In step with the Core Animation transaction the lines' warp is in, or the
-        // clouds would be a frame off the lines, and the map, as you drag.
-        layer.presentsWithTransaction = true
     }
 
     /// Makes a look's sprite array ahead of time, off the main thread: it's the slow part
