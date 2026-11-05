@@ -154,6 +154,30 @@ class CloudBlanketSource {
     /** The hexes walked, waiting for the painting thread to take them in. */
     private var pendingWalked: Set<Hex>? = null
     private var closed = true
+    /** The clouds are drawn live with the place clouds instead: Mapbox's layer is hidden. */
+    private var drawnLive = false
+
+    /** What the tiles are painted from, for drawing the same clouds live. */
+    val places: BlanketPlaces get() = synchronized(lock) { inputs.places }
+    val walked: WalkedIndex get() = synchronized(lock) { inputs.walked }
+
+    /**
+     * From now on the cloud layer draws these clouds every frame, so Mapbox's tiles of
+     * them (which came in late as you scrolled, in squares) are hidden. On the main thread.
+     */
+    fun drawLive() {
+        if (drawnLive) return
+        drawnLive = true
+        hideLayer()
+    }
+
+    private fun hideLayer() {
+        val style = style ?: return
+        if (!style.styleLayerExists(LAYER)) return
+        style.setStyleLayerProperty(LAYER, "visibility", com.mapbox.bindgen.Value.valueOf("none")).error?.let {
+            Log.w(TAG, "Couldn't hide the cloud blanket's tiles: $it")
+        }
+    }
     /** Bumped for each painting thread started, so one left over from before stops. */
     private var generation = 0
 
@@ -182,6 +206,7 @@ class CloudBlanketSource {
             return
         }
         this.style = style
+        if (drawnLive) hideLayer()
         synchronized(lock) {
             // A new style asks for its tiles afresh.
             wanted.clear()
@@ -227,6 +252,14 @@ class CloudBlanketSource {
      */
     fun setWalked(hexes: Set<Hex>) {
         synchronized(lock) {
+            // No painting thread to index them (Mapbox's layer never went on), but the
+            // clouds drawn live still need the holes: indexed here instead.
+            if (closed) {
+                inputs = Inputs(inputs.places, WalkedIndex(hexes), inputs.sprites)
+                // Or a painting thread started later would take an older lot over this one.
+                pendingWalked = null
+                return
+            }
             pendingWalked = hexes
             lock.notifyAll()
         }

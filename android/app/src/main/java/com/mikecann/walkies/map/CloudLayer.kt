@@ -83,7 +83,10 @@ private class CloudScene(private val density: Float) {
     private val honeycombFrame: BakeFrame? get() = honeycomb?.frame
     private var reveal: Reveal? = null
 
+    private val liveRect = RectF()
     private var lastTick = -1L
+    /** The world's clouds outside your places, to draw live, or null to leave them to Mapbox. */
+    var blanket: CloudBlanketSource? = null
     /**
      * The clouds drawn live every frame in a few GPU draws, with only the lines baked.
      * Decided on the first frame: only on a hardware canvas, which Compose's always is
@@ -110,6 +113,12 @@ private class CloudScene(private val density: Float) {
         if (!state.measure(width, height, ground)) return
         projection.update(ground, width, height, ground[8], ground[9])
         if (!projection.valid) return
+        // The rest of the world's clouds first, under everything else, as Mapbox drew them.
+        val blanket = blanket
+        if (live && blanket != null) {
+            blanket.drawLive()
+            painter.drawWorld(canvas, projection, sprites, width, height, blanket.places, blanket.walked)
+        }
         val now = System.nanoTime()
         if (tick != lastTick) {
             lastTick = tick
@@ -182,8 +191,15 @@ private class CloudScene(private val density: Float) {
             drawBake(canvas, front, 1.0, false, progress, CloudPainter.Part.Lines)
         }
 
+        // Live, drawn over the clouds every frame: baked, its edges slid across the screen
+        // and it swapped for the next as you dragged, which flickered.
+        if (live && honeycombOpacity > 0) {
+            stats?.let { it.honeycombs++ }
+            liveRect.set(0f, 0f, width, height)
+            painter.drawHoneycomb(canvas, front.field, projection, liveRect, honeycombOpacity)
+        }
         // Only while it shows: it's a whole screen of texture to draw.
-        val honey = honeycomb
+        val honey = if (live) null else honeycomb
         val honeyAlpha = (honeycombOpacity * 255).toInt().coerceIn(0, 255)
         if (honeyAlpha > 0 && honey != null && warp.update(projection, honey.frame)) {
             stats?.let { it.honeycombs++ }
@@ -305,15 +321,16 @@ private class CloudScene(private val density: Float) {
                 // the same drift at least.
                 val frame = if (fits) shown!!.frame else newFrame(width, height, moving)
                 val sameDrift = shown != null && (fits || moving)
-                BakeJob(frame, field, sprites, if (sameDrift) shown!!.clock else clock, honeycomb = true, previous = shown?.field, drawClouds = !live)
+                BakeJob(frame, field, sprites, if (sameDrift) shown!!.clock else clock, honeycomb = !live, previous = shown?.field, drawClouds = !live)
             }
             // Moving: only once the picture's about to run out, roughly, with the drift held.
             moving -> if (fits || sameAsRequested(width, height)) null else
-                BakeJob(newFrame(width, height, true), field, sprites, shown.clock, honeycomb = dragging, previous = field, drawClouds = !live)
+                BakeJob(newFrame(width, height, true), field, sprites, shown.clock, honeycomb = dragging && !live, previous = field, drawClouds = !live)
             // Stopped: sharpen a rough bake, or one from a camera a little off.
-            !fits || shown.frame.draft || !warp.exact(width, height) || honeycombFrame !== shown.frame ->
-                if (sameAsRequested(width, height) && lastJob?.let { !it.frame.draft && it.honeycomb } == true) null else
-                    BakeJob(newFrame(width, height, false), field, sprites, clock, honeycomb = true, previous = field, urgent = true, drawClouds = !live)
+            // Live, the honeycomb's drawn every frame, so there's none to wait for.
+            !fits || shown.frame.draft || !warp.exact(width, height) || (!live && honeycombFrame !== shown.frame) ->
+                if (sameAsRequested(width, height) && lastJob?.let { !it.frame.draft && (live || it.honeycomb) } == true) null else
+                    BakeJob(newFrame(width, height, false), field, sprites, clock, honeycomb = !live, previous = field, urgent = true, drawClouds = !live)
             // The clouds drifting on, under the same streets. Live clouds drift by themselves.
             !live && clock - shown.clock >= DRIFT_PERIOD -> BakeJob(shown.frame, field, sprites, clock, honeycomb = false, previous = field, linesFrom = shown)
             else -> null
@@ -373,6 +390,8 @@ fun CloudLayer(
     cosmetics: MapCosmetics = MapCosmetics.none,
     /** Off while another tab covers the map, so it stops redrawing 30 times a second. */
     animate: Boolean = true,
+    /** The world's clouds outside your places, drawn live here rather than by Mapbox on a hardware canvas (a phone's always is). */
+    blanket: CloudBlanketSource? = null,
 ) {
     val density = LocalDensity.current.density
     val scene = remember(density) { CloudScene(density) }
@@ -399,6 +418,7 @@ fun CloudLayer(
             val now = clock
             if (state.controller == null || sprites == null) return@drawBehind
             drawIntoCanvas { canvas ->
+                scene.blanket = blanket
                 scene.draw(
                     canvas.nativeCanvas, size.width, size.height, state, tick, state.dragging, state.honeycomb(System.nanoTime()),
                     field, sprites, now, route, fresh, you, cosmetics,
