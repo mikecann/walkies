@@ -170,7 +170,7 @@ final class Account {
     }
 
     /// Apple's or Google's web page: in the secure sheet, or in Safari when iOS won't open
-    /// the sheet (Apple's review devices refuse it), then the code back to Convex Auth.
+    /// the sheet, then the code back to Convex Auth.
     private func signInOnTheWeb(with provider: Provider) async throws {
         let returnTo = Backend.site.appending(path: "app/signed-in")
         log.info("\(provider.rawValue, privacy: .public): starting on \(Backend.site.host() ?? "?", privacy: .public)")

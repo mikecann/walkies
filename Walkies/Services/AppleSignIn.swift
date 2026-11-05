@@ -5,8 +5,8 @@ import Synchronization
 import UIKit
 
 /// Sign in with Apple through the iPhone's own sheet (Face ID, no web page), which hands back
-/// an identity token for `auth:signInWithAppleNative` to check. In Poddle, Apple's App Review
-/// devices refused the web sign-in sheet outright, every time, and this doesn't need a browser.
+/// an identity token for `auth:signInWithAppleNative` to check. Mike wants the system sheet in
+/// all his apps rather than Apple's web page.
 final class AppleSignIn: NSObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
     struct Credential: Sendable {
         var identityToken: String
