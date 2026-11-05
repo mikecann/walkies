@@ -196,6 +196,12 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     /// Call when anything `watch` depends on changes.
     func refreshWatch() {
         guard alwaysOnRunning else { return }
+        // Settled again with the walk over (it can end on a timer, with no new fix), so
+        // the next time you head out is a new outing.
+        if askedThisOuting, insideFence, !isWalking() {
+            askedThisOuting = false
+            withdrawWalkQuestion()
+        }
         var watch = watch
         refreshSession(live: watch == .live)
         if watch == .live, backgroundSession == nil {
@@ -227,7 +233,9 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         if !wanted {
             backgroundSession?.invalidate()
             backgroundSession = nil
-        } else if backgroundSession == nil, holdAllDay || isInForeground() {
+        } else if backgroundSession == nil, !hasAlwaysPermission || isInForeground() {
+            // With Always permission, one made in the background (iOS relaunching the app)
+            // wouldn't keep live updates going, and would hide that there's no real one.
             backgroundSession = CLBackgroundActivitySession()
             withdrawWalkQuestion()
         }

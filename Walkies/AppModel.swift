@@ -1668,7 +1668,9 @@ final class AppModel {
         checkSpotOnNextFix = active
         if !active { spotToCheck = nil }
         tracker.refreshWatch()
-        // You might have turned notifications on or off in Settings.
+        // You might have turned notifications on or off in Settings. Turning them off with
+        // Walkies in the background only counts from the next time it's opened, as it
+        // can't take a session until then anyway.
         if active, servicesEnabled {
             Task { [weak self] in
                 await Notifier.refreshAllowed()
