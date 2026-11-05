@@ -709,9 +709,6 @@ final class BakedCloudEngine {
             return
         }
         lastGPUFrame = now
-        // Not if it's drawn with another look's sprites while its own are made, or with the
-        // clouds where they'd drifted to before Reduce Motion went on: those need drawing again.
-        lastGPUScene = gpu.hasSprites(for: inputs.theme) ? (projection, key, inputs.theme, size, inputs.reduceMotion, worldWalked, honeycombShowing) : nil
         var clearing: GPUClouds.Scene.Reveal?
         if let reveal {
             clearing = GPUClouds.Scene.Reveal(
@@ -728,6 +725,10 @@ final class BakedCloudEngine {
             ),
             displayScale: displayScale
         )
+        // Not if it didn't draw (no drawable to draw to), or drew with another look's sprites
+        // while its own are made, or with the clouds where they'd drifted to before Reduce
+        // Motion went on: those need drawing again, even with nothing moving.
+        lastGPUScene = drew && gpu.hasSprites(for: inputs.theme) ? (projection, key, inputs.theme, size, inputs.reduceMotion, worldWalked, honeycombShowing) : nil
         if drew, gpu.lastShowedClouds { gpuDrewClouds = true }
         // MapKit's tiles of the world's clouds only go once the GPU's drawn them.
         if drew, world != nil, let worldClouds = handle?.world, !worldClouds.drawnByGPU { worldClouds.drawnByGPU = true }
