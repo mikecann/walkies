@@ -275,9 +275,11 @@ final class BakedCloudEngine {
     private var lastGPUFrame = -Double.infinity
     /// A GPU frame with these places' clouds has been drawn.
     private var gpuDrewClouds = false
-    /// The clouds of these places are on screen, one way or another.
+    /// The clouds of these places are on screen, one way or another. With the GPU only
+    /// its frame counts: `showingFront` there is just the crisp lines, not clouds.
     private var cloudsOnScreen: Bool {
-        gpuDrewClouds || showingFront || (showingOverview && !overviewRoot.isHidden) || status.needsLive
+        if usesGPU { return gpuDrewClouds }
+        return showingFront || (showingOverview && !overviewRoot.isHidden) || status.needsLive
     }
     /// What the GPU last drew, to skip drawing the same again when nothing moves.
     private var lastGPUScene: (projection: Projection, key: String, theme: String, size: CGSize, still: Bool, world: Int, honeycomb: Bool)?
@@ -718,7 +720,7 @@ final class BakedCloudEngine {
             )
         }
         let world = worldScene()
-        let drewNow = gpu.present(
+        let drew = gpu.present(
             GPUClouds.Scene(
                 field: front?.field ?? inputs.field, key: key, theme: inputs.theme,
                 projection: projection, size: size, clock: clock, reveal: clearing,
@@ -726,7 +728,6 @@ final class BakedCloudEngine {
             ),
             displayScale: displayScale
         )
-        let drew = drewNow
         if drew, !(front?.field ?? inputs.field).puffs.isEmpty || world != nil { gpuDrewClouds = true }
         // MapKit's tiles of the world's clouds only go once the GPU's drawn them.
         if drew, world != nil, let worldClouds = handle?.world, !worldClouds.drawnByGPU { worldClouds.drawnByGPU = true }
