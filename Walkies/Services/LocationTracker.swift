@@ -5,6 +5,13 @@ import os
 /// GPS for walks. Keeps going with the phone locked in your pocket, using
 /// "while using the app" permission plus a background activity session, or
 /// runs all the time in always-on mode.
+///
+/// iOS shows a blue location arrow for as long as the session's held. With Always
+/// permission, always on only holds it while you're out, so the arrow isn't up all day at
+/// home. iOS only hands out a session while the app's on screen, so when you head out with
+/// Walkies in your pocket it asks you to tap a notification, and keeps a coarse watch until
+/// you do (Mike's idea, 5 Nov 2026). Dropping the session without that cut his walk to
+/// Busselton Jetty off at 81 m on 3 Nov: live updates stall in the pocket without one.
 @Observable
 final class LocationTracker: NSObject, CLLocationManagerDelegate {
     nonisolated private static let log = Logger(subsystem: "com.mikecann.walkies", category: "location")
@@ -19,6 +26,12 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored var isOnConfirmedWalk: () -> Bool = { false }
     /// The app's on screen, for the you-are-here dot.
     @ObservationIgnored var isOnScreen: () -> Bool = { false }
+    /// The app's open, on any tab: the only time iOS will start a background session.
+    @ObservationIgnored var isInForeground: () -> Bool = { false }
+    /// Asks you to open the app so the GPS can follow your walk.
+    @ObservationIgnored var askToStartWalk: () -> Void = {}
+    /// You've opened the app or settled again, so the question's out of date.
+    @ObservationIgnored var withdrawWalkQuestion: () -> Void = {}
     /// The motion chip's answers (MotionMonitor).
     @ObservationIgnored var isOnWheels: () -> Bool = { false }
     @ObservationIgnored var isStill: () -> Bool = { false }
@@ -86,6 +99,8 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored private var stationary = false
     @ObservationIgnored private var pausedAt: Coordinate?
     @ObservationIgnored private var lastLocation: Coordinate?
+    /// Asked to start a walk since you last left where you'd settled.
+    @ObservationIgnored private var askedThisOuting = false
 
     /// How hard always on works.
     enum Watch: Equatable {
@@ -118,6 +133,21 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         if insideFence { return walkingForAWhile ? .live : .idle }
         return .live
     }
+
+    /// Live updates stall in the background without a session, so until there's one the
+    /// cheap watches stand in: the coarse one while you're out, nothing at home.
+    nonisolated static func withoutSession(_ watch: Watch, insideFence: Bool) -> Watch {
+        guard watch == .live else { return watch }
+        return insideFence ? .idle : .light
+    }
+
+    /// Only once you've left where you settled, and not from the car. Walking round the
+    /// garden for half a minute isn't worth a notification.
+    nonisolated static func shouldAskToStartWalk(insideFence: Bool, onWheels: Bool, asked: Bool) -> Bool {
+        !insideFence && !onWheels && !asked
+    }
+
+    private var insideFence: Bool { fence.center != nil && !outside }
 
     var watch: Watch {
         Self.watch(confirmedWalk: isOnConfirmedWalk(), onScreen: isOnScreen(), onWheels: isOnWheels(),
@@ -162,7 +192,15 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     /// Call when anything `watch` depends on changes.
     func refreshWatch() {
         guard alwaysOnRunning else { return }
-        let watch = watch
+        var watch = watch
+        refreshSession(live: watch == .live)
+        if watch == .live, backgroundSession == nil {
+            if Self.shouldAskToStartWalk(insideFence: insideFence, onWheels: isOnWheels(), asked: askedThisOuting) {
+                askedThisOuting = true
+                askToStartWalk()
+            }
+            watch = Self.withoutSession(watch, insideFence: insideFence)
+        }
         if watch == .live {
             if liveTask == nil { startLiveUpdates() }
         } else {
@@ -174,6 +212,20 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         if watch != .idle { stopIdle() }
         if watch == .light { startLight() }
         if watch == .idle { startIdle() }
+    }
+
+    /// With Always permission the session's only for live updates while the app's in your
+    /// pocket, held until you've settled again so a coffee stop doesn't need another tap.
+    /// While using the app, always on can't run in the background without one.
+    private func refreshSession(live: Bool) {
+        let wanted = !hasAlwaysPermission || isInForeground() || live || !insideFence || isOnConfirmedWalk()
+        if !wanted {
+            backgroundSession?.invalidate()
+            backgroundSession = nil
+        } else if backgroundSession == nil, !hasAlwaysPermission || isInForeground() {
+            backgroundSession = CLBackgroundActivitySession()
+            withdrawWalkQuestion()
+        }
     }
 
     private func startIdle() {
@@ -236,7 +288,8 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     func startAlwaysOn() {
         guard !alwaysOnRunning else { return }
         alwaysOnRunning = true
-        backgroundSession = CLBackgroundActivitySession()
+        // Left on by a manual walk earlier in this launch, it'd show the arrow all day.
+        manager.showsBackgroundLocationIndicator = false
         manager.startMonitoringSignificantLocationChanges()
         geofence.open()
         refreshWatch()
@@ -305,11 +358,15 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
             // Back where you were (home after a walk, say): inside again, though the fence stays put.
             if fence.settledInPlace, outside {
                 outside = false
+                askedThisOuting = false
+                withdrawWalkQuestion()
                 refreshWatch()
             }
             return
         }
         outside = false
+        askedThisOuting = false
+        withdrawWalkQuestion()
         geofence.place(around: center, radius: StationaryFence.radius)
         refreshWatch()
     }
@@ -321,7 +378,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         outside = true
         stationary = false
         pausedAt = nil
-        guard liveTask != nil else { return refreshWatch() }
+        guard liveTask != nil, backgroundSession != nil else { return refreshWatch() }
         if let lastLive, Date.now.timeIntervalSince(lastLive) < 10 { return }
         startLiveUpdates()
     }
@@ -356,6 +413,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         let status = manager.authorizationStatus
         MainActor.assumeIsolated {
             authorization = status
+            refreshWatch()
             onAuthorizationChange?()
         }
     }

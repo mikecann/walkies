@@ -186,6 +186,11 @@ final class AppModel {
         tracker.isOnConfirmedWalk = { [weak self] in self.map { $0.activeWalk != nil && !$0.autoWalkPending } ?? false }
         tracker.isOnManualWalk = { [weak self] in self?.activeWalk?.isAutomatic == false }
         tracker.isOnScreen = { [weak self] in self.map { $0.inForeground && $0.mapVisible } ?? false }
+        tracker.isInForeground = { [weak self] in self?.inForeground ?? false }
+        if servicesEnabled {
+            tracker.askToStartWalk = { Notifier.askToStartWalk() }
+            tracker.withdrawWalkQuestion = { Notifier.withdrawWalkQuestion() }
+        }
         tracker.isOnWheels = { [weak self] in self?.motion.onWheels ?? false }
         tracker.isStill = { [weak self] in self?.motion.still ?? false }
         tracker.isOnFoot = { [weak self] in self?.motion.onFoot ?? false }

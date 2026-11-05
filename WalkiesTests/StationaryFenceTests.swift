@@ -125,6 +125,20 @@ struct LocationTrackerFenceTests {
         #expect(T.watch(confirmedWalk: false, onScreen: true, onWheels: false, insideFence: true) == .live)
     }
 
+    @Test func withoutASessionTheCheapWatchesStandInAndOnlyAWalkOutGetsAsked() {
+        typealias T = LocationTracker
+        // Live updates stall in the pocket without a session: coarse while out, nothing at home.
+        #expect(T.withoutSession(.live, insideFence: false) == .light)
+        #expect(T.withoutSession(.live, insideFence: true) == .idle)
+        #expect(T.withoutSession(.light, insideFence: false) == .light)
+        #expect(T.withoutSession(.idle, insideFence: true) == .idle)
+        // Out on foot: ask once. Not in the garden, not from the car, not twice.
+        #expect(T.shouldAskToStartWalk(insideFence: false, onWheels: false, asked: false))
+        #expect(!T.shouldAskToStartWalk(insideFence: true, onWheels: false, asked: false))
+        #expect(!T.shouldAskToStartWalk(insideFence: false, onWheels: true, asked: false))
+        #expect(!T.shouldAskToStartWalk(insideFence: false, onWheels: false, asked: true))
+    }
+
     @Test func anAutomaticPauseKeepsALightWatchAndResumesOnMotion() {
         let tracker = LocationTracker(geofence: FakeFence())
         tracker.isOnConfirmedWalk = { true }
