@@ -55,29 +55,27 @@ struct BakedCloudLayer: View {
 }
 
 /// What shows while the clouds are on their way, the moment after opening the app, so
-/// the map isn't just bare. Gone as soon as they're on screen, or after a few seconds
-/// whatever happens.
+/// the map isn't just bare: a soft white haze with a gently pulsing cloud, which thins
+/// away as the clouds come in (on theme, as the whole map starts under cloud anyway).
+/// Gone as soon as they're on screen, or after a few seconds whatever happens.
 struct CloudsLoading: View {
     let shown: Bool
     @State private var gaveUp = false
     @State private var pulse = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    enum Style: String { case fog, pill, spinner }
-    /// `-cloudsLoading fog|pill|spinner` picks one to compare; `-holdCloudsLoading` keeps it up.
-    static let style = LaunchArguments.value(after: "-cloudsLoading").flatMap(Style.init(rawValue:)) ?? .fog
+    /// `-holdCloudsLoading` keeps it up, for looking at it. Never in screenshot mode.
     static let hold = LaunchArguments.has("-holdCloudsLoading")
+    #if DEBUG
+    private static let screenshots = ScreenshotMode.isOn
+    #else
+    private static let screenshots = false
+    #endif
 
     var body: some View {
-        let showing = Self.hold || (!shown && !gaveUp)
+        let showing = Self.hold || (!shown && !gaveUp && !Self.screenshots)
         ZStack {
-            if showing {
-                switch Self.style {
-                case .fog: fog
-                case .pill: pill
-                case .spinner: spinner
-                }
-            }
+            if showing { fog }
         }
         .animation(.easeOut(duration: 0.6), value: showing)
         .task {
@@ -86,7 +84,6 @@ struct CloudsLoading: View {
         }
     }
 
-    /// The map under a soft white haze that thins away as the clouds come in.
     private var fog: some View {
         ZStack {
             LinearGradient(colors: [.white.opacity(0.95), Color(red: 0.93, green: 0.95, blue: 0.99).opacity(0.9)], startPoint: .top, endPoint: .bottom)
@@ -99,28 +96,10 @@ struct CloudsLoading: View {
                     guard !reduceMotion else { return }
                     withAnimation(.easeInOut(duration: 1.1).repeatForever()) { pulse = true }
                 }
+                .accessibilityLabel("Loading the clouds")
         }
         .ignoresSafeArea()
         .transition(.opacity)
-    }
-
-    private var pill: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-            Text("Gathering clouds…").font(.subheadline.weight(.medium))
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: Capsule())
-        .transition(.opacity.combined(with: .scale(scale: 0.9)))
-    }
-
-    private var spinner: some View {
-        ProgressView()
-            .controlSize(.large)
-            .padding(14)
-            .background(.ultraThinMaterial, in: Circle())
-            .transition(.opacity)
     }
 }
 
