@@ -164,6 +164,13 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         stationary = isStill()
         if stationary { pausedAt = pausedAt ?? lastLocation } else { pausedAt = nil }
         noteWalking()
+        // The light watch only sends a fix every 25 m, so a phone that's stopped gets none
+        // and can't settle, which kept the session (and the blue arrow) after a walk on
+        // 5 Nov 2026. Starting it again sends one straight away.
+        if stationary, outside, lightOn {
+            stopLight()
+            startLight()
+        }
         refreshWatch()
     }
 
@@ -196,6 +203,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     /// Call when anything `watch` depends on changes.
     func refreshWatch() {
         guard alwaysOnRunning else { return }
+        defer { traceState() }
         // Settled again with the walk over (it can end on a timer, with no new fix), so
         // the next time you head out is a new outing.
         if askedThisOuting, insideFence, !isWalking() {
@@ -207,6 +215,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         if watch == .live, backgroundSession == nil {
             if Self.shouldAskToStartWalk(leftFence: outside, onFoot: isOnFoot(), onWheels: isOnWheels(), asked: askedThisOuting) {
                 askedThisOuting = true
+                TrackerTrace.write("asked to start a walk")
                 askToStartWalk()
             }
             watch = Self.withoutSession(watch, insideFence: insideFence)
@@ -301,6 +310,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     func startAlwaysOn() {
         guard !alwaysOnRunning else { return }
         alwaysOnRunning = true
+        TrackerTrace.write("always on started")
         // Left on by a manual walk earlier in this launch, it'd show the arrow all day.
         manager.showsBackgroundLocationIndicator = false
         manager.startMonitoringSignificantLocationChanges()
@@ -373,6 +383,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
             // Back where you were (home after a walk, say): inside again, though the fence stays put.
             if fence.settledInPlace, outside {
                 outside = false
+                TrackerTrace.write("settled back where the fence is")
                 if !isWalking() {
                     askedThisOuting = false
                     withdrawWalkQuestion()
@@ -382,6 +393,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
             return
         }
         outside = false
+        TrackerTrace.write("settled somewhere new")
         // A stop partway through a walk isn't a new outing, so it doesn't ask again.
         if !isWalking() {
             askedThisOuting = false
@@ -395,12 +407,26 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     /// but start them afresh unless they're plainly already coming in.
     private func leftFence() {
         guard alwaysOnRunning else { return }
+        TrackerTrace.write("left the fence")
         outside = true
         stationary = false
         pausedAt = nil
         guard liveTask != nil, backgroundSession != nil else { return refreshWatch() }
         if let lastLive, Date.now.timeIntervalSince(lastLive) < 10 { return }
         startLiveUpdates()
+    }
+
+    @ObservationIgnored private var lastTrace = ""
+
+    /// Only when something that decides the session or the question changes.
+    private func traceState() {
+        let line = "watch=\(watch) session=\(backgroundSession != nil) fence=\(fence.center != nil) outside=\(outside) "
+            + "walk=\(isWalking()) confirmed=\(isOnConfirmedWalk()) still=\(stationary) foot=\(isOnFoot()) wheels=\(isOnWheels()) "
+            + "fg=\(isInForeground()) always=\(hasAlwaysPermission) canAsk=\(canAskToStartWalk()) asked=\(askedThisOuting) "
+            + "light=\(lightOn) idle=\(idleOn) live=\(liveTask != nil)"
+        guard line != lastTrace else { return }
+        lastTrace = line
+        TrackerTrace.write(line)
     }
 
     // The manager was made on the main thread, so its callbacks arrive there too.
@@ -440,5 +466,27 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         Self.log.error("Location error: \(error)")
+    }
+}
+
+/// A short log of always on's decisions in Library/Caches, for working out what happened
+/// on a real walk: Release builds don't keep the app's os_log lines, and reading the
+/// phone's own log needs root. Copy it off with `xcrun devicectl device copy from`.
+/// TEMPORARY while the tap-to-start walk question is being tried (Nov 2026).
+enum TrackerTrace {
+    nonisolated static func write(_ text: String) {
+        guard let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+        let url = dir.appending(path: "tracker-trace.log")
+        let line = "\(Date.now.formatted(date: .numeric, time: .standard)) \(text)\n"
+        if let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int, size > 300_000 {
+            try? FileManager.default.removeItem(at: url)
+        }
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(Data(line.utf8))
+            try? handle.close()
+        } else {
+            try? Data(line.utf8).write(to: url)
+        }
     }
 }
