@@ -22,6 +22,16 @@ nonisolated final class GPUClouds: @unchecked Sendable {
         var reveal: Reveal?
         /// The clouds over the rest of the world too, outside your places.
         var world: World?
+        /// The coloured honeycomb over the clouds while you drag, or nil when it's not showing.
+        var honeycomb: Honeycomb?
+
+        struct Honeycomb {
+            var opacity: Double
+            /// The tiles walked on this walk, drawn orange.
+            var walkTiles: Set<CloudField.Tile>
+            /// Tells one lot of `walkTiles` from another without comparing them.
+            var walkKey: Int
+        }
 
         struct World {
             /// Your places' outlines: no world clouds inside them.
@@ -59,6 +69,24 @@ nonisolated final class GPUClouds: @unchecked Sendable {
     private let insideStencil: any MTLDepthStencilState
     private let anywhere: any MTLDepthStencilState
     private let outsideStencil: any MTLDepthStencilState
+    private let hexFill: any MTLRenderPipelineState
+    private let hexStroke: any MTLRenderPipelineState
+    /// Each pixel of a style's outlines drawn once, so where two hexes share an edge it
+    /// isn't twice as strong (as one path stroked in Core Graphics isn't).
+    private let oncePerStyle: any MTLDepthStencilState
+    /// The honeycomb's hexes for the tiles they were made for, by style.
+    private var builtHexes: (key: String, walkKey: Int, styles: [Instances])?
+    private lazy var hexStyles: (any MTLBuffer)? = {
+        var styles: [SIMD4<Float>] = []
+        for style in HoneycombScene.styles {
+            func premultiplied(_ c: SceneColour, _ a: Double) -> SIMD4<Float> {
+                SIMD4(Float(c.red * a), Float(c.green * a), Float(c.blue * a), Float(a))
+            }
+            styles.append(premultiplied(style.fill, style.fillAlpha))
+            styles.append(premultiplied(style.stroke, style.strokeAlpha))
+        }
+        return device.makeBuffer(bytes: styles, length: styles.count * MemoryLayout<SIMD4<Float>>.stride, options: .storageModeShared)
+    }()
     /// The world's puffs for the camera they were laid out for, kept while it's near.
     private var builtWorld: (projection: Projection, size: CGSize, walked: Int, puffs: Instances, holes: Instances, radius: Double)?
     private var stencil: (any MTLTexture)?
@@ -134,9 +162,15 @@ nonisolated final class GPUClouds: @unchecked Sendable {
               let invertStencil = stencilState(.always, .invert),
               let insideStencil = stencilState(.notEqual, .keep),
               let anywhere = stencilState(.always, .keep),
-              let outsideStencil = stencilState(.equal, .keep)
+              let outsideStencil = stencilState(.equal, .keep),
+              let hexFill = pipeline("hexFillVertex", "hexFillFragment", { both($0, .one, .oneMinusSourceAlpha) }),
+              let hexStroke = pipeline("hexStrokeVertex", "hexStrokeFragment", { both($0, .one, .oneMinusSourceAlpha) }),
+              let oncePerStyle = stencilState(.notEqual, .replace)
         else { return nil }
         self.outsideStencil = outsideStencil
+        self.hexFill = hexFill
+        self.hexStroke = hexStroke
+        self.oncePerStyle = oncePerStyle
         self.clipFill = clipFill
         self.invertStencil = invertStencil
         self.insideStencil = insideStencil
@@ -345,7 +379,66 @@ nonisolated final class GPUClouds: @unchecked Sendable {
             draw(e, leaving.puffs, PassData(slice: Sprite.shadows, alpha: 0.35 * leavingFade * detail, radiusScale: leavingScale, offsetX: offset.x, offsetY: offset.y))
         }
         e.endEncoding()
+        if let honeycomb = scene.honeycomb, honeycomb.opacity > 0 {
+            encodeHoneycomb(scene, honeycomb, frame: frame, target: target, stencil: stencil, on: commands)
+        }
         return true
+    }
+
+    /// The honeycomb, drawn live over the clouds every frame rather than baked, so as
+    /// you drag there's no picture of it to run off the edge of or swap for the next.
+    private func encodeHoneycomb(_ scene: Scene, _ honeycomb: Scene.Honeycomb, frame: FrameData, target: any MTLTexture, stencil: any MTLTexture, on commands: any MTLCommandBuffer) {
+        guard let styles = hexStyles else { return }
+        let hexes = hexInstances(scene, honeycomb)
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = target
+        pass.colorAttachments[0].loadAction = .load
+        pass.colorAttachments[0].storeAction = .store
+        pass.stencilAttachment.texture = stencil
+        pass.stencilAttachment.loadAction = .clear
+        pass.stencilAttachment.clearStencil = 0
+        pass.stencilAttachment.storeAction = .dontCare
+        guard let e = commands.makeRenderCommandEncoder(descriptor: pass) else { return }
+        var frame = frame
+        let scale = Double(target.width) / Double(scene.size.width)
+        var uniforms = (Float(honeycomb.opacity), Float(0.6), Float(scale), Float(0))
+        e.setVertexBytes(&frame, length: MemoryLayout<FrameData>.stride, index: 1)
+        e.setVertexBytes(&uniforms, length: MemoryLayout<(Float, Float, Float, Float)>.size, index: 3)
+        e.setFragmentBytes(&uniforms, length: MemoryLayout<(Float, Float, Float, Float)>.size, index: 0)
+        e.setVertexBuffer(styles, offset: 0, index: 2)
+        // As HoneycombScene draws them: each style's fills, then its outlines, in turn.
+        for (index, instances) in hexes.enumerated() where instances.count > 0 {
+            guard let buffer = instances.buffer else { continue }
+            e.setVertexBuffer(buffer, offset: 0, index: 0)
+            e.setRenderPipelineState(hexFill)
+            e.setDepthStencilState(anywhere)
+            e.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 12, instanceCount: instances.count)
+            e.setRenderPipelineState(hexStroke)
+            e.setDepthStencilState(oncePerStyle)
+            e.setStencilReferenceValue(UInt32(index + 1))
+            e.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 36, instanceCount: instances.count)
+        }
+        e.endEncoding()
+    }
+
+    /// The place's hexes by style, made when the tiles or this walk's change.
+    private func hexInstances(_ scene: Scene, _ honeycomb: Scene.Honeycomb) -> [Instances] {
+        if let built = builtHexes, built.key == scene.key, built.walkKey == honeycomb.walkKey { return built.styles }
+        var byStyle = Array(repeating: [HexData](), count: HoneycombScene.styles.count)
+        for outline in scene.field.outlines where outline.corners.count == 6 {
+            let style = honeycomb.walkTiles.contains(outline.tile) ? 4 : HoneycombScene.index(outline.kind)
+            byStyle[style].append(HexData(outline, style: style))
+        }
+        let styles = byStyle.map { list -> Instances in
+            var made = Instances(device: device, [])
+            made.count = list.count
+            if !list.isEmpty {
+                made.buffer = device.makeBuffer(bytes: list, length: list.count * MemoryLayout<HexData>.stride, options: .storageModeShared)
+            }
+            return made
+        }
+        builtHexes = (scene.key, honeycomb.walkKey, styles)
+        return styles
     }
 
     private func draw(_ e: any MTLRenderCommandEncoder, _ instances: Instances, _ pass: PassData) {
@@ -575,6 +668,23 @@ nonisolated private struct PuffData {
     }
 }
 
+/// As `HexTile` in the shader.
+nonisolated private struct HexData {
+    var cell: SIMD2<Float>
+    var offset: SIMD2<Float>
+    var corners: (SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>)
+    var style: Float
+    var pad: Float = 0
+
+    init(_ outline: CloudField.Outline, style: Int) {
+        (cell, offset) = FrameData.split(outline.centre.x, outline.centre.y)
+        let c = outline.centre
+        func rel(_ i: Int) -> SIMD2<Float> { SIMD2(Float(outline.corners[i].x - c.x), Float(outline.corners[i].y - c.y)) }
+        corners = (rel(0), rel(1), rel(2), rel(3), rel(4), rel(5))
+        self.style = Float(style)
+    }
+}
+
 /// As `Pass` in the shader. Which sprites to draw and how.
 nonisolated private struct PassData {
     var slice: Float
@@ -758,6 +868,98 @@ fragment float4 puffFragment(Out in [[stage_in]], texture2d_array<float> sprites
     // Mipmapped, so a small puff reads a small copy of its sprite.
     constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
     return sprites.sample(s, in.uv, uint(in.slice + 0.5)) * in.alpha;
+}
+
+// The honeycomb: each hex an instance, its six corners relative to its centre, filled
+// as four triangles and outlined as six thin quads, antialiased across their width.
+struct HexTile {
+    float2 cell;
+    float2 offset;
+    float2 corners[6];
+    float style;
+    float pad;
+};
+
+struct HexStyle {
+    float4 fill;
+    float4 stroke;
+};
+
+struct HexUniforms {
+    float opacity;
+    // Half the line's width in points, and how many pixels a point is.
+    float halfWidth;
+    float pixelsPerPoint;
+    float pad;
+};
+
+struct HexOut {
+    float4 position [[position]];
+    float4 colour;
+    // Across the line, in points from its middle.
+    float across;
+};
+
+static bool hexCorner(constant HexTile &h, int i, constant Frame &f, thread float2 &out) {
+    float3 v = homogeneous(h.cell, h.offset, h.corners[i], f);
+    if (v.z < near) return false;
+    out = toScreen(v, f);
+    return true;
+}
+
+static float4 toClip(float2 p, constant Frame &f) {
+    return float4(p.x / f.points.x * 2 - 1, 1 - p.y / f.points.y * 2, 0, 1);
+}
+
+vertex HexOut hexFillVertex(uint vid [[vertex_id]], uint iid [[instance_id]],
+                            constant HexTile *hexes [[buffer(0)]], constant Frame &f [[buffer(1)]],
+                            constant HexStyle *styles [[buffer(2)]], constant HexUniforms &u [[buffer(3)]]) {
+    constant HexTile &h = hexes[iid];
+    int t = int(vid) / 3, k = int(vid) % 3;
+    int corner = k == 0 ? 0 : t + k;
+    HexOut out;
+    float2 p;
+    out.across = 0;
+    out.colour = styles[int(h.style)].fill * u.opacity;
+    if (!hexCorner(h, corner, f, p)) { out.position = float4(2, 2, 0, 1); return out; }
+    out.position = toClip(p, f);
+    return out;
+}
+
+vertex HexOut hexStrokeVertex(uint vid [[vertex_id]], uint iid [[instance_id]],
+                              constant HexTile *hexes [[buffer(0)]], constant Frame &f [[buffer(1)]],
+                              constant HexStyle *styles [[buffer(2)]], constant HexUniforms &u [[buffer(3)]]) {
+    constant HexTile &h = hexes[iid];
+    int edge = int(vid) / 6, k = int(vid) % 6;
+    // Two triangles: a and b along the edge, either side of it.
+    const int atB[6] = {0, 1, 0, 0, 1, 1};
+    const float side[6] = {-1, -1, 1, 1, -1, 1};
+    HexOut out;
+    out.colour = styles[int(h.style)].stroke * u.opacity;
+    float2 a, b;
+    if (!hexCorner(h, edge, f, a) || !hexCorner(h, (edge + 1) % 6, f, b) || distance(a, b) < 1e-4) {
+        out.position = float4(2, 2, 0, 1);
+        out.across = 0;
+        return out;
+    }
+    float2 dir = normalize(b - a);
+    float2 normal = float2(-dir.y, dir.x);
+    // Room for a pixel of soft edge either side.
+    float reach = u.halfWidth + 1 / u.pixelsPerPoint;
+    float2 p = (atB[k] ? b : a) + normal * side[k] * reach;
+    out.position = toClip(p, f);
+    out.across = side[k] * reach;
+    return out;
+}
+
+fragment float4 hexFillFragment(HexOut in [[stage_in]]) {
+    return in.colour;
+}
+
+fragment float4 hexStrokeFragment(HexOut in [[stage_in]], constant HexUniforms &u [[buffer(0)]]) {
+    float d = abs(in.across);
+    float coverage = clamp((u.halfWidth - d) * u.pixelsPerPoint + 0.5, 0.0, 1.0);
+    return in.colour * coverage;
 }
 
 struct WholeOut {

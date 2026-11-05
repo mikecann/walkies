@@ -462,7 +462,7 @@ nonisolated struct HoneycombScene {
         paths = byStyle.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
     }
 
-    private static func index(_ kind: CloudField.Outline.Kind) -> Int {
+    static func index(_ kind: CloudField.Outline.Kind) -> Int {
         switch kind {
         case .visited: 0
         case .cleared: 1
