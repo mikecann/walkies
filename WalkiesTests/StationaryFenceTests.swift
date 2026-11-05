@@ -132,11 +132,13 @@ struct LocationTrackerFenceTests {
         #expect(T.withoutSession(.live, insideFence: true) == .idle)
         #expect(T.withoutSession(.light, insideFence: false) == .light)
         #expect(T.withoutSession(.idle, insideFence: true) == .idle)
-        // Out on foot: ask once. Not in the garden, not from the car, not twice.
-        #expect(T.shouldAskToStartWalk(insideFence: false, onWheels: false, asked: false))
-        #expect(!T.shouldAskToStartWalk(insideFence: true, onWheels: false, asked: false))
-        #expect(!T.shouldAskToStartWalk(insideFence: false, onWheels: true, asked: false))
-        #expect(!T.shouldAskToStartWalk(insideFence: false, onWheels: false, asked: true))
+        // Out on foot: ask once. Not in the garden or before the fence has loaded (not left),
+        // not sitting still, not from the car, not twice.
+        #expect(T.shouldAskToStartWalk(leftFence: true, onFoot: true, onWheels: false, asked: false))
+        #expect(!T.shouldAskToStartWalk(leftFence: false, onFoot: true, onWheels: false, asked: false))
+        #expect(!T.shouldAskToStartWalk(leftFence: true, onFoot: false, onWheels: false, asked: false))
+        #expect(!T.shouldAskToStartWalk(leftFence: true, onFoot: true, onWheels: true, asked: false))
+        #expect(!T.shouldAskToStartWalk(leftFence: true, onFoot: true, onWheels: false, asked: true))
     }
 
     @Test func anAutomaticPauseKeepsALightWatchAndResumesOnMotion() {
