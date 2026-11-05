@@ -3,7 +3,8 @@ import { action, internalAction, internalMutation, internalQuery, type ActionCtx
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { currentUserId } from "./users";
-import { boundaryFromNominatim, walkableQuery, waysFromOverpass, type PlaceData } from "./placeData";
+import { fetchJSON } from "./osm";
+import { boundaryFromNominatim } from "./placeData";
 
 // The street cache's format and filtering. Bump it when either changes: rows with an
 // older version are fetched again when someone opens the place, and
@@ -33,11 +34,6 @@ const callsPerMinute = 30;
 // A place that fails to warm is tried again after these waits, then left for
 // places:get to fetch when someone actually opens it.
 const retryDelays = [60_000, 5 * 60_000, 30 * 60_000];
-const userAgent = "Walkies/0.1 (iOS walking app; https://github.com/mikecann/walkies)";
-const endpoints = [
-  "https://overpass-api.de/api/interpreter",
-  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-];
 type Cached = { url: string; fetchedAt: number; version: number };
 type Claim = { kind: "ready"; file: Id<"_storage">; fetchedAt: number }
   | { kind: "busy" } | { kind: "fetch"; lease: number };
@@ -200,7 +196,20 @@ export const claimNext = internalMutation({
       await ctx.db.patch("placeData", row._id, { queuedAt: now + 30_000 });
       return { kind: "skip" };
     }
-    await ctx.db.patch("placeData", row._id, { queuedAt: undefined, fetchingAt: now });
+    // A fetch that's still marked but whose lease ran out never finished: the action
+    // running it died (out of memory, say), so finish() never ran. That counts as a
+    // failed try, so a place that kills its fetch every time is dropped like any other.
+    let attempts = row.attempts ?? 0;
+    if (row.fetchingAt !== undefined) {
+      if (attempts >= retryDelays.length) {
+        await ctx.db.patch("placeData", row._id, { queuedAt: undefined, attempts: undefined, fetchingAt: undefined });
+        return { kind: "skip" };
+      }
+      attempts++;
+    }
+    // It stays on the queue for a lease, so it's tried again if this worker dies too.
+    // finish() takes it off, or puts it back for a retry.
+    await ctx.db.patch("placeData", row._id, { queuedAt: now + leaseDuration, fetchingAt: now, attempts });
     return { kind: "fetch", osmId: row.osmId, lease: now };
   },
 });
@@ -215,6 +224,18 @@ export const drain = internalAction({
       try { await fetchPlace(ctx, next.osmId, next.lease, workerOverpassWait); } catch { /* retried later */ }
     }
     await ctx.scheduler.runAfter(next.kind === "wait" ? next.ms : requestSpacing, internal.places.drain, {});
+    return null;
+  },
+});
+
+/** Starts the worker again if it died with places still queued (crons.ts). The queue
+ * only starts it when something's enqueued, so otherwise it would wait for a new list. */
+export const resumeWorker = internalMutation({
+  args: {}, returns: v.null(),
+  handler: async (ctx) => {
+    const queued = await ctx.db.query("placeData").withIndex("by_queued", (q) => q.gte("queuedAt", 0)).first();
+    // startWorker leaves a worker alone while its heartbeat is inside the lease.
+    if (queued) await startWorker(ctx);
     return null;
   },
 });
@@ -294,18 +315,6 @@ export const finish = internalMutation({
   },
 });
 
-async function fetchJSON(url: string, timeout: number, init?: RequestInit): Promise<unknown> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
-  try {
-    const response = await fetch(url, { ...init, headers: { "User-Agent": userAgent, "Accept-Language": "en", ...init?.headers }, signal: controller.signal });
-    if (!response.ok) throw new Error(`OSM returned ${response.status}`);
-    return await response.json();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 /** A Nominatim request ("lookup", "search"), after waiting its turn in the shared throttle. */
 export async function nominatim(ctx: ActionCtx, endpoint: string, params: Record<string, string>): Promise<unknown> {
   const deadline = Date.now() + 30_000;
@@ -340,17 +349,10 @@ async function fetchPlace(ctx: ActionCtx, osmId: number, lease: number, overpass
   try {
     const params = { osm_ids: `R${osmId}`, format: "jsonv2", polygon_geojson: "1", polygon_threshold: "0.0001" };
     const { name, boundary } = boundaryFromNominatim(await nominatim(ctx, "lookup", params), osmId);
-    const body = new URLSearchParams({ data: walkableQuery(boundary) }).toString();
-    const ways = await withOverpass(ctx, overpassWait, async () => {
-      let lastError: unknown;
-      for (const endpoint of endpoints) {
-        try {
-          return waysFromOverpass(await fetchJSON(endpoint, 135_000, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body }));
-        } catch (error) { lastError = error; }
-      }
-      throw lastError ?? new Error("No street data");
-    });
-    const file = await ctx.storage.store(new Blob([JSON.stringify({ boundary, ways } satisfies PlaceData)], { type: "application/json" }));
+    // Overpass's answer is parsed and stored in Node (placeStreets.ts): it can be far
+    // bigger than this runtime's 64 MB.
+    const file = await withOverpass(ctx, overpassWait, () =>
+      ctx.runAction(internal.placeStreets.download, { boundary: JSON.stringify(boundary) }));
     const fetchedAt = Date.now();
     const saved = await ctx.runMutation(internal.places.finish, { osmId, lease, name, file, fetchedAt });
     if (!saved) throw new Error("Place fetch lease expired");

@@ -11,4 +11,8 @@ crons.interval("resume account deletions", { hours: 1 }, internal.accountDeletio
 // machine's timers (loreMachines.ts).
 crons.interval("start held secrets research", { hours: 1 }, internal.lore.tick, {});
 
+// The street cache's warm queue restarts its own worker whenever a place is queued. This
+// catches one that died mid-queue, which would otherwise leave the rest waiting.
+crons.interval("resume warming streets", { minutes: 15 }, internal.places.resumeWorker, {});
+
 export default crons;
