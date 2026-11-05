@@ -32,6 +32,9 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored var askToStartWalk: () -> Void = {}
     /// You've opened the app or settled again, so the question's out of date.
     @ObservationIgnored var withdrawWalkQuestion: () -> Void = {}
+    /// Notifications are allowed and the motion chip can say you're on foot. Without
+    /// both the question never arrives, so the session's held all day as before.
+    @ObservationIgnored var canAskToStartWalk: () -> Bool = { false }
     /// The motion chip's answers (MotionMonitor).
     @ObservationIgnored var isOnWheels: () -> Bool = { false }
     @ObservationIgnored var isStill: () -> Bool = { false }
@@ -219,11 +222,12 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     /// pocket, held until you've settled again so a coffee stop doesn't need another tap.
     /// While using the app, always on can't run in the background without one.
     private func refreshSession(live: Bool) {
-        let wanted = !hasAlwaysPermission || isInForeground() || live || !insideFence || isOnConfirmedWalk()
+        let holdAllDay = !hasAlwaysPermission || !canAskToStartWalk()
+        let wanted = holdAllDay || isInForeground() || live || !insideFence || isOnConfirmedWalk()
         if !wanted {
             backgroundSession?.invalidate()
             backgroundSession = nil
-        } else if backgroundSession == nil, !hasAlwaysPermission || isInForeground() {
+        } else if backgroundSession == nil, holdAllDay || isInForeground() {
             backgroundSession = CLBackgroundActivitySession()
             withdrawWalkQuestion()
         }
@@ -309,6 +313,8 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         manager.stopMonitoringSignificantLocationChanges()
         backgroundSession?.invalidate()
         backgroundSession = nil
+        askedThisOuting = false
+        withdrawWalkQuestion()
         removeFence()
     }
 
@@ -359,15 +365,20 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
             // Back where you were (home after a walk, say): inside again, though the fence stays put.
             if fence.settledInPlace, outside {
                 outside = false
-                askedThisOuting = false
-                withdrawWalkQuestion()
+                if !isWalking() {
+                    askedThisOuting = false
+                    withdrawWalkQuestion()
+                }
                 refreshWatch()
             }
             return
         }
         outside = false
-        askedThisOuting = false
-        withdrawWalkQuestion()
+        // A stop partway through a walk isn't a new outing, so it doesn't ask again.
+        if !isWalking() {
+            askedThisOuting = false
+            withdrawWalkQuestion()
+        }
         geofence.place(around: center, radius: StationaryFence.radius)
         refreshWatch()
     }
