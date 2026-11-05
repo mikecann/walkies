@@ -84,6 +84,8 @@ private class CloudScene(private val density: Float) {
     private var reveal: Reveal? = null
 
     private var lastTick = -1L
+    /** The world's clouds outside your places, to draw live, or null to leave them to Mapbox. */
+    var blanket: CloudBlanketSource? = null
     /**
      * The clouds drawn live every frame in a few GPU draws, with only the lines baked.
      * Decided on the first frame: only on a hardware canvas, which Compose's always is
@@ -110,6 +112,12 @@ private class CloudScene(private val density: Float) {
         if (!state.measure(width, height, ground)) return
         projection.update(ground, width, height, ground[8], ground[9])
         if (!projection.valid) return
+        // The rest of the world's clouds first, under everything else, as Mapbox drew them.
+        val blanket = blanket
+        if (live && blanket != null) {
+            blanket.drawLive()
+            painter.drawWorld(canvas, projection, sprites, width, height, blanket.places, blanket.walked)
+        }
         val now = System.nanoTime()
         if (tick != lastTick) {
             lastTick = tick
@@ -373,6 +381,8 @@ fun CloudLayer(
     cosmetics: MapCosmetics = MapCosmetics.none,
     /** Off while another tab covers the map, so it stops redrawing 30 times a second. */
     animate: Boolean = true,
+    /** The world's clouds outside your places, drawn live here rather than by Mapbox. */
+    blanket: CloudBlanketSource? = null,
 ) {
     val density = LocalDensity.current.density
     val scene = remember(density) { CloudScene(density) }
@@ -399,6 +409,7 @@ fun CloudLayer(
             val now = clock
             if (state.controller == null || sprites == null) return@drawBehind
             drawIntoCanvas { canvas ->
+                scene.blanket = blanket
                 scene.draw(
                     canvas.nativeCanvas, size.width, size.height, state, tick, state.dragging, state.honeycomb(System.nanoTime()),
                     field, sprites, now, route, fresh, you, cosmetics,

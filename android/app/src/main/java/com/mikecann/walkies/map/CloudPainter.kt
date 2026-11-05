@@ -92,6 +92,63 @@ class CloudPainter(private val density: Float) {
     }
 
     fun close() = batch.close()
+
+    private val worldTiles = WorldCloudTiles()
+    private val worldClip = Path().apply { fillType = Path.FillType.EVEN_ODD }
+
+    /**
+     * The clouds over the rest of the world, live, outside your places: what Mapbox
+     * drew from tiles before (CloudBlanketSource). Bases then tops, as its tiles were
+     * painted, with your places cut out and a soft hole over every walked hex. Under
+     * everything else on the layer, as Mapbox's layer was under it.
+     */
+    fun drawWorld(canvas: Canvas, projection: Projection, sprites: CloudSprites, width: Float, height: Float, places: BlanketPlaces, walked: WalkedIndex) {
+        val t0 = System.nanoTime()
+        dbgDrawn = 0
+        worldTiles.update(projection, width, height, density)
+        val t1 = System.nanoTime()
+        val puffs = worldTiles.puffs
+        if (puffs.isEmpty()) return
+        canvas.save()
+        if (places.places.isNotEmpty()) {
+            worldClip.rewind()
+            for (place in places.places) {
+                for (ring in place.rings) {
+                    projection.polygon(ring) { x, y, first -> if (first) worldClip.moveTo(x, y) else worldClip.lineTo(x, y) }
+                    worldClip.close()
+                }
+            }
+            canvas.clipOutPath(worldClip)
+        }
+        val saved = canvas.saveLayer(0f, 0f, width, height, null)
+        bitmapPaint.alpha = 255
+        for (layer in 0 until 2) {
+            for (puff in puffs) {
+                if (!capped(projection, puff.x, puff.y, puff.radius)) continue
+                if (cr < -width * 0.2f || cl > width * 1.2f || cb < -height * 0.2f || ct > height * 1.2f) continue
+                rect.set(cl, ct, cr, cb)
+                if (layer == 1) dbgDrawn++
+                if (layer == 0) stamp(canvas, true, sprites, SpriteBatch.BASES + puff.variant, sprites.bases[puff.variant], bitmapPaint)
+                else stamp(canvas, true, sprites, SpriteBatch.TOPS + puff.variant, sprites.tops[puff.variant], bitmapPaint)
+            }
+        }
+        val area = worldTiles.area
+        val r = CloudBlanket.clearingRadius
+        walked.forEach(area[0], area[1], area[2], area[3]) { x, y ->
+            if (capped(projection, x, y, r) && cr - cl >= BlanketTilePainter.MIN_HOLE * 2 &&
+                cr >= 0 && cl <= width && cb >= 0 && ct <= height
+            ) {
+                rect.set(cl, ct, cr, cb)
+                stamp(canvas, true, sprites, SpriteBatch.ERASER, sprites.eraser, eraserPaint)
+            }
+        }
+        batch.flush(canvas)
+        canvas.restoreToCount(saved)
+        canvas.restore()
+        if (++dbgFrames % 30 == 0) android.util.Log.d("WorldDbg", "drawn=$dbgDrawn first=${puffs.firstOrNull()?.let { projection.point(it.x, it.y); "${projection.x},${projection.y} r=${it.radius}" }} places=${places.places.size} puffs=${puffs.size} tiles=${worldTiles.tileCount} keys=${worldTiles.tileKeys} layout=${(t1 - t0) / 1000}us draw=${(System.nanoTime() - t1) / 1000}us")
+    }
+    private var dbgFrames = 0
+    private var dbgDrawn = 0
     private val path = Path()
     private val clip = Path()
     private val honeycombPaths = Array(5) { Path() }

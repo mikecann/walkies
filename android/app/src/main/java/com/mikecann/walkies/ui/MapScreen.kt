@@ -274,7 +274,7 @@ fun MapScreen(
             } else {
                 StandInMap(state, onTap = {}, onReady = { mapReady = true })
             }
-            CloudLayer(field, state, sprites, route, freshOutlines, you, cosmetics = cosmetics, animate = active)
+            CloudLayer(field, state, sprites, route, freshOutlines, you, cosmetics = cosmetics, animate = active, blanket = blanket)
             StickerPinLayer(pins, state, onPick = onOpenSecret)
         }
 
