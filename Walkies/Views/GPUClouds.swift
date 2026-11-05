@@ -921,7 +921,12 @@ vertex HexOut hexFillVertex(uint vid [[vertex_id]], uint iid [[instance_id]],
     float2 p;
     out.across = 0;
     out.colour = styles[int(h.style)].fill * u.opacity;
-    if (!hexCorner(h, corner, f, p)) { out.position = float4(2, 2, 0, 1); return out; }
+    // A hex partly behind the camera is skipped whole: one corner moved off on its own
+    // would stretch a triangle across the screen.
+    for (int i = 0; i < 6; i++) {
+        if (homogeneous(h.cell, h.offset, h.corners[i], f).z < near) { out.position = float4(2, 2, 0, 1); return out; }
+    }
+    hexCorner(h, corner, f, p);
     out.position = toClip(p, f);
     return out;
 }
