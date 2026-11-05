@@ -390,7 +390,7 @@ fun CloudLayer(
     cosmetics: MapCosmetics = MapCosmetics.none,
     /** Off while another tab covers the map, so it stops redrawing 30 times a second. */
     animate: Boolean = true,
-    /** The world's clouds outside your places, drawn live here rather than by Mapbox. */
+    /** The world's clouds outside your places, drawn live here rather than by Mapbox on a hardware canvas (a phone's always is). */
     blanket: CloudBlanketSource? = null,
 ) {
     val density = LocalDensity.current.density

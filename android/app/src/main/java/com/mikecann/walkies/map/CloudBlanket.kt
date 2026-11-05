@@ -188,7 +188,7 @@ class WalkedHexes {
  * tile can find the ones under it without looking at them all.
  */
 class WalkedIndex(val hexes: Set<Hex>) {
-    private val buckets = HashMap<Long, DoubleArray>()
+    @PublishedApi internal val buckets = HashMap<Long, DoubleArray>()
 
     init {
         val lists = HashMap<Long, ArrayList<Double>>()
@@ -200,8 +200,8 @@ class WalkedIndex(val hexes: Set<Hex>) {
         for ((k, list) in lists) buckets[k] = list.toDoubleArray()
     }
 
-    /** Calls [action] with the centre of each walked hex in the box. */
-    fun forEach(x0: Double, y0: Double, x1: Double, y1: Double, action: (Double, Double) -> Unit) {
+    /** Calls [action] with the centre of each walked hex in the box. Inline, so drawing it each frame allocates nothing. */
+    inline fun forEach(x0: Double, y0: Double, x1: Double, y1: Double, action: (Double, Double) -> Unit) {
         forEachBucket(x0, y0, x1, y1) { centres ->
             var i = 0
             while (i < centres.size) {
@@ -214,7 +214,7 @@ class WalkedIndex(val hexes: Set<Hex>) {
     }
 
     /** The buckets the box could have hexes in: just those it overlaps, or all of them for a box bigger than that. */
-    private inline fun forEachBucket(x0: Double, y0: Double, x1: Double, y1: Double, action: (DoubleArray) -> Unit) {
+    @PublishedApi internal inline fun forEachBucket(x0: Double, y0: Double, x1: Double, y1: Double, action: (DoubleArray) -> Unit) {
         val bx0 = cell(x0)
         val bx1 = cell(x1)
         val by0 = cell(y0)
@@ -227,11 +227,11 @@ class WalkedIndex(val hexes: Set<Hex>) {
         for (bx in bx0..bx1) for (by in by0..by1) buckets[key(bx, by)]?.let(action)
     }
 
-    private fun cell(v: Double): Int = floor(v / BUCKET).toInt()
+    @PublishedApi internal fun cell(v: Double): Int = floor(v / BUCKET).toInt()
 
-    private fun key(bx: Int, by: Int): Long = (bx.toLong() shl 32) or (by.toLong() and 0xFFFFFFFFL)
+    @PublishedApi internal fun key(bx: Int, by: Int): Long = (bx.toLong() shl 32) or (by.toLong() and 0xFFFFFFFFL)
 
-    private companion object {
+    @PublishedApi internal companion object {
         val BUCKET = CloudBlanket.hexSize(0) * 64
     }
 }

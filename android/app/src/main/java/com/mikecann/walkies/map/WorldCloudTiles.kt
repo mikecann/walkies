@@ -24,7 +24,7 @@ class WorldCloudTiles {
     val area = DoubleArray(4)
 
     private val cache = object : LinkedHashMap<Long, List<CloudBlanket.Puff>>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, List<CloudBlanket.Puff>>?) = size > 96
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, List<CloudBlanket.Puff>>?) = size > MAX_TILES * 2
     }
     private val tiles = ArrayList<Long>()
     private var lastTiles: List<Long> = emptyList()
@@ -149,7 +149,7 @@ class WorldCloudTiles {
         /** How many zooms coarser than the middle of the screen a tile can be. */
         const val COARSER = 3
         /** Tiles looked at before choosing, as a safety net. */
-        const val MAX_CANDIDATES = 400
+        const val MAX_CANDIDATES = 2000
         /** Closest a tile's puffs get on screen, in dp. */
         const val MIN_SPACING = 18f
         private val SQRT3 = kotlin.math.sqrt(3.0)

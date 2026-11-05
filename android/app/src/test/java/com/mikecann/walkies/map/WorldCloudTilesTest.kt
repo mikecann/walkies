@@ -29,7 +29,13 @@ class WorldCloudTilesTest {
             val v = height * (from + (to - from) * j / 10f)
             total++
             if (tiles.puffs.any { puff ->
-                    p.ellipse(puff.x, puff.y, puff.radius) && u in (p.ex - p.rx)..(p.ex + p.rx) && v in (p.ey - p.ry)..(p.ey + p.ry)
+                    p.ellipse(puff.x, puff.y, puff.radius) && run {
+                        // Inside the ellipse, not just its box. The sprite's soft edge is
+                        // about two thirds of the way out, so only that far counts.
+                        val dx = (u - p.ex) / (p.rx * 0.66f)
+                        val dy = (v - p.ey) / (p.ry * 0.66f)
+                        dx * dx + dy * dy <= 1
+                    }
                 }) hit++
         }
         return hit.toDouble() / total

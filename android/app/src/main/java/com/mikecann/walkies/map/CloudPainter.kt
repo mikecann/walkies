@@ -95,6 +95,8 @@ class CloudPainter(private val density: Float) {
 
     private val worldTiles = WorldCloudTiles()
     private val worldClip = Path().apply { fillType = Path.FillType.EVEN_ODD }
+    private var worldRects = FloatArray(0)
+    private var worldShown = IntArray(0)
 
     /**
      * The clouds over the rest of the world, live, outside your places: what Mapbox
@@ -107,30 +109,42 @@ class CloudPainter(private val density: Float) {
         val puffs = worldTiles.puffs
         if (puffs.isEmpty()) return
         canvas.save()
-        if (places.places.isNotEmpty()) {
+        // Each place cut out on its own, its rings even-odd for the holes in it: all in one
+        // even-odd path, two places overlapping would cancel and leave clouds there.
+        for (place in places.places) {
             worldClip.rewind()
-            for (place in places.places) {
-                for (ring in place.rings) {
-                    projection.polygon(ring) { x, y, first -> if (first) worldClip.moveTo(x, y) else worldClip.lineTo(x, y) }
-                    worldClip.close()
-                }
+            for (ring in place.rings) {
+                projection.polygon(ring) { x, y, first -> if (first) worldClip.moveTo(x, y) else worldClip.lineTo(x, y) }
+                worldClip.close()
             }
-            canvas.clipOutPath(worldClip)
+            if (!worldClip.isEmpty) canvas.clipOutPath(worldClip)
         }
         val saved = canvas.saveLayer(0f, 0f, width, height, null)
         bitmapPaint.alpha = 255
+        // Where each puff is, worked out once for both passes.
+        if (worldRects.size < puffs.size * 4) worldRects = FloatArray(puffs.size * 4)
+        var n = 0
+        for (i in puffs.indices) {
+            val puff = puffs[i]
+            if (!capped(projection, puff.x, puff.y, puff.radius)) continue
+            if (cr < -width * 0.2f || cl > width * 1.2f || cb < -height * 0.2f || ct > height * 1.2f) continue
+            if (n == worldShown.size) worldShown = worldShown.copyOf(max(64, n * 2))
+            worldShown[n] = i
+            worldRects[n * 4] = cl; worldRects[n * 4 + 1] = ct; worldRects[n * 4 + 2] = cr; worldRects[n * 4 + 3] = cb
+            n++
+        }
         for (layer in 0 until 2) {
-            for (puff in puffs) {
-                if (!capped(projection, puff.x, puff.y, puff.radius)) continue
-                if (cr < -width * 0.2f || cl > width * 1.2f || cb < -height * 0.2f || ct > height * 1.2f) continue
-                rect.set(cl, ct, cr, cb)
-                if (layer == 0) stamp(canvas, true, sprites, SpriteBatch.BASES + puff.variant, sprites.bases[puff.variant], bitmapPaint)
-                else stamp(canvas, true, sprites, SpriteBatch.TOPS + puff.variant, sprites.tops[puff.variant], bitmapPaint)
+            for (k in 0 until n) {
+                val variant = puffs[worldShown[k]].variant
+                rect.set(worldRects[k * 4], worldRects[k * 4 + 1], worldRects[k * 4 + 2], worldRects[k * 4 + 3])
+                if (layer == 0) stamp(canvas, true, sprites, SpriteBatch.BASES + variant, sprites.bases[variant], bitmapPaint)
+                else stamp(canvas, true, sprites, SpriteBatch.TOPS + variant, sprites.tops[variant], bitmapPaint)
             }
         }
         val area = worldTiles.area
         val r = CloudBlanket.clearingRadius
-        walked.forEach(area[0], area[1], area[2], area[3]) { x, y ->
+        // Padded by a hole's size, for the ones just outside the tiles that reach in.
+        walked.forEach(area[0] - r, area[1] - r, area[2] + r, area[3] + r) { x, y ->
             if (capped(projection, x, y, r) && cr - cl >= BlanketTilePainter.MIN_HOLE * 2 &&
                 cr >= 0 && cl <= width && cb >= 0 && ct <= height
             ) {

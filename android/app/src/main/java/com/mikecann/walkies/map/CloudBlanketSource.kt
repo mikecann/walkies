@@ -173,7 +173,10 @@ class CloudBlanketSource {
 
     private fun hideLayer() {
         val style = style ?: return
-        if (style.styleLayerExists(LAYER)) style.setStyleLayerProperty(LAYER, "visibility", com.mapbox.bindgen.Value.valueOf("none"))
+        if (!style.styleLayerExists(LAYER)) return
+        style.setStyleLayerProperty(LAYER, "visibility", com.mapbox.bindgen.Value.valueOf("none")).error?.let {
+            Log.w(TAG, "Couldn't hide the cloud blanket's tiles: $it")
+        }
     }
     /** Bumped for each painting thread started, so one left over from before stops. */
     private var generation = 0
@@ -249,6 +252,12 @@ class CloudBlanketSource {
      */
     fun setWalked(hexes: Set<Hex>) {
         synchronized(lock) {
+            // No painting thread to index them (Mapbox's layer never went on), but the
+            // clouds drawn live still need the holes: indexed here instead.
+            if (closed) {
+                inputs = Inputs(inputs.places, WalkedIndex(hexes), inputs.sprites)
+                return
+            }
             pendingWalked = hexes
             lock.notifyAll()
         }
