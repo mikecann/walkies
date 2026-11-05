@@ -256,6 +256,8 @@ class CloudBlanketSource {
             // clouds drawn live still need the holes: indexed here instead.
             if (closed) {
                 inputs = Inputs(inputs.places, WalkedIndex(hexes), inputs.sprites)
+                // Or a painting thread started later would take an older lot over this one.
+                pendingWalked = null
                 return
             }
             pendingWalked = hexes

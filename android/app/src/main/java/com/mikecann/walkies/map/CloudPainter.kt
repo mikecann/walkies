@@ -111,7 +111,11 @@ class CloudPainter(private val density: Float) {
         canvas.save()
         // Each place cut out on its own, its rings even-odd for the holes in it: all in one
         // even-odd path, two places overlapping would cancel and leave clouds there.
+        val area = worldTiles.area
         for (place in places.places) {
+            // Nowhere near the clouds being drawn: nothing to cut.
+            val b = place.box
+            if (b[2] < area[0] || b[0] > area[2] || b[3] < area[1] || b[1] > area[3]) continue
             worldClip.rewind()
             for (ring in place.rings) {
                 projection.polygon(ring) { x, y, first -> if (first) worldClip.moveTo(x, y) else worldClip.lineTo(x, y) }
@@ -141,7 +145,6 @@ class CloudPainter(private val density: Float) {
                 else stamp(canvas, true, sprites, SpriteBatch.TOPS + variant, sprites.tops[variant], bitmapPaint)
             }
         }
-        val area = worldTiles.area
         val r = CloudBlanket.clearingRadius
         // Padded by a hole's size, for the ones just outside the tiles that reach in.
         walked.forEach(area[0] - r, area[1] - r, area[2] + r, area[3] + r) { x, y ->
