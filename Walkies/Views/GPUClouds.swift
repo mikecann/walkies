@@ -105,6 +105,10 @@ nonisolated final class GPUClouds: @unchecked Sendable {
     private var sprites: [String: any MTLTexture] = [:]
     private var preparing: Set<String> = []
     private let spriteLock = NSLock()
+    /// The last frame had clouds you could actually see: the world's, or your places'
+    /// puffs at least a few points across (they're all drawn however far out you are, so
+    /// with the map still on its first view of the whole country they're just specks).
+    private(set) var lastShowedClouds = false
     private var built: (key: String, puffs: Instances, clearings: Instances, mist: Instances, radius: Double?, freshKey: Double?)?
     private var builtReveal: (started: Double, leaving: Instances, mist: Instances)?
     private var mistTarget: (any MTLTexture)?
@@ -322,12 +326,14 @@ nonisolated final class GPUClouds: @unchecked Sendable {
         let radius = data.radius ?? (reveal?.leaving.first?.radius ?? 0)
         let puffSize = radius * 2 * centreScale
         let detail = Float(min(1, max(0, (puffSize - CloudScene.simplePuff) / CloudScene.simplePuff)))
+        lastShowedClouds = data.puffs.count > 0 && puffSize >= CloudScene.simplePuff
         let leavingScale = Float(1 + 0.5 * ease)
         let leavingFade = Float(1 - ease)
 
         // The world's clouds first, outside your places, under your places' own: drawn
         // as MapKit's tiles of them were, without drifting.
         let world = scene.world.map { worldInstances(scene, $0) }
+        if let world, world.puffs.count > 0 { lastShowedClouds = true }
         let placesFilled = world != nil && fillRings(e, scene.world?.rings ?? [], scene: scene)
         if let world {
             e.setVertexBytes(&frame, length: MemoryLayout<FrameData>.stride, index: 1)
