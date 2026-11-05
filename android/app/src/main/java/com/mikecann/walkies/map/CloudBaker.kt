@@ -24,6 +24,8 @@ class BakeJob(
      * but the streets don't, so a drift bake only has the clouds to do.
      */
     val linesFrom: CloudBake? = null,
+    /** False when the clouds are drawn live on the GPU and only the lines are wanted. */
+    val drawClouds: Boolean = true,
 )
 
 /** A honeycomb, for [frame]. Comes after its bake, as the clouds shouldn't wait for it. */
@@ -39,7 +41,8 @@ class CloudBake(
     val field: CloudField,
     val sprites: CloudSprites,
     val clock: Double,
-    val clouds: Bitmap,
+    /** Null when the clouds are drawn live, and only the lines were baked. */
+    val clouds: Bitmap?,
     /** The streets, grid and outline, cut by the same holes. */
     val lines: Bitmap,
     /** Whether [lines] is this bake's to free, rather than still the bake's it came from. */
@@ -66,7 +69,7 @@ class CloudBake(
      * frames already recorded keep their own hold on them, so that's safe.
      */
     fun recycle() {
-        clouds.recycle()
+        clouds?.recycle()
         if (ownsLines) lines.recycle()
     }
 }
@@ -186,7 +189,7 @@ class CloudBaker(density: Float) {
             leavingMist = CloudField.clearedMist(old, job.field)
         }
 
-        val clouds = render(frame.cloudPixelWidth, frame.cloudPixelHeight, frame, scratch = 0) { c ->
+        val clouds = if (!job.drawClouds) null else render(frame.cloudPixelWidth, frame.cloudPixelHeight, frame, scratch = 0) { c ->
             painter.drawClouds(c, job.field, emptyList(), null, 1.0, projection, job.sprites, bounds, job.clock, part = CloudPainter.Part.Clouds)
         }
         val drewClouds = System.nanoTime()
