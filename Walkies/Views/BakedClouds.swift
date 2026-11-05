@@ -222,7 +222,7 @@ final class BakedCloudEngine {
     private var askedForGPU = false
     private var lastGPUFrame = -Double.infinity
     /// What the GPU last drew, to skip drawing the same again when nothing moves.
-    private var lastGPUScene: (projection: Projection, key: String, theme: String, size: CGSize, still: Bool, world: Int)?
+    private var lastGPUScene: (projection: Projection, key: String, theme: String, size: CGSize, still: Bool, world: Int, honeycomb: Bool)?
 
     /// SwiftUI makes a new engine every time the view's rebuilt and keeps only the
     /// first, so the layers are only made once one's used.
@@ -618,15 +618,8 @@ final class BakedCloudEngine {
             cloudRoot.isHidden = true
             showingFront = false
         }
-        // The honeycomb only shows while you drag, so the same: whatever's left of it.
-        let opacity = handle?.honeycomb(at: .now) ?? 0
-        if opacity > 0, let honeycomb, let warp = BakeWarp(now: projection, frame: honeycomb.frame), warp.showsAnywhere(size: size, now: projection) {
-            honeycombRoot.transform = warp.layerTransform
-            honeycombRoot.opacity = Float(opacity)
-            honeycombRoot.isHidden = false
-        } else {
-            honeycombRoot.isHidden = true
-        }
+        // The GPU draws the honeycomb, live (GPUClouds).
+        honeycombRoot.isHidden = true
         return false
     }
 
@@ -648,14 +641,16 @@ final class BakedCloudEngine {
         let key = front?.fieldKey ?? inputs.key
         // With Reduce Motion the clouds don't drift, so a still map needs nothing drawn again.
         let worldWalked = handle?.world?.walkedRevision ?? 0
-        if inputs.reduceMotion, reveal == nil, let last = lastGPUScene, last.still, last.key == key, last.theme == inputs.theme, last.world == worldWalked,
+        let honeycombShowing = (handle?.honeycomb(at: .now) ?? 0) > 0
+        // Not while the honeycomb shows, nor the frame after it goes, to draw it away.
+        if inputs.reduceMotion, reveal == nil, !honeycombShowing, let last = lastGPUScene, last.still, !last.honeycomb, last.key == key, last.theme == inputs.theme, last.world == worldWalked,
            last.size == size, last.projection.matches(projection, size: size) {
             return
         }
         lastGPUFrame = now
         // Not if it's drawn with another look's sprites while its own are made, or with the
         // clouds where they'd drifted to before Reduce Motion went on: those need drawing again.
-        lastGPUScene = gpu.hasSprites(for: inputs.theme) ? (projection, key, inputs.theme, size, inputs.reduceMotion, worldWalked) : nil
+        lastGPUScene = gpu.hasSprites(for: inputs.theme) ? (projection, key, inputs.theme, size, inputs.reduceMotion, worldWalked, honeycombShowing) : nil
         var clearing: GPUClouds.Scene.Reveal?
         if let reveal {
             clearing = GPUClouds.Scene.Reveal(
@@ -668,12 +663,19 @@ final class BakedCloudEngine {
             GPUClouds.Scene(
                 field: front?.field ?? inputs.field, key: key, theme: inputs.theme,
                 projection: projection, size: size, clock: clock, reveal: clearing,
-                world: world
+                world: world, honeycomb: honeycombScene(inputs)
             ),
             displayScale: displayScale
         )
         // MapKit's tiles of the world's clouds only go once the GPU's drawn them.
         if drew, world != nil, let worldClouds = handle?.world, !worldClouds.drawnByGPU { worldClouds.drawnByGPU = true }
+    }
+
+    /// The honeycomb while you drag and as it fades after.
+    private func honeycombScene(_ inputs: Inputs) -> GPUClouds.Scene.Honeycomb? {
+        let opacity = handle?.honeycomb(at: .now) ?? 0
+        guard opacity > 0 else { return nil }
+        return GPUClouds.Scene.Honeycomb(opacity: opacity, walkTiles: inputs.walkTiles, walkKey: walkKey)
     }
 
     /// The rest of the world's clouds, once MapKit's tiles of them are off.
@@ -828,7 +830,8 @@ final class BakedCloudEngine {
         let shown = front.map { bake in
             BakePolicy.Shown(
                 frame: bake.frame, fieldKey: bake.fieldKey, theme: bake.theme, clock: bake.clock,
-                honeycombCurrent: honeycomb.map { $0.frame.id == bake.frame.id && $0.walkKey == walkKey } ?? false
+                // The GPU draws the honeycomb itself, so there's none to bake.
+                honeycombCurrent: usesGPU || (honeycomb.map { $0.frame.id == bake.frame.id && $0.walkKey == walkKey } ?? false)
             )
         }
         let warp = front.flatMap { BakeWarp(now: projection, frame: $0.frame) }
@@ -860,7 +863,7 @@ final class BakedCloudEngine {
         let job = BakeJob(
             frame: frame, field: inputs.field, fieldKey: inputs.key, theme: inputs.theme,
             clock: request.clock == .shown ? front?.clock ?? clock : clock,
-            honeycomb: request.honeycomb, walkTiles: inputs.walkTiles, walkKey: walkKey,
+            honeycomb: request.honeycomb && !usesGPU, walkTiles: inputs.walkTiles, walkKey: walkKey,
             previous: front?.field, previousKey: front?.fieldKey,
             keptLines: sameLines ? KeptLines(image: front?.lines) : nil,
             drawClouds: !usesGPU
