@@ -44,12 +44,62 @@ struct BakedCloudLayer: View {
             }
             LayerHost(layer: engine.markerHost)
         }
+        .overlay { CloudsLoading(shown: engine.status.cloudsShown) }
         .allowsHitTesting(false)
         .onAppear {
             engine.update(inputs, handle: handle)
             engine.start(handle: handle)
         }
         .onDisappear { engine.stop() }
+    }
+}
+
+/// What shows while the clouds are on their way, the moment after opening the app, so
+/// the map isn't just bare: a soft white haze with a gently pulsing cloud, which thins
+/// away as the clouds come in (on theme, as the whole map starts under cloud anyway).
+/// Gone as soon as they're on screen, or after a few seconds whatever happens.
+struct CloudsLoading: View {
+    let shown: Bool
+    @State private var gaveUp = false
+    @State private var pulse = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// `-holdCloudsLoading` keeps it up, for looking at it. Never in screenshot mode.
+    static let hold = LaunchArguments.has("-holdCloudsLoading")
+    #if DEBUG
+    private static let screenshots = ScreenshotMode.isOn
+    #else
+    private static let screenshots = false
+    #endif
+
+    var body: some View {
+        let showing = Self.hold || (!shown && !gaveUp && !Self.screenshots)
+        ZStack {
+            if showing { fog }
+        }
+        .animation(.easeOut(duration: 0.6), value: showing)
+        .task {
+            try? await Task.sleep(for: .seconds(6))
+            gaveUp = true
+        }
+    }
+
+    private var fog: some View {
+        ZStack {
+            LinearGradient(colors: [.white.opacity(0.95), Color(red: 0.93, green: 0.95, blue: 0.99).opacity(0.9)], startPoint: .top, endPoint: .bottom)
+            Image(systemName: "cloud.fill")
+                .font(.system(size: 44))
+                .foregroundStyle(Color(red: 0.76, green: 0.8, blue: 0.87))
+                .opacity(pulse ? 1 : 0.45)
+                .scaleEffect(pulse ? 1.05 : 0.95)
+                .onAppear {
+                    guard !reduceMotion else { return }
+                    withAnimation(.easeInOut(duration: 1.1).repeatForever()) { pulse = true }
+                }
+                .accessibilityLabel("Loading the clouds")
+        }
+        .ignoresSafeArea()
+        .transition(.opacity)
     }
 }
 
@@ -205,6 +255,8 @@ final class BakedCloudEngine {
     final class Status {
         /// No bake fit to show and the overview too soft here, so the live Canvas stands in.
         var needsLive = false
+        /// The first clouds are on screen, so the loading cover can go.
+        var cloudsShown = false
     }
 
     let status = Status()
@@ -221,6 +273,14 @@ final class BakedCloudEngine {
     private var gpu: GPUClouds?
     private var askedForGPU = false
     private var lastGPUFrame = -Double.infinity
+    /// A GPU frame with clouds big enough to see has been drawn.
+    private var gpuDrewClouds = false
+    /// The clouds of these places are on screen, one way or another. With the GPU only
+    /// its frame counts: `showingFront` there is just the crisp lines, not clouds.
+    private var cloudsOnScreen: Bool {
+        if usesGPU { return gpuDrewClouds }
+        return showingFront || (showingOverview && !overviewRoot.isHidden) || status.needsLive
+    }
     /// What the GPU last drew, to skip drawing the same again when nothing moves.
     private var lastGPUScene: (projection: Projection, key: String, theme: String, size: CGSize, still: Bool, world: Int, honeycomb: Bool)?
 
@@ -469,6 +529,7 @@ final class BakedCloudEngine {
         if showingOverview, overviewFadeEnds == nil { stats.overviewTicks += 1 }
         if stats.firstCloudsAt == nil, usesGPU, stats.gpuEncodeMilliseconds > 0 { stats.firstCloudsAt = now }
         if stats.firstCloudsAt == nil, showingFront || (showingOverview && !overviewRoot.isHidden) { stats.firstCloudsAt = now }
+        if !status.cloudsShown, cloudsOnScreen { status.cloudsShown = true }
 
         // Every frame while anything's moving or fading; otherwise just often enough to
         // notice the drift's due. The map changing wakes it straight away.
@@ -667,6 +728,7 @@ final class BakedCloudEngine {
             ),
             displayScale: displayScale
         )
+        if drew, gpu.lastShowedClouds { gpuDrewClouds = true }
         // MapKit's tiles of the world's clouds only go once the GPU's drawn them.
         if drew, world != nil, let worldClouds = handle?.world, !worldClouds.drawnByGPU { worldClouds.drawnByGPU = true }
     }
