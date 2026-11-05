@@ -253,3 +253,15 @@ test("a worker that died is started again while places are still queued", async 
   await t.mutation(internal.places.resumeWorker, {});
   expect((await worker())?.fetchingAt).toBe(Date.now());
 });
+
+test("a place the old worker dropped mid-fetch goes back on the queue with requeueMissing", async () => {
+  vi.useFakeTimers();
+  const { t } = await signedIn();
+  // What the previous code left when its worker ran out of memory: off the queue, still marked as fetching.
+  await t.run((ctx) => ctx.db.insert("placeData", { osmId: 9, name: "", fetchedAt: 0, version: 2, fetchingAt: Date.now(), attempts: 0 }));
+  vi.setSystemTime(Date.now() + 10 * 60 * 1000);
+  expect(await t.mutation(internal.places.requeueMissing, {})).toEqual({ queued: 1 });
+  expect(await t.mutation(internal.places.claimNext, {})).toMatchObject({ kind: "fetch", osmId: 9 });
+  // The fetch that died counts as one of its tries.
+  expect((await rows(t)).find((r) => r.osmId === 9)?.attempts).toBe(1);
+});
