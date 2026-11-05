@@ -260,6 +260,22 @@ struct CloudBakeTests {
     /// A bake from a camera that's since flown far off isn't shown at all, rather than
     /// warped off the screen or to a speck; one that's only been panned a little shows,
     /// with the overview round it once the screen's past its edge.
+    /// A fast pan runs the middle of the screen off a bake before the next is ready: the
+    /// lines and honeycomb keep showing what's left of it, rather than blinking off.
+    @Test func whatsLeftOfABakeShowsWhileTheMapMoves() throws {
+        let frame = BakeFrame.around(base.projection, size: base.size, displayScale: 3, draft: true)
+        func check(_ camera: TestCamera) -> (shows: Bool, anywhere: Bool) {
+            guard let warp = BakeWarp(now: camera.projection, frame: frame) else { return (false, false) }
+            return (warp.shows(size: camera.size, now: camera.projection, moving: true), warp.showsAnywhere(size: camera.size, now: camera.projection))
+        }
+        #expect(check(base) == (true, true))
+        // Panned until the middle of the screen's off the bake: still some of it on screen.
+        let off = try #require(stride(from: 10.0, to: 3000, by: 10).first { !check(base.pan($0, 0)).shows })
+        #expect(check(base.pan(off, 0)).anywhere)
+        // Right off it, nothing.
+        #expect(!check(base.pan(off * 4, 0)).anywhere)
+    }
+
     @Test func aBakeOnlyShowsWhileItLooksLikeWhatsOnScreen() {
         let frame = BakeFrame.around(base.projection, size: base.size, displayScale: 3, draft: false)
         func check(_ camera: TestCamera) -> (shows: Bool, covers: Bool) {

@@ -592,9 +592,10 @@ final class BakedCloudEngine {
             showingFront = false
             return false
         }
+        // While the map moves, whatever's left of the lines on screen (see `showsAnywhere`).
         let warp = front.flatMap { front -> BakeWarp? in
             guard front.field.places == inputs.field.places, let warp = BakeWarp(now: projection, frame: front.frame),
-                  warp.shows(size: size, now: projection, moving: moving)
+                  moving ? warp.showsAnywhere(size: size, now: projection) : warp.shows(size: size, now: projection)
             else { return nil }
             return warp
         }
@@ -617,8 +618,9 @@ final class BakedCloudEngine {
             cloudRoot.isHidden = true
             showingFront = false
         }
+        // The honeycomb only shows while you drag, so the same: whatever's left of it.
         let opacity = handle?.honeycomb(at: .now) ?? 0
-        if opacity > 0, let honeycomb, let warp = BakeWarp(now: projection, frame: honeycomb.frame), warp.shows(size: size, now: projection) {
+        if opacity > 0, let honeycomb, let warp = BakeWarp(now: projection, frame: honeycomb.frame), warp.showsAnywhere(size: size, now: projection) {
             honeycombRoot.transform = warp.layerTransform
             honeycombRoot.opacity = Float(opacity)
             honeycombRoot.isHidden = false

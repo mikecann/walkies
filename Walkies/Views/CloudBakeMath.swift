@@ -272,6 +272,23 @@ nonisolated struct BakeWarp {
         return looksRight(at: b, stretch: moving ? Self.movingShowable : Self.showable)
     }
 
+    /// Whether any of the bake's on screen now, not too stretched where it is: for the
+    /// thin lines and honeycomb over the GPU's clouds while the map moves. A fast pan
+    /// runs the middle of the screen off a bake before the next one's ready, and hiding
+    /// the whole picture then (as `shows` does) blinked them off and on with every bake;
+    /// what's left of it shows instead, with nothing past its edge.
+    func showsAnywhere(size: CGSize, now: Projection) -> Bool {
+        let width = Double(size.width), height = Double(size.height)
+        let spots: [(Double, Double)] = [(0.5, 0.5), (0, 0), (1, 0), (1, 1), (0, 1), (0.5, 0), (1, 0.5), (0.5, 1), (0, 0.5), (0.25, 0.75), (0.75, 0.75), (0.25, 0.25), (0.75, 0.25)]
+        for (fx, fy) in spots {
+            let screen = CGPoint(x: fx * width, y: fy * height)
+            if now.isFar(screen, far: BakeFrame.far) { continue }
+            guard let b = unmap(screen), frame.rect.contains(b) else { continue }
+            if looksRight(at: b, stretch: Self.movingShowable) { return true }
+        }
+        return false
+    }
+
     /// Whether the bake reaches past every edge of a screen of `size` now (bar sky and
     /// the far distance), so nothing need show under it.
     func covers(size: CGSize, now: Projection) -> Bool {
