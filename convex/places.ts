@@ -222,7 +222,10 @@ export const drain = internalAction({
     if (next.kind === "done") return null;
     if (next.kind === "fetch") {
       // finish() records a failure and queues the retry, so carry on to the next place.
-      try { await fetchPlace(ctx, next.osmId, next.lease, workerOverpassWait); } catch { /* retried later */ }
+      try { await fetchPlace(ctx, next.osmId, next.lease, workerOverpassWait); } catch (error) {
+        // Logged so a place that keeps failing can be found (WALKIES-6 and -7 couldn't say which one).
+        console.warn(`Couldn't warm R${next.osmId}, it'll be retried:`, error instanceof Error ? error.message : error);
+      }
     }
     await ctx.scheduler.runAfter(next.kind === "wait" ? next.ms : requestSpacing, internal.places.drain, {});
     return null;
@@ -362,6 +365,8 @@ async function fetchPlace(ctx: ActionCtx, osmId: number, lease: number, overpass
     return { url, fetchedAt, version };
   } catch (error) {
     await ctx.runMutation(internal.places.finish, { osmId, lease });
+    // Names the relation, so the error in Sentry says which place failed.
+    if (error instanceof Error && !(error instanceof ConvexError)) error.message = `R${osmId}: ${error.message}`;
     throw error;
   }
 }
