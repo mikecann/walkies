@@ -30,7 +30,7 @@
     "@convex-dev/workpool": "^0.4.14",
     "@openrouter/ai-sdk-provider": "^3.1.0",
     "ai": "^7.0.152",
-    "convex": "1.47.0",
+    "convex": "1.49.0",
     "convex-helpers": "^0.1.129",
     "jose": "^6.2.15",
     "zod": "^4.6.7"
