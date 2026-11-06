@@ -127,6 +127,9 @@ export default defineSchema({
     queuedAt: v.optional(v.number()),
     /** Failed warm attempts so far, for backing off. */
     attempts: v.optional(v.number()),
+    /** When the place was found far too big to fetch streets for (a state, a country),
+     * so it isn't looked up again for a while. */
+    tooBigAt: v.optional(v.number()),
   }).index("by_osm", ["osmId"]).index("by_queued", ["queuedAt"]),
 
   // Secrets for new suburbs (lore.ts). One row per suburb that's been researched or is

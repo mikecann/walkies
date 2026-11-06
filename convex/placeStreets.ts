@@ -42,7 +42,8 @@ function overpassFetcher(end: number) {
     let lastError: unknown;
     for (const index of order) {
       const endpoint = overpassEndpoints[index];
-      const timeout = Math.min(requestTimeout, end - Date.now());
+      const left = end - Date.now();
+      const timeout = Math.min(requestTimeout, left);
       if (timeout < 10_000) throw new Error("Ran out of time fetching this place's streets");
       const started = Date.now();
       const where = `${box.south.toFixed(3)},${box.west.toFixed(3)},${box.north.toFixed(3)},${box.east.toFixed(3)} from ${new URL(endpoint).host}`;
@@ -59,7 +60,7 @@ function overpassFetcher(end: number) {
         const gateway = error instanceof OsmError && error.status === 504;
         const aborted = error instanceof Error && error.name === "AbortError";
         // Cut short by the caller's deadline rather than a slow server: say so, don't split (WALKIES-A).
-        if (aborted && timeout < requestTimeout) throw new Error(`Ran out of time fetching this place's streets (${where})`);
+        if (aborted && left <= requestTimeout) throw new Error(`Ran out of time fetching this place's streets (${where})`);
         // Our own timeout firing means Overpass was still working on it after 135 s.
         const slow = aborted;
         const heavy = gateway || slow || error instanceof TooBig;

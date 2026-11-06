@@ -5,7 +5,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { currentUserId } from "./users";
 import { fetchJSON } from "./osm";
 import { boundaryArea } from "./loreChecks";
-import { boundaryFromNominatim } from "./placeData";
+import { boundaryBox, boundaryFromNominatim } from "./placeData";
 
 // The street cache's format and filtering. Bump it when either changes: rows with an
 // older version are fetched again when someone opens the place, and
@@ -40,6 +40,9 @@ const jobBudget = 9 * 60 * 1000;
 // Birmingham is 268; phones have asked for all of Australia (R80500) and Western
 // Australia, which no tiling can fit (WALKIES-6 to -A).
 const maxArea = 1_000 * 1_000_000;
+// And the box around it, which is what Overpass is asked about: islands far apart can
+// add up to a small area in a huge box. Birmingham's box is 520 km².
+const maxBoxArea = 5_000 * 1_000_000;
 // Calls to places:get and places:warm, per user per minute.
 const callsPerMinute = 30;
 // A place that fails to warm is tried again after these waits, then left for
@@ -47,10 +50,14 @@ const callsPerMinute = 30;
 const retryDelays = [60_000, 5 * 60_000, 30 * 60_000];
 type Cached = { url: string; fetchedAt: number; version: number };
 type Claim = { kind: "ready"; file: Id<"_storage">; fetchedAt: number }
-  | { kind: "busy" } | { kind: "fetch"; lease: number };
+  | { kind: "busy" } | { kind: "fetch"; lease: number } | { kind: "tooBig"; name: string };
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const fresh = (row: Doc<"placeData">) => row.file !== undefined && row.version === version && Date.now() - row.fetchedAt < maxAge;
+// Found far too big, recently enough not to look it up again. Boundaries rarely change,
+// so it's checked again after as long as a cached file lasts.
+const refused = (row: Doc<"placeData">) => row.tooBigAt !== undefined && Date.now() - row.tooBigAt < maxAge;
+const tooBigMessage = (name: string) => `${name || "This place"} is too big to fetch streets for`;
 function validateId(osmId: number) {
   if (!Number.isSafeInteger(osmId) || osmId <= 0) throw new ConvexError("Invalid OSM relation id");
 }
@@ -62,6 +69,7 @@ async function claimPlace(ctx: MutationCtx, osmId: number, startAt = Date.now())
   validateId(osmId);
   const row = await rowFor(ctx, osmId);
   if (row && fresh(row)) return { kind: "ready", file: row.file!, fetchedAt: row.fetchedAt };
+  if (row && refused(row)) return { kind: "tooBig", name: row.name };
   if (row?.fetchingAt !== undefined && Date.now() - row.fetchingAt < leaseDuration) return { kind: "busy" };
   if (row) await ctx.db.patch("placeData", row._id, { fetchingAt: startAt });
   else await ctx.db.insert("placeData", { osmId, name: "", fetchedAt: 0, version, fetchingAt: startAt });
@@ -113,6 +121,7 @@ export const get = action({
         if (!url) throw new ConvexError("Place data file is missing");
         return { url, fetchedAt: state.fetchedAt, version };
       }
+      if (state.kind === "tooBig") throw new ConvexError(tooBigMessage(state.name));
       if (state.kind === "fetch") return await fetchPlace(ctx, osmId, state.lease, overpassWait, deadline);
       if (attempt < 20) await sleep(1000);
     }
@@ -127,6 +136,7 @@ export async function cachedFile(ctx: ActionCtx, osmId: number): Promise<Id<"_st
   for (let attempt = 0; attempt <= 90; attempt++) {
     const state = await ctx.runMutation(internal.places.claim, { osmId });
     if (state.kind === "ready") return state.file;
+    if (state.kind === "tooBig") throw new Error(tooBigMessage(state.name));
     if (state.kind === "fetch") await fetchPlace(ctx, osmId, state.lease, workerOverpassWait, Math.min(deadline, state.lease + jobBudget));
     else await sleep(2000);
   }
@@ -145,7 +155,7 @@ export const enqueue = internalMutation({
     for (const osmId of new Set(osmIds)) {
       validateId(osmId);
       const row = await rowFor(ctx, osmId);
-      if (row && (fresh(row) || row.queuedAt !== undefined)) continue;
+      if (row && (fresh(row) || refused(row) || row.queuedAt !== undefined)) continue;
       if (row) await ctx.db.patch("placeData", row._id, { queuedAt: now, attempts: 0 });
       else await ctx.db.insert("placeData", { osmId, name: "", fetchedAt: 0, version, queuedAt: now, attempts: 0 });
     }
@@ -163,7 +173,7 @@ export const requeueMissing = internalMutation({
     const now = Date.now();
     let queued = 0;
     for (const row of await ctx.db.query("placeData").collect()) {
-      if (row.osmId <= 0 || row.queuedAt !== undefined || (row.file !== undefined && row.version === version)) continue;
+      if (row.osmId <= 0 || row.queuedAt !== undefined || refused(row) || (row.file !== undefined && row.version === version)) continue;
       await ctx.db.patch("placeData", row._id, { queuedAt: now, attempts: 0 });
       queued++;
     }
@@ -200,7 +210,7 @@ export const claimNext = internalMutation({
       return { kind: "wait", ms: row.queuedAt! - now };
     }
     if (worker) await ctx.db.patch("placeData", worker._id, { fetchingAt: now });
-    if (fresh(row)) {
+    if (fresh(row) || refused(row)) {
       await ctx.db.patch("placeData", row._id, { queuedAt: undefined, attempts: undefined });
       return { kind: "skip" };
     }
@@ -236,7 +246,7 @@ export const drain = internalAction({
       // finish() records a failure and queues the retry, so carry on to the next place.
       try { await fetchPlace(ctx, next.osmId, next.lease, workerOverpassWait, next.lease + jobBudget); } catch (error) {
         // Logged so a place that keeps failing can be found (WALKIES-6 and -7 couldn't say which one).
-        console.warn(`Couldn't warm R${next.osmId}, it'll be retried:`, error instanceof Error ? error.message : error);
+        console.warn(`Couldn't warm R${next.osmId}:`, error instanceof Error ? error.message : error);
       }
     }
     await ctx.scheduler.runAfter(next.kind === "wait" ? next.ms : requestSpacing, internal.places.drain, {});
@@ -304,11 +314,11 @@ export const releaseOverpass = internalMutation({
 export const finish = internalMutation({
   args: {
     osmId: v.number(), lease: v.number(), name: v.optional(v.string()), file: v.optional(v.id("_storage")), fetchedAt: v.optional(v.number()),
-    // A failure that would only happen again, so the warm queue doesn't retry it.
-    giveUp: v.optional(v.boolean()),
+    // Far too big to fetch: remembered, so it isn't retried or looked up again for a while.
+    tooBig: v.optional(v.boolean()),
   },
   returns: v.boolean(),
-  handler: async (ctx, { osmId, lease, name, file, fetchedAt, giveUp }) => {
+  handler: async (ctx, { osmId, lease, name, file, fetchedAt, tooBig }) => {
     const row = await rowFor(ctx, osmId);
     if (!row || row.fetchingAt !== lease) {
       if (file) await ctx.storage.delete(file);
@@ -317,15 +327,16 @@ export const finish = internalMutation({
     if (file) {
       await ctx.db.patch("placeData", row._id, {
         name: name ?? row.name, file, fetchedAt: fetchedAt ?? Date.now(), version,
-        fetchingAt: undefined, queuedAt: undefined, attempts: undefined,
+        fetchingAt: undefined, queuedAt: undefined, attempts: undefined, tooBigAt: undefined,
       });
       if (row.file) await ctx.storage.delete(row.file);
     } else {
       // Keep an older file on refresh failure, but allow the next call to retry.
       // Places the warm queue asked for go back on it after a wait, a few times.
       const attempts = row.attempts;
-      const retry = !giveUp && attempts !== undefined && attempts < retryDelays.length;
+      const retry = !tooBig && attempts !== undefined && attempts < retryDelays.length;
       await ctx.db.patch("placeData", row._id, {
+        ...(tooBig ? { tooBigAt: Date.now(), name: name ?? row.name } : {}),
         fetchingAt: undefined,
         queuedAt: retry ? Date.now() + retryDelays[attempts] : undefined,
         attempts: retry ? attempts + 1 : undefined,
@@ -371,9 +382,11 @@ async function fetchPlace(ctx: ActionCtx, osmId: number, lease: number, overpass
   try {
     const params = { osm_ids: `R${osmId}`, format: "jsonv2", polygon_geojson: "1", polygon_threshold: "0.0001" };
     const { name, boundary } = boundaryFromNominatim(await nominatim(ctx, "lookup", params), osmId);
-    if (boundaryArea(boundary) > maxArea) {
-      await ctx.runMutation(internal.places.finish, { osmId, lease, giveUp: true });
-      throw new ConvexError(`${name} is too big to fetch streets for`);
+    const { south, west, north, east } = boundaryBox(boundary);
+    const boxArea = (north - south) * 110_540 * (east - west) * 111_320 * Math.cos(((north + south) / 2) * Math.PI / 180);
+    if (boundaryArea(boundary) > maxArea || boxArea > maxBoxArea) {
+      await ctx.runMutation(internal.places.finish, { osmId, lease, name, tooBig: true });
+      throw new ConvexError(tooBigMessage(name));
     }
     // Overpass's answer is parsed and stored in Node (placeStreets.ts): it can be far
     // bigger than this runtime's 64 MB.

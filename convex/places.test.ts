@@ -399,3 +399,27 @@ test("a request cut short by the deadline says it ran out of time instead of spl
   await expect(t.action(internal.placeStreets.download, { boundary: JSON.stringify(square), deadline: Date.now() + 60_000 })).rejects.toThrow(/Ran out of time/);
   expect(n).toBe(1);
 });
+
+test("a refused place stays refused: warming it again, or opening it, doesn't look it up again", async () => {
+  vi.useFakeTimers();
+  const { t, client } = await signedIn();
+  const calls = stubHugePlace();
+  await expect(client.action(api.places.get, { osmId: 80500 })).rejects.toThrow(/too big/);
+  const lookups = calls.length;
+  await client.mutation(internal.places.enqueue, { osmIds: [80500] });
+  expect((await rows(t)).find((r) => r.osmId === 80500)?.queuedAt).toBeUndefined();
+  expect(await t.mutation(internal.places.requeueMissing, {})).toEqual({ queued: 0 });
+  await expect(client.action(api.places.get, { osmId: 80500 })).rejects.toThrow(/too big/);
+  expect(calls).toHaveLength(lookups);
+});
+
+test("tiny islands far apart are refused too: it's the box Overpass is asked about that counts", async () => {
+  vi.useFakeTimers();
+  const { client } = await signedIn();
+  vi.stubGlobal("fetch", async (input: string | URL) => {
+    if (!String(input).includes("nominatim")) throw new Error("Overpass shouldn't be asked");
+    const square = (lon: number, lat: number) => [[[lon, lat], [lon + 0.01, lat], [lon + 0.01, lat + 0.01], [lon, lat + 0.01], [lon, lat]]];
+    return Response.json([{ osm_type: "relation", osm_id: 77, name: "Scattered", geojson: { type: "MultiPolygon", coordinates: [square(115, -35), square(125, -25)] } }]);
+  });
+  await expect(client.action(api.places.get, { osmId: 77 })).rejects.toThrow(/too big/);
+});
