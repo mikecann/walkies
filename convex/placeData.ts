@@ -83,12 +83,21 @@ export function boundaryFromNominatim(value: unknown, osmId: number): { name: st
   return { name, boundary };
 }
 
-export function walkableQuery(boundary: PlaceData["boundary"]): string {
+export function boundaryBox(boundary: PlaceData["boundary"]): { south: number; west: number; north: number; east: number } {
   const outer = boundary.flatMap((polygon) => polygon[0]);
-  const south = Math.min(...outer.map((p) => p[1]));
-  const west = Math.min(...outer.map((p) => p[0]));
-  const north = Math.max(...outer.map((p) => p[1]));
-  const east = Math.max(...outer.map((p) => p[0]));
+  return {
+    south: Math.min(...outer.map((p) => p[1])), west: Math.min(...outer.map((p) => p[0])),
+    north: Math.max(...outer.map((p) => p[1])), east: Math.max(...outer.map((p) => p[0])),
+  };
+}
+
+export function walkableQuery(boundary: PlaceData["boundary"]): string {
+  return walkableBoxQuery(boundaryBox(boundary));
+}
+
+/** The query for one box. The server splits a big suburb's box into tiles
+ * (waysInTiles in osm.ts), which together return the same ways as the whole box. */
+export function walkableBoxQuery({ south, west, north, east }: { south: number; west: number; north: number; east: number }): string {
   // Keep this query in step with OSMClient.walkableWays. `out geom` brings every
   // tag, which isWalkable needs (sidewalk, foot, maxspeed) before the ways are stored.
   return `[out:json][timeout:120];
@@ -97,6 +106,11 @@ out geom;`;
 }
 
 export function waysFromOverpass(value: unknown): PlaceData["ways"] {
+  return walkableElements(value).map((element) => element.way);
+}
+
+/** The walkable ways in an Overpass answer, with their OSM ids. */
+export function walkableElements(value: unknown): { id: number; way: PlaceData["ways"][number] }[] {
   const response = object(value);
   // Overpass can return HTTP 200 with a timeout remark and incomplete elements.
   if (response.remark || !Array.isArray(response.elements)) throw new Error("Incomplete Overpass response");
@@ -115,6 +129,6 @@ export function waysFromOverpass(value: unknown): PlaceData["ways"] {
     for (const key of ["footway", "service", "access", "foot"] as const) {
       if (typeof tags[key] === "string") way[key] = tags[key];
     }
-    return [way];
+    return [{ id: typeof element.id === "number" ? element.id : Number.NaN, way }];
   });
 }

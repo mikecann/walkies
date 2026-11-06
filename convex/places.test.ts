@@ -155,16 +155,17 @@ test("streets cached by an older version are fetched again and can all be requeu
 });
 
 // Answers Nominatim with a small square suburb and Overpass with `overpass`, or a 500.
-function stubOSM(overpass: (endpoint: string) => unknown) {
+function stubOSM(overpass: (endpoint: string, query: string) => unknown) {
   const calls: string[] = [];
-  vi.stubGlobal("fetch", async (input: string | URL) => {
+  vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
     calls.push(url);
     if (url.includes("nominatim")) {
       const ring = [[115, -33], [115.01, -33], [115.01, -33.01], [115, -33.01], [115, -33]];
       return Response.json([{ osm_type: "relation", osm_id: 9, name: "Tiny", geojson: { type: "Polygon", coordinates: [ring] } }]);
     }
-    const body = overpass(url);
+    const body = overpass(url, new URLSearchParams(String(init?.body ?? "")).get("data") ?? "");
+    if (typeof body === "number") return new Response("error", { status: body });
     return body === undefined ? new Response("busy", { status: 500 }) : Response.json(body);
   });
   return calls;
@@ -264,4 +265,22 @@ test("a place the old worker dropped mid-fetch goes back on the queue with reque
   expect(await t.mutation(internal.places.claimNext, {})).toMatchObject({ kind: "fetch", osmId: 9 });
   // The fetch that died counts as one of its tries.
   expect((await rows(t)).find((r) => r.osmId === 9)?.attempts).toBe(1);
+});
+
+test("a suburb too heavy for one Overpass query is fetched in quarters and stored as one file", async () => {
+  const { t } = await signedIn();
+  const queries: string[] = [];
+  stubOSM((_, query) => {
+    queries.push(query);
+    // The whole suburb times out at Overpass's gateway (WALKIES-8); its quarters don't.
+    if (queries.length === 1) return 504;
+    const [south, west] = query.match(/\((-?[\d.]+),(-?[\d.]+),/)!.slice(1).map(Number);
+    return { elements: [{ type: "way", id: queries.length, tags: { highway: "footway" }, geometry: [{ lat: south, lon: west }, { lat: south + 0.001, lon: west + 0.001 }] }] };
+  });
+  const boundary = [[[[115, -33], [115.01, -33], [115.01, -33.01], [115, -33]]]];
+  const file = await t.action(internal.placeStreets.download, { boundary: JSON.stringify(boundary) });
+  const stored = await t.run(async (ctx) => JSON.parse(await (await ctx.storage.get(file))!.text()));
+  expect(queries).toHaveLength(5);
+  expect(stored.boundary).toEqual(boundary);
+  expect(stored.ways).toHaveLength(4);
 });
