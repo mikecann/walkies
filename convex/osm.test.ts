@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { quarters, readCapped, tileWays, TooBig, TooManyStreets, waysInTiles, type Box } from "./osm";
+import { quarters, readCapped, tileWays, TooBig, TooManyStreets, utf8Length, waysInTiles, type Box } from "./osm";
 
 const way = (id: number, lat: number) => ({ type: "way", id, tags: { highway: "residential" }, geometry: [{ lat, lon: 115 }, { lat: lat + 0.001, lon: 115.001 }] });
 const whole: Box = { south: -34, west: 115, north: -33, east: 116 };
@@ -66,4 +66,12 @@ test("the fetcher is told when a box is as small as it goes", async () => {
   const smallest: boolean[] = [];
   await expect(waysInTiles(whole, async (_, last) => { smallest.push(last); throw new TooBig("too much"); }, 1)).rejects.toBeInstanceOf(TooBig);
   expect(smallest).toEqual([false, true]);
+});
+
+test("the file cap counts UTF-8 bytes, not characters", async () => {
+  for (const text of ["abc", "é", "歩", "🚶", "a歩🚶é", "\ud800"]) expect(utf8Length(text)).toBe(new TextEncoder().encode(text).length);
+  const wide = tileWays({ elements: Array.from({ length: 20 }, (_, i) => ({ ...way(i, -33.5), tags: { highway: "residential", service: "歩".repeat(80) } })) });
+  const chars = wide.reduce((n, w) => n + w.json.length + 1, 0);
+  // Fits if you count characters, but not bytes.
+  await expect(waysInTiles(whole, async () => wide, 3, chars + 10)).rejects.toBeInstanceOf(TooManyStreets);
 });

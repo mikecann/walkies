@@ -64,6 +64,20 @@ export function quarters({ south, west, north, east }: Box): Box[] {
   ];
 }
 
+/** UTF-8 bytes in `text`, without encoding it. */
+export function utf8Length(text: string): number {
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    // A surrogate pair is one 4-byte character: count it at the first half, skip the second.
+    else if (code >= 0xd800 && code < 0xdc00 && i + 1 < text.length) { bytes += 4; i++; }
+    else bytes += 3;
+  }
+  return bytes;
+}
+
 /** Too many streets to be worth caching as one place. Not split any further. */
 export class TooManyStreets extends Error {}
 
@@ -77,14 +91,14 @@ export function tileWays(answer: unknown): { id: number; json: string }[] {
  * returns tileWays of an Overpass answer). A box it can't answer in one go (TooBig)
  * is split into quarters, up to `maxDepth` times; `fetchBox` is told when a box is as
  * small as it goes. A way that crosses tiles comes back from each, with its whole
- * geometry, so it's kept once by its id. Only one tile is held at a time and the JSON
- * altogether can't pass `maxChars`, so memory stays bounded however big the place is. */
+ * geometry, so it's kept once by its id. Only one tile is held at a time and the file
+ * altogether can't pass `maxBytes` of UTF-8, so memory stays bounded however big the place is. */
 export async function waysInTiles(
-  box: Box, fetchBox: (box: Box, smallest: boolean) => Promise<{ id: number; json: string }[]>, maxDepth: number, maxChars = Infinity,
+  box: Box, fetchBox: (box: Box, smallest: boolean) => Promise<{ id: number; json: string }[]>, maxDepth: number, maxBytes = Infinity,
 ): Promise<string[]> {
   const seen = new Set<number>();
   const ways: string[] = [];
-  let chars = 0;
+  let bytes = 0;
   async function visit(tile: Box, depth: number) {
     let found: { id: number; json: string }[];
     try {
@@ -99,8 +113,8 @@ export async function waysInTiles(
         if (seen.has(id)) continue;
         seen.add(id);
       }
-      chars += json.length + 1;
-      if (chars > maxChars) throw new TooManyStreets(`More than ${Math.round(maxChars / 1024 / 1024)} MB of streets`);
+      bytes += utf8Length(json) + 1;
+      if (bytes > maxBytes) throw new TooManyStreets(`More than ${Math.round(maxBytes / 1024 / 1024)} MB of streets`);
       ways.push(json);
     }
   }

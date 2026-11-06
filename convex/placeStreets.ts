@@ -7,7 +7,7 @@
 // rather than dying with it.
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
-import { fetchJSON, OsmError, overpassEndpoints, tileWays, TooBig, waysInTiles, type Box } from "./osm";
+import { fetchJSON, OsmError, overpassEndpoints, tileWays, TooBig, utf8Length, waysInTiles, type Box } from "./osm";
 import { boundaryBox, walkableBoxQuery, type PlaceData } from "./placeData";
 
 // One Overpass answer bigger than this is fetched in quarters instead. Parsed, an
@@ -15,10 +15,9 @@ import { boundaryBox, walkableBoxQuery, type PlaceData } from "./placeData";
 const answerCap = 48 * 1024 * 1024;
 // Up to 64 tiles. A suburb that needs more than that isn't one anybody walks round.
 const maxDepth = 3;
-// The whole street file, in characters. Birmingham is 15 MB; past this a place isn't
-// worth caching. The kept tags are OSM's ASCII values (residential, sidewalk...), so
-// characters are bytes, and the ways, the file being saved and one tile being parsed
-// all fit in 512 MB.
+// The whole street file, in UTF-8 bytes. Birmingham is 15 MB; past this a place isn't
+// worth caching, and the ways, the file being saved and one tile being parsed all fit
+// in 512 MB.
 const fileCap = 64 * 1024 * 1024;
 // Overpass's gateway gives up on a heavy query with a 504 (WALKIES-8), and Overpass
 // itself says so in a remark when it runs out of time or memory ("Query timed out in
@@ -85,10 +84,12 @@ export const download = internalAction({
   handler: async (ctx, args) => {
     const boundary = JSON.parse(args.boundary) as PlaceData["boundary"];
     const end = Math.min(args.deadline, Date.now() + slotTime) - saveTime;
-    const ways = await waysInTiles(boundaryBox(boundary), overpassFetcher(end), maxDepth, fileCap);
     // The same JSON as JSON.stringify({ boundary, ways }), written from each way's
     // own JSON so the whole list never has to be built as objects.
-    const parts: string[] = [`{"boundary":${JSON.stringify(boundary)},"ways":[`];
+    const head = `{"boundary":${JSON.stringify(boundary)},"ways":[`;
+    // The cap is for the whole file, so the boundary comes out of it.
+    const ways = await waysInTiles(boundaryBox(boundary), overpassFetcher(end), maxDepth, fileCap - utf8Length(head) - 2);
+    const parts: string[] = [head];
     ways.forEach((way, i) => parts.push(i === 0 ? way : `,${way}`));
     parts.push("]}");
     return await ctx.storage.store(new Blob(parts, { type: "application/json" }));
