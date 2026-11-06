@@ -155,16 +155,17 @@ test("streets cached by an older version are fetched again and can all be requeu
 });
 
 // Answers Nominatim with a small square suburb and Overpass with `overpass`, or a 500.
-function stubOSM(overpass: (endpoint: string) => unknown) {
+function stubOSM(overpass: (endpoint: string, query: string) => unknown) {
   const calls: string[] = [];
-  vi.stubGlobal("fetch", async (input: string | URL) => {
+  vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
     calls.push(url);
     if (url.includes("nominatim")) {
       const ring = [[115, -33], [115.01, -33], [115.01, -33.01], [115, -33.01], [115, -33]];
       return Response.json([{ osm_type: "relation", osm_id: 9, name: "Tiny", geojson: { type: "Polygon", coordinates: [ring] } }]);
     }
-    const body = overpass(url);
+    const body = overpass(url, new URLSearchParams(String(init?.body ?? "")).get("data") ?? "");
+    if (typeof body === "number") return new Response("error", { status: body });
     return body === undefined ? new Response("busy", { status: 500 }) : Response.json(body);
   });
   return calls;
@@ -186,7 +187,7 @@ test("the Overpass response is parsed and stored by a Node action, falling back 
   const { t } = await signedIn();
   const calls = stubOSM((url) => url.includes("overpass-api.de") ? undefined : overpassAnswer);
   const boundary = [[[[115, -33], [115.01, -33], [115.01, -33.01], [115, -33]]]];
-  const file = await t.action(internal.placeStreets.download, { boundary: JSON.stringify(boundary) });
+  const file = await t.action(internal.placeStreets.download, { boundary: JSON.stringify(boundary), deadline: Date.now() + 9 * 60 * 1000 });
   const stored = await t.run(async (ctx) => JSON.parse(await (await ctx.storage.get(file))!.text()));
   expect(stored).toEqual({ boundary, ways: [{ highway: "residential", foot: "yes", points: [[-33.001111, 115.001], [-33.002, 115.002]] }] });
   expect(calls).toHaveLength(2);
@@ -264,4 +265,95 @@ test("a place the old worker dropped mid-fetch goes back on the queue with reque
   expect(await t.mutation(internal.places.claimNext, {})).toMatchObject({ kind: "fetch", osmId: 9 });
   // The fetch that died counts as one of its tries.
   expect((await rows(t)).find((r) => r.osmId === 9)?.attempts).toBe(1);
+});
+
+test("a suburb too heavy for one Overpass query is fetched in quarters and stored as one file", async () => {
+  const { t } = await signedIn();
+  const queries: string[] = [];
+  stubOSM((_, query) => {
+    queries.push(query);
+    // The whole suburb times out at Overpass's gateway (WALKIES-8); its quarters don't.
+    if (queries.length === 1) return 504;
+    const [south, west] = query.match(/\((-?[\d.]+),(-?[\d.]+),/)!.slice(1).map(Number);
+    return { elements: [{ type: "way", id: queries.length, tags: { highway: "footway" }, geometry: [{ lat: south, lon: west }, { lat: south + 0.001, lon: west + 0.001 }] }] };
+  });
+  const boundary = [[[[115, -33], [115.01, -33], [115.01, -33.01], [115, -33]]]];
+  const file = await t.action(internal.placeStreets.download, { boundary: JSON.stringify(boundary), deadline: Date.now() + 9 * 60 * 1000 });
+  const stored = await t.run(async (ctx) => JSON.parse(await (await ctx.storage.get(file))!.text()));
+  expect(queries).toHaveLength(5);
+  const box = (query: string) => query.match(/\(([-\d.,]+)\);/)![1];
+  expect(box(queries[0])).toBe("-33.01,115,-33,115.01");
+  expect(queries.slice(1).map(box).sort()).toEqual([
+    "-33.005,115,-33,115.005", "-33.005,115.005,-33,115.01", "-33.01,115,-33.005,115.005", "-33.01,115.005,-33.005,115.01",
+  ].sort());
+  expect(stored.boundary).toEqual(boundary);
+  expect(stored.ways).toHaveLength(4);
+});
+
+const square = [[[[115, -33], [115.01, -33], [115.01, -33.01], [115, -33]]]];
+const footway = (id: number, query: string) => {
+  const [south, west] = query.match(/\((-?[\d.]+),(-?[\d.]+),/)!.slice(1).map(Number);
+  return { elements: [{ type: "way", id, tags: { highway: "footway" }, geometry: [{ lat: south, lon: west }, { lat: south + 0.001, lon: west + 0.001 }] }] };
+};
+
+test("a server stuck on 504s is passed over for the other one", async () => {
+  const { t } = await signedIn();
+  const asked: string[] = [];
+  stubOSM((url, query) => {
+    asked.push(new URL(url).host);
+    return url.includes("overpass-api.de") ? 504 : footway(asked.length, query);
+  });
+  const file = await t.action(internal.placeStreets.download, { boundary: JSON.stringify(square), deadline: Date.now() + 9 * 60 * 1000 });
+  const stored = await t.run(async (ctx) => JSON.parse(await (await ctx.storage.get(file))!.text()));
+  // The first 504 splits the suburb, and every quarter goes to the server that's answering.
+  expect(asked).toEqual(["overpass-api.de", "maps.mail.ru", "maps.mail.ru", "maps.mail.ru", "maps.mail.ru"]);
+  expect(stored.ways).toHaveLength(4);
+});
+
+test("a broken answer from one server means asking the other", async () => {
+  const { t } = await signedIn();
+  stubOSM((url, query) => url.includes("overpass-api.de") ? {} : footway(1, query));
+  const file = await t.action(internal.placeStreets.download, { boundary: JSON.stringify(square), deadline: Date.now() + 9 * 60 * 1000 });
+  const stored = await t.run(async (ctx) => JSON.parse(await (await ctx.storage.get(file))!.text()));
+  expect(stored.ways).toHaveLength(1);
+});
+
+test("no Overpass request starts once the caller's time is nearly up", async () => {
+  const { t } = await signedIn();
+  const calls = stubOSM(() => ({ elements: [] }));
+  await expect(t.action(internal.placeStreets.download, { boundary: JSON.stringify(square), deadline: Date.now() + 25_000 })).rejects.toThrow(/Ran out of time/);
+  expect(calls).toHaveLength(0);
+});
+
+test("Overpass saying it timed out, or our own timeout firing, splits the box too", async () => {
+  const { t } = await signedIn();
+  let n = 0;
+  vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+    if (String(input).includes("nominatim")) throw new Error("not used");
+    n++;
+    if (n === 1) return Response.json({ remark: "runtime error: timeout", elements: [] });
+    if (n === 2) throw Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+    return Response.json(footway(n, new URLSearchParams(String(init?.body)).get("data")!));
+  });
+  const file = await t.action(internal.placeStreets.download, { boundary: JSON.stringify(square), deadline: Date.now() + 9 * 60 * 1000 });
+  const stored = await t.run(async (ctx) => JSON.parse(await (await ctx.storage.get(file))!.text()));
+  // The whole box timed out, then its first quarter did, so that quarter came in four.
+  expect(n).toBe(1 + 1 + 4 + 3);
+  expect(stored.ways).toHaveLength(7);
+});
+
+test("a bad way from one server means asking the other, and a stuck server is passed over", async () => {
+  const { t } = await signedIn();
+  const asked: string[] = [];
+  vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+    asked.push(new URL(String(input)).host);
+    const query = new URLSearchParams(String(init?.body)).get("data")!;
+    if (asked.length === 1) return Response.json({ elements: [{ type: "way", id: 1, tags: { highway: "footway" }, geometry: [{ lat: null, lon: 115 }] }] });
+    if (asked.length === 2) throw Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+    return Response.json(footway(asked.length, query));
+  });
+  await t.action(internal.placeStreets.download, { boundary: JSON.stringify(square), deadline: Date.now() + 9 * 60 * 1000 });
+  // The bad answer sent it to the other server, which got stuck, so the box was split
+  // and its quarters went back to the first.
+  expect(asked).toEqual(["overpass-api.de", "maps.mail.ru", "overpass-api.de", "overpass-api.de", "overpass-api.de", "overpass-api.de"]);
 });

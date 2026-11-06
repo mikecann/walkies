@@ -83,12 +83,21 @@ export function boundaryFromNominatim(value: unknown, osmId: number): { name: st
   return { name, boundary };
 }
 
-export function walkableQuery(boundary: PlaceData["boundary"]): string {
+export function boundaryBox(boundary: PlaceData["boundary"]): { south: number; west: number; north: number; east: number } {
   const outer = boundary.flatMap((polygon) => polygon[0]);
-  const south = Math.min(...outer.map((p) => p[1]));
-  const west = Math.min(...outer.map((p) => p[0]));
-  const north = Math.max(...outer.map((p) => p[1]));
-  const east = Math.max(...outer.map((p) => p[0]));
+  return {
+    south: Math.min(...outer.map((p) => p[1])), west: Math.min(...outer.map((p) => p[0])),
+    north: Math.max(...outer.map((p) => p[1])), east: Math.max(...outer.map((p) => p[0])),
+  };
+}
+
+export function walkableQuery(boundary: PlaceData["boundary"]): string {
+  return walkableBoxQuery(boundaryBox(boundary));
+}
+
+/** The query for one box. The server splits a big suburb's box into tiles
+ * (waysInTiles in osm.ts), which together return the same ways as the whole box. */
+export function walkableBoxQuery({ south, west, north, east }: { south: number; west: number; north: number; east: number }): string {
   // Keep this query in step with OSMClient.walkableWays. `out geom` brings every
   // tag, which isWalkable needs (sidewalk, foot, maxspeed) before the ways are stored.
   return `[out:json][timeout:120];
@@ -97,14 +106,25 @@ out geom;`;
 }
 
 export function waysFromOverpass(value: unknown): PlaceData["ways"] {
+  return Array.from(walkableElements(value), (element) => element.way);
+}
+
+/** Throws unless `value` looks like a complete Overpass answer. Overpass can return
+ * HTTP 200 with a timeout remark and incomplete elements. */
+export function checkOverpassAnswer(value: unknown): { elements: unknown[] } {
   const response = object(value);
-  // Overpass can return HTTP 200 with a timeout remark and incomplete elements.
   if (response.remark || !Array.isArray(response.elements)) throw new Error("Incomplete Overpass response");
-  return response.elements.flatMap((value) => {
-    const element = object(value);
-    if (element.type !== "way" || !Array.isArray(element.geometry)) return [];
+  return response as { elements: unknown[] };
+}
+
+/** The walkable ways in an Overpass answer, with their OSM ids, one at a time, so a
+ * caller can write each out before the next is built. */
+export function* walkableElements(value: unknown): Generator<{ id: number; way: PlaceData["ways"][number] }> {
+  for (const item of checkOverpassAnswer(value).elements) {
+    const element = object(item);
+    if (element.type !== "way" || !Array.isArray(element.geometry)) continue;
     const tags = object(element.tags ?? {});
-    if (!isWalkable(tags)) return [];
+    if (!isWalkable(tags)) continue;
     const way: PlaceData["ways"][number] = {
       highway: tags.highway as string,
       points: element.geometry.map((value) => {
@@ -115,6 +135,6 @@ export function waysFromOverpass(value: unknown): PlaceData["ways"] {
     for (const key of ["footway", "service", "access", "foot"] as const) {
       if (typeof tags[key] === "string") way[key] = tags[key];
     }
-    return [way];
-  });
+    yield { id: typeof element.id === "number" ? element.id : Number.NaN, way };
+  }
 }
