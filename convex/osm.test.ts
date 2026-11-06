@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { quarters, readCapped, TooBig, TooManyStreets, waysInTiles, type Box } from "./osm";
+import { quarters, readCapped, tileWays, TooBig, TooManyStreets, waysInTiles, type Box } from "./osm";
 
 const way = (id: number, lat: number) => ({ type: "way", id, tags: { highway: "residential" }, geometry: [{ lat, lon: 115 }, { lat: lat + 0.001, lon: 115.001 }] });
 const whole: Box = { south: -34, west: 115, north: -33, east: 116 };
@@ -15,7 +15,7 @@ test("a way that comes back from two tiles is kept once, by its id", async () =>
   const ways = await waysInTiles(whole, async (box: Box) => {
     if (box === whole) throw new TooBig("too much");
     // Same way, but each tile's copy differs, so only the id says they're one way.
-    return { elements: [{ ...way(7, -33.5), tags: { highway: "residential", foot: box.west === 115 ? "yes" : "designated" } }] };
+    return tileWays({ elements: [{ ...way(7, -33.5), tags: { highway: "residential", foot: box.west === 115 ? "yes" : "designated" } }] });
   }, 3);
   expect(ways).toHaveLength(1);
 });
@@ -26,7 +26,7 @@ test("a box Overpass can't answer in one go is fetched in quarters, without doub
     asked.push(box);
     if (box === whole) throw new TooBig("too much");
     // Way 1 crosses every quarter, so every quarter returns it. The other is the quarter's own.
-    return { elements: [way(1, -33.25), way(asked.length + 10, box.south + (box.west - 115) / 10)] };
+    return tileWays({ elements: [way(1, -33.25), way(asked.length + 10, box.south + (box.west - 115) / 10)] });
   }, 3);
   expect(asked).toHaveLength(5);
   const starts = ways.map((w) => JSON.parse(w).points[0]);
@@ -57,7 +57,7 @@ test("a response over the size cap is cut off rather than read into memory", asy
 });
 
 test("a place with more streets than the file can hold fails rather than filling memory", async () => {
-  const many = { elements: Array.from({ length: 50 }, (_, i) => way(i, -33.5)) };
+  const many = tileWays({ elements: Array.from({ length: 50 }, (_, i) => way(i, -33.5)) });
   await expect(waysInTiles(whole, async () => many, 3, 2000)).rejects.toBeInstanceOf(TooManyStreets);
   expect(await waysInTiles(whole, async () => many, 3)).toHaveLength(50);
 });

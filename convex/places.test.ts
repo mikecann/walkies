@@ -341,3 +341,19 @@ test("Overpass saying it timed out, or our own timeout firing, splits the box to
   expect(n).toBe(1 + 1 + 4 + 3);
   expect(stored.ways).toHaveLength(7);
 });
+
+test("a bad way from one server means asking the other, and a stuck server is passed over", async () => {
+  const { t } = await signedIn();
+  const asked: string[] = [];
+  vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+    asked.push(new URL(String(input)).host);
+    const query = new URLSearchParams(String(init?.body)).get("data")!;
+    if (asked.length === 1) return Response.json({ elements: [{ type: "way", id: 1, tags: { highway: "footway" }, geometry: [{ lat: null, lon: 115 }] }] });
+    if (asked.length === 2) throw Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+    return Response.json(footway(asked.length, query));
+  });
+  await t.action(internal.placeStreets.download, { boundary: JSON.stringify(square), deadline: Date.now() + 9 * 60 * 1000 });
+  // The bad answer sent it to the other server, which got stuck, so the box was split
+  // and its quarters went back to the first.
+  expect(asked).toEqual(["overpass-api.de", "maps.mail.ru", "overpass-api.de", "overpass-api.de", "overpass-api.de", "overpass-api.de"]);
+});

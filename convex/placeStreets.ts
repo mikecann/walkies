@@ -7,17 +7,19 @@
 // rather than dying with it.
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
-import { fetchJSON, OsmError, overpassEndpoints, TooBig, waysInTiles, type Box } from "./osm";
-import { boundaryBox, checkOverpassAnswer, walkableBoxQuery, type PlaceData } from "./placeData";
+import { fetchJSON, OsmError, overpassEndpoints, tileWays, TooBig, waysInTiles, type Box } from "./osm";
+import { boundaryBox, walkableBoxQuery, type PlaceData } from "./placeData";
 
 // One Overpass answer bigger than this is fetched in quarters instead. Parsed, an
 // answer takes several times its size, and one suburb ran even 512 MB out (WALKIES-9).
 const answerCap = 48 * 1024 * 1024;
 // Up to 64 tiles. A suburb that needs more than that isn't one anybody walks round.
 const maxDepth = 3;
-// The whole street file. Birmingham is 15 MB; past this a place isn't worth caching,
-// and the ways kept for it plus the file being saved have to fit in 512 MB.
-const fileCap = 80 * 1024 * 1024;
+// The whole street file, in characters. Birmingham is 15 MB; past this a place isn't
+// worth caching. The kept tags are OSM's ASCII values (residential, sidewalk...), so
+// characters are bytes, and the ways, the file being saved and one tile being parsed
+// all fit in 512 MB.
+const fileCap = 64 * 1024 * 1024;
 // Overpass's gateway gives up on a heavy query with a 504 (WALKIES-8), and Overpass
 // itself says so in a remark when it runs out of time or memory ("Query timed out in
 // ...", "runtime error: timeout", "Query run out of memory using about 2048 MB").
@@ -35,7 +37,7 @@ const requestTimeout = 135_000;
  * first from then on, and for a box as small as it goes, before giving up. */
 function overpassFetcher(end: number) {
   let first = 0;
-  return async function fetchBox(box: Box, smallest: boolean): Promise<unknown> {
+  return async function fetchBox(box: Box, smallest: boolean): Promise<{ id: number; json: string }[]> {
     const body = new URLSearchParams({ data: walkableBoxQuery(box) }).toString();
     const order = [first, ...overpassEndpoints.keys()].filter((i, n, all) => all.indexOf(i) === n);
     let lastError: unknown;
@@ -49,11 +51,11 @@ function overpassFetcher(end: number) {
         const answer = await fetchJSON(endpoint, timeout, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body }, answerCap);
         const remark = (answer as { remark?: unknown } | null)?.remark;
         if (typeof remark === "string" && tooHeavy.test(remark)) throw new TooBig(remark);
-        // Checked here, so a broken answer from one server means asking the other.
-        checkOverpassAnswer(answer);
+        // Read here, so a broken answer from one server means asking the other.
+        const ways = tileWays(answer);
         console.log(`Overpass ${where}: ok in ${Math.round((Date.now() - started) / 1000)} s`);
         first = index;
-        return answer;
+        return ways;
       } catch (error) {
         const gateway = error instanceof OsmError && error.status === 504;
         // Our own timeout firing means Overpass was still working on it after 135 s.
@@ -61,7 +63,8 @@ function overpassFetcher(end: number) {
         const heavy = gateway || slow || error instanceof TooBig;
         console.log(`Overpass ${where}: ${heavy && !smallest ? "too big, splitting" : "failed"} after ${Math.round((Date.now() - started) / 1000)} s (${error instanceof Error ? error.message : error})`);
         lastError = heavy ? (error instanceof TooBig ? error : new TooBig((error as Error).message)) : error;
-        if (gateway) first = order.find((i) => i !== index) ?? index;
+        // A server that's down or stuck gets passed over for the other from now on.
+        if (gateway || slow) first = order.find((i) => i !== index) ?? index;
         // Over the size cap is the same on either server. Otherwise split now, unless it's
         // as small as it goes, and then the other server gets a go.
         if (error instanceof TooBig && !tooHeavy.test(error.message)) throw lastError;

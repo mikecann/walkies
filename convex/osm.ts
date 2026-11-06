@@ -67,34 +67,38 @@ export function quarters({ south, west, north, east }: Box): Box[] {
 /** Too many streets to be worth caching as one place. Not split any further. */
 export class TooManyStreets extends Error {}
 
-/** The walkable ways in `box`, each as its JSON, from Overpass answers `fetchBox` gets.
- * A box it can't answer in one go (TooBig) is split into quarters, up to `maxDepth`
- * times; `fetchBox` is told when a box is as small as it goes. A way that crosses
- * tiles comes back from each, with its whole geometry, so it's kept once by its id.
- * Only one tile's answer is parsed at a time and each way is written out as JSON as
- * it's read, and the JSON altogether can't pass `maxChars`, so memory stays bounded
- * however big the place is. */
+/** A tile's walkable ways as JSON, with their OSM ids. Throws on a broken answer, so a
+ * fetcher can call it while it can still ask the other server. */
+export function tileWays(answer: unknown): { id: number; json: string }[] {
+  return Array.from(walkableElements(answer), ({ id, way }) => ({ id, json: JSON.stringify(way) }));
+}
+
+/** The walkable ways in `box`, each as its JSON, from the tiles `fetchBox` gets (it
+ * returns tileWays of an Overpass answer). A box it can't answer in one go (TooBig)
+ * is split into quarters, up to `maxDepth` times; `fetchBox` is told when a box is as
+ * small as it goes. A way that crosses tiles comes back from each, with its whole
+ * geometry, so it's kept once by its id. Only one tile is held at a time and the JSON
+ * altogether can't pass `maxChars`, so memory stays bounded however big the place is. */
 export async function waysInTiles(
-  box: Box, fetchBox: (box: Box, smallest: boolean) => Promise<unknown>, maxDepth: number, maxChars = Infinity,
+  box: Box, fetchBox: (box: Box, smallest: boolean) => Promise<{ id: number; json: string }[]>, maxDepth: number, maxChars = Infinity,
 ): Promise<string[]> {
   const seen = new Set<number>();
   const ways: string[] = [];
   let chars = 0;
   async function visit(tile: Box, depth: number) {
-    let answer: unknown;
+    let found: { id: number; json: string }[];
     try {
-      answer = await fetchBox(tile, depth >= maxDepth);
+      found = await fetchBox(tile, depth >= maxDepth);
     } catch (error) {
       if (!(error instanceof TooBig) || depth >= maxDepth) throw error;
       for (const quarter of quarters(tile)) await visit(quarter, depth + 1);
       return;
     }
-    for (const { id, way } of walkableElements(answer)) {
+    for (const { id, json } of found) {
       if (Number.isFinite(id)) {
         if (seen.has(id)) continue;
         seen.add(id);
       }
-      const json = JSON.stringify(way);
       chars += json.length + 1;
       if (chars > maxChars) throw new TooManyStreets(`More than ${Math.round(maxChars / 1024 / 1024)} MB of streets`);
       ways.push(json);
