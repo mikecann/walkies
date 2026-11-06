@@ -54,25 +54,36 @@ export async function fetchJSON(url: string, timeout: number, init?: RequestInit
 export type Box = { south: number; west: number; north: number; east: number };
 
 export function quarters({ south, west, north, east }: Box): Box[] {
-  const midLat = (south + north) / 2, midLon = (west + east) / 2;
+  // Rounded so queries don't carry float noise (-33.004999999999995); both sides of
+  // the split use the same value, so the tiles still meet exactly.
+  const mid = (a: number, b: number) => Math.round((a + b) / 2 * 1e7) / 1e7;
+  const midLat = mid(south, north), midLon = mid(west, east);
   return [
     { south: midLat, west, north, east: midLon }, { south: midLat, west: midLon, north, east },
     { south, west, north: midLat, east: midLon }, { south, west: midLon, north: midLat, east },
   ];
 }
 
+/** Too many streets to be worth caching as one place. Not split any further. */
+export class TooManyStreets extends Error {}
+
 /** The walkable ways in `box`, each as its JSON, from Overpass answers `fetchBox` gets.
  * A box it can't answer in one go (TooBig) is split into quarters, up to `maxDepth`
- * times. A way that crosses tiles comes back from each, with its whole geometry, so
- * it's kept once by its id. Only one tile's answer is parsed at a time, and the ways
- * are kept as JSON, so memory is about the size of the file being written. */
-export async function waysInTiles(box: Box, fetchBox: (box: Box) => Promise<unknown>, maxDepth: number): Promise<string[]> {
+ * times; `fetchBox` is told when a box is as small as it goes. A way that crosses
+ * tiles comes back from each, with its whole geometry, so it's kept once by its id.
+ * Only one tile's answer is parsed at a time and each way is written out as JSON as
+ * it's read, and the JSON altogether can't pass `maxChars`, so memory stays bounded
+ * however big the place is. */
+export async function waysInTiles(
+  box: Box, fetchBox: (box: Box, smallest: boolean) => Promise<unknown>, maxDepth: number, maxChars = Infinity,
+): Promise<string[]> {
   const seen = new Set<number>();
   const ways: string[] = [];
+  let chars = 0;
   async function visit(tile: Box, depth: number) {
     let answer: unknown;
     try {
-      answer = await fetchBox(tile);
+      answer = await fetchBox(tile, depth >= maxDepth);
     } catch (error) {
       if (!(error instanceof TooBig) || depth >= maxDepth) throw error;
       for (const quarter of quarters(tile)) await visit(quarter, depth + 1);
@@ -83,7 +94,10 @@ export async function waysInTiles(box: Box, fetchBox: (box: Box) => Promise<unkn
         if (seen.has(id)) continue;
         seen.add(id);
       }
-      ways.push(JSON.stringify(way));
+      const json = JSON.stringify(way);
+      chars += json.length + 1;
+      if (chars > maxChars) throw new TooManyStreets(`More than ${Math.round(maxChars / 1024 / 1024)} MB of streets`);
+      ways.push(json);
     }
   }
   await visit(box, 0);

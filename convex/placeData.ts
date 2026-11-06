@@ -106,19 +106,25 @@ out geom;`;
 }
 
 export function waysFromOverpass(value: unknown): PlaceData["ways"] {
-  return walkableElements(value).map((element) => element.way);
+  return Array.from(walkableElements(value), (element) => element.way);
 }
 
-/** The walkable ways in an Overpass answer, with their OSM ids. */
-export function walkableElements(value: unknown): { id: number; way: PlaceData["ways"][number] }[] {
+/** Throws unless `value` looks like a complete Overpass answer. Overpass can return
+ * HTTP 200 with a timeout remark and incomplete elements. */
+export function checkOverpassAnswer(value: unknown): { elements: unknown[] } {
   const response = object(value);
-  // Overpass can return HTTP 200 with a timeout remark and incomplete elements.
   if (response.remark || !Array.isArray(response.elements)) throw new Error("Incomplete Overpass response");
-  return response.elements.flatMap((value) => {
-    const element = object(value);
-    if (element.type !== "way" || !Array.isArray(element.geometry)) return [];
+  return response as { elements: unknown[] };
+}
+
+/** The walkable ways in an Overpass answer, with their OSM ids, one at a time, so a
+ * caller can write each out before the next is built. */
+export function* walkableElements(value: unknown): Generator<{ id: number; way: PlaceData["ways"][number] }> {
+  for (const item of checkOverpassAnswer(value).elements) {
+    const element = object(item);
+    if (element.type !== "way" || !Array.isArray(element.geometry)) continue;
     const tags = object(element.tags ?? {});
-    if (!isWalkable(tags)) return [];
+    if (!isWalkable(tags)) continue;
     const way: PlaceData["ways"][number] = {
       highway: tags.highway as string,
       points: element.geometry.map((value) => {
@@ -129,6 +135,6 @@ export function walkableElements(value: unknown): { id: number; way: PlaceData["
     for (const key of ["footway", "service", "access", "foot"] as const) {
       if (typeof tags[key] === "string") way[key] = tags[key];
     }
-    return [{ id: typeof element.id === "number" ? element.id : Number.NaN, way }];
-  });
+    yield { id: typeof element.id === "number" ? element.id : Number.NaN, way };
+  }
 }

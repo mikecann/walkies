@@ -30,6 +30,11 @@ const overpassLease = 7 * 60 * 1000;
 // the whole call stays inside the app's 6-minute timeout. The worker waits longer.
 const overpassWait = 45_000;
 const workerOverpassWait = 3 * 60 * 1000;
+// How long a fetch may take from the start of the call, Nominatim and the wait for the
+// Overpass slot included: inside the app's 6-minute timeout for places:get, and inside
+// the 10-minute action limit and place lease for the worker and lore jobs.
+const getBudget = 5.5 * 60 * 1000;
+const jobBudget = 9 * 60 * 1000;
 // Calls to places:get and places:warm, per user per minute.
 const callsPerMinute = 30;
 // A place that fails to warm is tried again after these waits, then left for
@@ -94,6 +99,7 @@ export const get = action({
   args: { osmId: v.number() },
   returns: v.object({ url: v.string(), fetchedAt: v.number(), version: v.number() }),
   handler: async (ctx, { osmId }): Promise<Cached> => {
+    const deadline = Date.now() + getBudget;
     await ctx.runMutation(internal.places.allowCall, {});
     for (let attempt = 0; attempt <= 20; attempt++) {
       const state = await ctx.runMutation(internal.places.claim, { osmId });
@@ -102,7 +108,7 @@ export const get = action({
         if (!url) throw new ConvexError("Place data file is missing");
         return { url, fetchedAt: state.fetchedAt, version };
       }
-      if (state.kind === "fetch") return await fetchPlace(ctx, osmId, state.lease, overpassWait);
+      if (state.kind === "fetch") return await fetchPlace(ctx, osmId, state.lease, overpassWait, deadline);
       if (attempt < 20) await sleep(1000);
     }
     throw new ConvexError("This place is still getting ready");
@@ -112,10 +118,11 @@ export const get = action({
 /** A place's street file for jobs with nobody signed in (lore research), fetching it
  * first if it isn't cached. Waits longer than places:get, since nobody's watching. */
 export async function cachedFile(ctx: ActionCtx, osmId: number): Promise<Id<"_storage">> {
+  const deadline = Date.now() + jobBudget;
   for (let attempt = 0; attempt <= 90; attempt++) {
     const state = await ctx.runMutation(internal.places.claim, { osmId });
     if (state.kind === "ready") return state.file;
-    if (state.kind === "fetch") await fetchPlace(ctx, osmId, state.lease, workerOverpassWait);
+    if (state.kind === "fetch") await fetchPlace(ctx, osmId, state.lease, workerOverpassWait, Math.min(deadline, state.lease + jobBudget));
     else await sleep(2000);
   }
   throw new Error("This place is still getting ready");
@@ -222,7 +229,7 @@ export const drain = internalAction({
     if (next.kind === "done") return null;
     if (next.kind === "fetch") {
       // finish() records a failure and queues the retry, so carry on to the next place.
-      try { await fetchPlace(ctx, next.osmId, next.lease, workerOverpassWait); } catch (error) {
+      try { await fetchPlace(ctx, next.osmId, next.lease, workerOverpassWait, next.lease + jobBudget); } catch (error) {
         // Logged so a place that keeps failing can be found (WALKIES-6 and -7 couldn't say which one).
         console.warn(`Couldn't warm R${next.osmId}, it'll be retried:`, error instanceof Error ? error.message : error);
       }
@@ -349,14 +356,16 @@ async function withOverpass<T>(ctx: ActionCtx, wait: number, query: () => Promis
   }
 }
 
-async function fetchPlace(ctx: ActionCtx, osmId: number, lease: number, overpassWait: number): Promise<Cached> {
+/** `deadline` is when the whole fetch has to be done by; the Overpass download is fitted
+ * into what's left of it. */
+async function fetchPlace(ctx: ActionCtx, osmId: number, lease: number, overpassWait: number, deadline: number): Promise<Cached> {
   try {
     const params = { osm_ids: `R${osmId}`, format: "jsonv2", polygon_geojson: "1", polygon_threshold: "0.0001" };
     const { name, boundary } = boundaryFromNominatim(await nominatim(ctx, "lookup", params), osmId);
     // Overpass's answer is parsed and stored in Node (placeStreets.ts): it can be far
     // bigger than this runtime's 64 MB.
     const file = await withOverpass(ctx, overpassWait, () =>
-      ctx.runAction(internal.placeStreets.download, { boundary: JSON.stringify(boundary) }));
+      ctx.runAction(internal.placeStreets.download, { boundary: JSON.stringify(boundary), deadline }));
     const fetchedAt = Date.now();
     const saved = await ctx.runMutation(internal.places.finish, { osmId, lease, name, file, fetchedAt });
     if (!saved) throw new Error("Place fetch lease expired");
