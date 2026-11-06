@@ -88,9 +88,12 @@ const WORDS: Record<string, string> = {
   PREPARE_FOR_SUBMISSION: "Not submitted yet",
 };
 
-// dns-sd never exits by itself, so perl's alarm stops it after 3 seconds. The phone's serial is in
-// a file on this Mac rather than here, as this repo is public. No file: the button never shows.
-const PIXEL_ON_WIFI = `s=$(cat ~/.config/walkies/dads-pixel-serial 2>/dev/null) || { echo 0; exit 0; }; perl -e 'alarm 3; exec @ARGV' dns-sd -B _adb-tls-connect._tcp local. 2>/dev/null | grep -c "adb-$s" || true`;
+// dns-sd never exits by itself, so it's killed after 3 seconds. Plain shell, not `perl -e 'alarm 3'`:
+// Threadbear refuses a live command whose code its patch trust can't follow, and a perl one-liner
+// is one, which hid this button for good (6 Nov). The group's stderr is dropped so a shell's
+// "Terminated" note can't land in the count. The phone's serial is in a file on this Mac rather
+// than here, as this repo is public. No file: the button never shows.
+const PIXEL_ON_WIFI = `s=$(cat ~/.config/walkies/dads-pixel-serial 2>/dev/null) || { echo 0; exit 0; }; { dns-sd -B _adb-tls-connect._tcp local. & p=$!; sleep 3; kill $p; } 2>/dev/null | grep -c "adb-$s" || true`;
 
 export default {
   icon: "figure.walk",
