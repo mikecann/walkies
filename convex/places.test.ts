@@ -357,3 +357,45 @@ test("a bad way from one server means asking the other, and a stuck server is pa
   // and its quarters went back to the first.
   expect(asked).toEqual(["overpass-api.de", "maps.mail.ru", "overpass-api.de", "overpass-api.de", "overpass-api.de", "overpass-api.de"]);
 });
+
+// Nominatim's answer for a place the size of a state (about 1,000 km by 1,000 km).
+function stubHugePlace() {
+  const calls: string[] = [];
+  vi.stubGlobal("fetch", async (input: string | URL) => {
+    const url = String(input);
+    calls.push(url);
+    if (!url.includes("nominatim")) throw new Error("Overpass shouldn't be asked");
+    const ring = [[115, -35], [125, -35], [125, -25], [115, -25], [115, -35]];
+    return Response.json([{ osm_type: "relation", osm_id: 80500, name: "Australia", geojson: { type: "Polygon", coordinates: [ring] } }]);
+  });
+  return calls;
+}
+
+test("a place far too big to walk round (a state, a country) is refused before Overpass is asked", async () => {
+  vi.useFakeTimers();
+  const { t, client } = await signedIn();
+  const calls = stubHugePlace();
+  await expect(client.action(api.places.get, { osmId: 80500 })).rejects.toThrow(/too big/);
+  expect(calls.every((url) => url.includes("nominatim"))).toBe(true);
+  const row = (await rows(t)).find((r) => r.osmId === 80500);
+  expect(row?.fetchingAt).toBeUndefined();
+});
+
+test("the warm queue drops a place that's far too big rather than retrying it", async () => {
+  vi.useFakeTimers();
+  const { t, client } = await signedIn();
+  stubHugePlace();
+  await client.mutation(internal.places.enqueue, { osmIds: [80500] });
+  await t.action(internal.places.drain, {});
+  const row = (await rows(t)).find((r) => r.osmId === 80500);
+  expect([row?.queuedAt, row?.attempts, row?.fetchingAt]).toEqual([undefined, undefined, undefined]);
+});
+
+test("a request cut short by the deadline says it ran out of time instead of splitting", async () => {
+  const { t } = await signedIn();
+  let n = 0;
+  vi.stubGlobal("fetch", async () => { n++; throw Object.assign(new Error("This operation was aborted"), { name: "AbortError" }); });
+  // 60 s left: past the 20 s kept for saving, so the request's timeout is cut below 135 s.
+  await expect(t.action(internal.placeStreets.download, { boundary: JSON.stringify(square), deadline: Date.now() + 60_000 })).rejects.toThrow(/Ran out of time/);
+  expect(n).toBe(1);
+});

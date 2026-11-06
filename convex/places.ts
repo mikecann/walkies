@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { currentUserId } from "./users";
 import { fetchJSON } from "./osm";
+import { boundaryArea } from "./loreChecks";
 import { boundaryFromNominatim } from "./placeData";
 
 // The street cache's format and filtering. Bump it when either changes: rows with an
@@ -35,6 +36,10 @@ const workerOverpassWait = 3 * 60 * 1000;
 // the 10-minute action limit and place lease for the worker and lore jobs.
 const getBudget = 5.5 * 60 * 1000;
 const jobBudget = 9 * 60 * 1000;
+// Streets are only fetched for places up to this size. Suburbs are up to 400 km² and
+// Birmingham is 268; phones have asked for all of Australia (R80500) and Western
+// Australia, which no tiling can fit (WALKIES-6 to -A).
+const maxArea = 1_000 * 1_000_000;
 // Calls to places:get and places:warm, per user per minute.
 const callsPerMinute = 30;
 // A place that fails to warm is tried again after these waits, then left for
@@ -297,9 +302,13 @@ export const releaseOverpass = internalMutation({
 });
 
 export const finish = internalMutation({
-  args: { osmId: v.number(), lease: v.number(), name: v.optional(v.string()), file: v.optional(v.id("_storage")), fetchedAt: v.optional(v.number()) },
+  args: {
+    osmId: v.number(), lease: v.number(), name: v.optional(v.string()), file: v.optional(v.id("_storage")), fetchedAt: v.optional(v.number()),
+    // A failure that would only happen again, so the warm queue doesn't retry it.
+    giveUp: v.optional(v.boolean()),
+  },
   returns: v.boolean(),
-  handler: async (ctx, { osmId, lease, name, file, fetchedAt }) => {
+  handler: async (ctx, { osmId, lease, name, file, fetchedAt, giveUp }) => {
     const row = await rowFor(ctx, osmId);
     if (!row || row.fetchingAt !== lease) {
       if (file) await ctx.storage.delete(file);
@@ -315,7 +324,7 @@ export const finish = internalMutation({
       // Keep an older file on refresh failure, but allow the next call to retry.
       // Places the warm queue asked for go back on it after a wait, a few times.
       const attempts = row.attempts;
-      const retry = attempts !== undefined && attempts < retryDelays.length;
+      const retry = !giveUp && attempts !== undefined && attempts < retryDelays.length;
       await ctx.db.patch("placeData", row._id, {
         fetchingAt: undefined,
         queuedAt: retry ? Date.now() + retryDelays[attempts] : undefined,
@@ -362,6 +371,10 @@ async function fetchPlace(ctx: ActionCtx, osmId: number, lease: number, overpass
   try {
     const params = { osm_ids: `R${osmId}`, format: "jsonv2", polygon_geojson: "1", polygon_threshold: "0.0001" };
     const { name, boundary } = boundaryFromNominatim(await nominatim(ctx, "lookup", params), osmId);
+    if (boundaryArea(boundary) > maxArea) {
+      await ctx.runMutation(internal.places.finish, { osmId, lease, giveUp: true });
+      throw new ConvexError(`${name} is too big to fetch streets for`);
+    }
     // Overpass's answer is parsed and stored in Node (placeStreets.ts): it can be far
     // bigger than this runtime's 64 MB.
     const file = await withOverpass(ctx, overpassWait, () =>
