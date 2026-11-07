@@ -9,10 +9,12 @@
  */
 
 import type * as accountDeletion from "../accountDeletion.js";
+import type * as apns from "../apns.js";
 import type * as appleIdentityToken from "../appleIdentityToken.js";
 import type * as auth from "../auth.js";
 import type * as chef from "../chef.js";
 import type * as crons from "../crons.js";
+import type * as devices from "../devices.js";
 import type * as grid from "../grid.js";
 import type * as http from "../http.js";
 import type * as lore from "../lore.js";
@@ -46,10 +48,12 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   accountDeletion: typeof accountDeletion;
+  apns: typeof apns;
   appleIdentityToken: typeof appleIdentityToken;
   auth: typeof auth;
   chef: typeof chef;
   crons: typeof crons;
+  devices: typeof devices;
   grid: typeof grid;
   http: typeof http;
   lore: typeof lore;

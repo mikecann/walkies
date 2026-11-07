@@ -24,6 +24,7 @@ import { loreEntry, lorePlace, machines, vHistory } from "./machines";
 import { boundaryFromNominatim, type PlaceData } from "./placeData";
 import { nominatim } from "./places";
 import { currentUserId } from "./users";
+import { loreFinished } from "./devices";
 
 export { autoOn, workflow };
 
@@ -601,6 +602,11 @@ export const runFinished = internalMutation({
         await lorePlace.send(ctx, row._id, { type: "RUN_FAILED", run, error: "The run finished without publishing." });
       }
       const after = (await ctx.db.get("lorePlaces", row._id))!;
+      // Tell Mike when this run broke (not when a stale report was refused).
+      if (row.state.kind === "researching" && row.attempts === run && (after.state.kind === "failed" || after.state.kind === "failedWaiting")) {
+        const again = after.state.kind === "failedWaiting" ? " It'll try again later." : "";
+        await loreFinished(ctx, { osmId, name: row.name, outcome: "failed", live: 0, pending: 0, error: `${after.state.error.slice(0, 150)}${again}` });
+      }
       if (after.attempts === run && after.state.kind !== "queued" && after.state.kind !== "researching") {
         await ctx.db.insert("loreJournals", { osmId, run, workflowId, until: Date.now() + journalKeep });
         await ctx.scheduler.runAfter(0, internal.lore.cleanUpRun, { osmId, run });

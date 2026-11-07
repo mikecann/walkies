@@ -37,6 +37,7 @@ export const PERSONAL_INDEX = {
   placeCalls: "by_user",
   loreCalls: "by_user",
   loreRequests: "by_user_at",
+  devices: "by_user",
 } as const;
 type PersonalTable = keyof typeof PERSONAL_INDEX;
 
@@ -113,6 +114,8 @@ const SWEEPS: Record<PersonalTable | "loreQueue" | "chefRequests", Sweep> = {
   placeCalls: plain("placeCalls"),
   loreCalls: plain("loreCalls"),
   loreRequests: plain("loreRequests"),
+  // Their phones' push tokens, so a deleted account gets no more pushes.
+  devices: plain("devices"),
   // A suburb their walk queued stays queued (it's everyone's), but forgets who asked.
   // Who asked is the research machine's state, so the machine forgets it (lore.ts).
   loreQueue: async (ctx, userId, budget) => await ctx.runMutation(internal.lore.forgetRequester, { userId, limit: budget }),

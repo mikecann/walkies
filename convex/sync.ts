@@ -3,6 +3,7 @@ import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/s
 import { currentUserId } from "./users";
 import { mergeLedgers, parseLedger } from "./progression";
 import { noticePlace, noticeWalk } from "./lore";
+import { placeAdded } from "./devices";
 
 async function requireUser(ctx: QueryCtx | MutationCtx) {
   const userId = await currentUserId(ctx);
@@ -71,6 +72,7 @@ export const savePlace = mutation({
     if (existing === null) {
       const placeId = await ctx.db.insert("places", { userId, ...place });
       await noticePlace(ctx, (await ctx.db.get("places", placeId))!);
+      await placeAdded(ctx, userId, place.name);
     } else if (place.updatedAt > existing.updatedAt) {
       await ctx.db.patch("places", existing._id, { name: place.name, updatedAt: place.updatedAt, file: place.file });
       await ctx.storage.delete(existing.file);

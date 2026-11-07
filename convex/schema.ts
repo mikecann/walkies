@@ -69,7 +69,25 @@ export default defineSchema({
     walkedTiles: v.optional(v.number()),
     /** lore.readPlace found its relation isn't a suburb-sized admin boundary, so it's never researched. */
     loreNoSuburb: v.optional(v.boolean()),
-  }).index("by_user_client", ["userId", "clientId"]),
+  }).index("by_user_client", ["userId", "clientId"])
+    // Who has a suburb, to tell them when its secrets are ready (push.ts).
+    .index("by_osm", ["osmId"]),
+
+  /**
+   * Phones and their APNs tokens, for pushes (push.ts). `deviceId` is a UUID the app keeps.
+   * A phone belongs to whoever signed in on it last, so one person's pushes never reach a
+   * phone someone else has since signed in on.
+   */
+  devices: defineTable({
+    userId: v.id("users"),
+    deviceId: v.string(),
+    platform: v.string(),
+    apnsToken: v.optional(v.string()),
+    apnsEnvironment: v.optional(v.union(v.literal("sandbox"), v.literal("production"))),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"])
+    // Not user-first: registering has to find the phone whoever had it before.
+    .index("by_deviceId", ["deviceId"]).index("by_apnsToken", ["apnsToken"]),
 
   progress: defineTable({
     userId: v.id("users"),
