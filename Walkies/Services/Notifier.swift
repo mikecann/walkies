@@ -38,6 +38,17 @@ enum Notifier {
     }
 }
 
+/// Where tapping a push opens, from the `open` the server puts in it (convex/devices.ts).
+nonisolated enum NotificationTarget: String {
+    /// Settings, at "Secrets waiting for you".
+    case secretsReview
+
+    init?(userInfo: [AnyHashable: Any]) {
+        guard let raw = userInfo["open"] as? String else { return nil }
+        self.init(rawValue: raw)
+    }
+}
+
 /// The phone's APNs token, handed to the server so it can tell you when a suburb's secrets
 /// are ready (and tell Mike how research and new places are going). convex/devices.ts keeps it.
 nonisolated enum PushTokens {

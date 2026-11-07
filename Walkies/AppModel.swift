@@ -9,6 +9,9 @@ final class AppModel {
     private(set) var walks: [Walk] = []
     private(set) var teams: [Team] = []
     var pendingTeamInvite: String?
+    /// A tapped notification's destination, held here because a tap can launch the app
+    /// before there's any screen to take it. ContentView takes it when it's up.
+    var notificationTarget: NotificationTarget?
     var teamNotice: String?
     private(set) var teamMembershipRevision = 0
     var selectedCityID: UUID? {

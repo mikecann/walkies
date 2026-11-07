@@ -1,12 +1,13 @@
 import ChefKit
 import SwiftUI
 import UIKit
+import UserNotifications
 
 /// Owns the model, so it exists even when iOS relaunches the app in the background
 /// for always-on tracking and no window ever appears. That can be before the phone's
 /// first unlock since it started, when saved files and the Keychain can't be read yet,
 /// so they wait for it.
-final class AppDelegate: NSObject, UIApplicationDelegate {
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     private lazy var locked = !UIApplication.shared.isProtectedDataAvailable
     lazy var model: AppModel = {
         #if DEBUG
@@ -25,6 +26,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     ) -> Bool {
         // First, so a crash anywhere in launch is reported. Does nothing outside Release on a phone.
         CrashReporting.start()
+        // Before this returns, or the tap that launched the app is never delivered.
+        UNUserNotificationCenter.current().delegate = self
         model.makePlaceClient = { [weak account] in await account?.client() }
         model.requestSync = { [weak self] in self?.sync.schedule() }
         // Chef (Seth's feedback board): opened from Settings rather than floating over the map.
@@ -44,6 +47,27 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             start()
         }
         return true
+    }
+
+    /// A notification's been tapped.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        if let target = NotificationTarget(userInfo: response.notification.request.content.userInfo) {
+            model.notificationTarget = target
+        }
+        completionHandler()
+    }
+
+    /// iOS hides a notification for the app that's open, which would lose one you're meant
+    /// to act on. The rest stay hidden, since the app shows those its own way.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        let actionable = NotificationTarget(userInfo: notification.request.content.userInfo) != nil
+        completionHandler(actionable ? [.banner, .list, .sound] : [])
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {

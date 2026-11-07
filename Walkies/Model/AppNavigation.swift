@@ -36,6 +36,19 @@ final class AppNavigation {
         tab = .progress
     }
 
+    /// Goes up each time a notification asks for Settings' "Secrets waiting for you", so
+    /// the page fetches the list again and scrolls to it, even if it's already showing.
+    private(set) var secretsReviewRequest = 0
+
+    /// A tapped notification: Settings, at the secrets waiting for review, with any
+    /// card or list that'd cover it out of the way.
+    func showSecretsReview() {
+        openSecret = nil
+        showingPlaces = false
+        tab = .settings
+        secretsReviewRequest += 1
+    }
+
     /// Back to the map, for a walk replay to play over it.
     func showMap() {
         tab = .map

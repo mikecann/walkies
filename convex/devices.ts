@@ -1,4 +1,4 @@
-import { ConvexError, v } from "convex/values";
+import { ConvexError, v, type Infer } from "convex/values";
 import { components, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery, mutation, type MutationCtx, type QueryCtx } from "./_generated/server";
@@ -110,10 +110,14 @@ export async function admins(ctx: Pick<PushCtx, "runQuery" | "db">): Promise<Id<
   });
 }
 
-const vPush = v.object({ userIds: v.array(v.id("users")), title: v.string(), body: v.string(), threadId: v.string() });
+const vPush = v.object({
+  userIds: v.array(v.id("users")), title: v.string(), body: v.string(), threadId: v.string(),
+  /** Where tapping it opens in the app (`NotificationTarget` on the iPhone). Unset: wherever the app was. */
+  open: v.optional(v.literal("secretsReview")),
+});
 
 /** Sends each of these pushes after the mutation commits, so a push can never hold it up or undo it. */
-export async function sendPushes(ctx: PushCtx, pushes: { userIds: Id<"users">[]; title: string; body: string; threadId: string }[]) {
+export async function sendPushes(ctx: PushCtx, pushes: Infer<typeof vPush>[]) {
   for (const push of pushes) if (push.userIds.length > 0) await ctx.scheduler.runAfter(0, internal.apns.send, push);
 }
 
@@ -139,7 +143,7 @@ export async function loreFinished(
 ) {
   await quietly("secrets", async () => {
     const adminIds = await admins(ctx);
-    const pushes = [];
+    const pushes: Infer<typeof vPush>[] = [];
     if (live > 0) {
       const owners = (await ctx.db.query("places").withIndex("by_osm", (q) => q.eq("osmId", osmId)).collect()).map((p) => p.userId);
       // The admin gets their own, fuller one below.
@@ -154,7 +158,10 @@ export async function loreFinished(
     const body = outcome === "failed" ? `Research failed: ${error ?? "no reason given"}`
       : outcome === "quiet" ? `Quiet: ${live} live${waiting}.`
       : `${live} live${waiting}.`;
-    pushes.push({ userIds: adminIds, title: `Secrets for ${name}`, body, threadId: "admin-lore" });
+    pushes.push({
+      userIds: adminIds, title: `Secrets for ${name}`, body, threadId: "admin-lore",
+      ...(pending > 0 ? { open: "secretsReview" as const } : {}),
+    });
     await sendPushes(ctx, pushes);
   });
 }
