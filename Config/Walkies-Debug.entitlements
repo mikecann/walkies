@@ -7,6 +7,9 @@
 	     /.well-known/apple-app-site-association (convex/http.ts), for passwords and
 	     passkeys later. Sign-in doesn't rely on it: it comes back on walkies://.
 	     The dev one is fetched straight from the domain in developer mode. -->
+	<!-- Pushes when a suburb's secrets are ready (convex/apns.ts). -->
+	<key>aps-environment</key>
+	<string>development</string>
 	<!-- Native Sign in with Apple (Walkies/Services/AppleSignIn.swift). -->
 	<key>com.apple.developer.applesignin</key>
 	<array>

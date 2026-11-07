@@ -138,6 +138,7 @@ final class SyncEngine {
             model.refreshStreets()
             // A walk that's just gone up can start research for its place.
             model.refreshLore()
+            await PushTokens.register(client, userId: userId())
         } catch is CancellationError {
             status = .idle
         } catch {

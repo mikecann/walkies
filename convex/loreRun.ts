@@ -9,6 +9,7 @@ import { overBudget } from "./loreBudget";
 import { leadOnlyProblem, onDomains, sensitiveWords } from "./loreChecks";
 import { bumpVersion, deleteSticker, placeRow } from "./loreMachines";
 import { insertPlain, loreEntry, lorePlace, machines } from "./machines";
+import { loreFinished } from "./devices";
 
 // The catalog's builders (machines.ts): their db can't write a machine's state, and
 // the internal one can send the machines' `server` events.
@@ -372,6 +373,8 @@ export const publish = internalMutation({
     const all = await ctx.db.query("loreEntries").withIndex("by_osm_review", (q) => q.eq("osmId", osmId)).collect();
     const quiet = all.filter((e) => ["auto", "approved", "pending"].includes(e.state.kind)).length < wanted.enough;
     await lorePlace.send(ctx, place._id, { type: "PUBLISHED", run });
+    // This run's new ones: people with the place hear about these, Mike about those waiting for him too.
+    await loreFinished(ctx, { osmId, name: place.name, outcome: quiet ? "quiet" : "ready", live, pending });
     return { live, pending, dropped: rows.filter((e) => e.state.kind === "dropped").length + unchecked, status: quiet ? "quiet" : "ready" };
   },
 });

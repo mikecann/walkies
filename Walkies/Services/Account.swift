@@ -289,6 +289,8 @@ final class Account {
 
     /// Signed out here straight away, so nothing can sync while the server's told.
     func signOut() async {
+        // While the session still works, so the server stops sending this phone the account's pushes.
+        if let client = await client() { await PushTokens.unregister(client) }
         let refreshToken = session?.refreshToken
         clear()
         if let refreshToken {

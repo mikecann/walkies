@@ -46,6 +46,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         return true
     }
 
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        PushTokens.save(deviceToken)
+        sync.schedule()
+    }
+
     private func unlocked() {
         guard model.locked else { return }
         if let unlockObserver { NotificationCenter.default.removeObserver(unlockObserver) }
@@ -57,6 +62,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     private func start() {
+        // For pushes when a suburb's secrets are ready. Needs no prompt; whether they show is
+        // the notification permission setup already asks for. Sync hands the token over.
+        UIApplication.shared.registerForRemoteNotifications()
         model.refreshNeighbours()
         model.resumeAlwaysOn()
         sync.schedule()

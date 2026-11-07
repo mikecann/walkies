@@ -30,6 +30,13 @@ const app = defineApp({
     LORE_AUTO: v.optional(v.string()),
     // For the research, writing, fact-checking and sticker calls. Only read in actions.
     OPENROUTER_API_KEY: v.optional(v.string()),
+    // Pushes (apns.ts). The team's APNs auth key, shared with Mike's other apps: the .p8's
+    // contents, its key ID and the team ID. APNS_ENV is the default for tokens that don't say.
+    // Without them every push is a logged no-op.
+    APNS_KEY_P8: v.optional(v.string()),
+    APNS_KEY_ID: v.optional(v.string()),
+    APNS_TEAM_ID: v.optional(v.string()),
+    APNS_ENV: v.optional(v.string()),
   },
 });
 
