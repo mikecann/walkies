@@ -56,6 +56,11 @@ struct ContentView: View {
         // The keyboard covers the dock instead of lifting it into the page.
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .environment(navigation)
+        .onChange(of: model.notificationTarget, initial: true) { _, target in
+            guard target == .secretsReview else { return }
+            model.notificationTarget = nil
+            navigation.showSecretsReview()
+        }
         .alert("Team membership changed", isPresented: Binding(get: { model.teamNotice != nil }, set: { if !$0 { model.teamNotice = nil } })) {
             Button("OK") { model.teamNotice = nil }
         } message: { Text(model.teamNotice ?? "") }

@@ -65,7 +65,8 @@ test("people with the suburb hear about its new secrets, and the admin gets the 
   });
   expect(await pushes(t)).toEqual([
     expect.objectContaining({ userIds: [dad], body: "5 secrets are hidden in Porlock. Go for a walk to find them." }),
-    expect.objectContaining({ userIds: [mike], body: "5 live, 2 waiting for your OK." }),
+    // Only this one opens the review list when tapped.
+    expect.objectContaining({ userIds: [mike], body: "5 live, 2 waiting for your OK.", open: "secretsReview" }),
   ]);
 });
 

@@ -19,6 +19,25 @@ struct AppNavigationTests {
         #expect(navigation.progressSection == .level)
     }
 
+    @Test func aReviewNotificationOpensSettingsWithNothingOverIt() {
+        let navigation = AppNavigation()
+        navigation.showingPlaces = true
+        navigation.showSecretsReview()
+        #expect(navigation.tab == .settings)
+        #expect(!navigation.showingPlaces)
+        #expect(navigation.openSecret == nil)
+        // Tapping another one while Settings is up still has to fetch and scroll.
+        let first = navigation.secretsReviewRequest
+        navigation.showSecretsReview()
+        #expect(navigation.secretsReviewRequest == first + 1)
+    }
+
+    @Test func onlyAKnownTargetOpensAnything() {
+        #expect(NotificationTarget(userInfo: ["open": "secretsReview"]) == .secretsReview)
+        #expect(NotificationTarget(userInfo: ["open": "somethingFromANewerServer"]) == nil)
+        #expect(NotificationTarget(userInfo: ["sticker": "abc"]) == nil)
+    }
+
     @Test func pickingASectionStaysOnProgress() {
         let navigation = AppNavigation()
         navigation.showProgress(.level)

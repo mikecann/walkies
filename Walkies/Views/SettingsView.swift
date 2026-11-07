@@ -5,6 +5,7 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(Account.self) private var account
     @Environment(SyncEngine.self) private var sync
+    @Environment(AppNavigation.self) private var navigation
     @State private var confirmingSignOut = false
     @State private var cantSignOut: String?
     @State private var notUploaded: Int?
@@ -15,6 +16,10 @@ struct SettingsView: View {
     /// Server secrets waiting for Mike's OK. Nil for everyone else, who never sees the list.
     @State private var waitingSecrets: [WaitingSecret]?
     @State private var reviewFailed: String?
+    /// The last notification's request this page has scrolled for, so coming back to the
+    /// tab later doesn't jump to the list again.
+    @State private var handledReviewRequest = 0
+    private static let waitingSecretsSection = "waitingSecrets"
 
     private var syncText: String {
         switch sync.status {
@@ -88,6 +93,7 @@ struct SettingsView: View {
         @Bindable var model = model
 
         NavigationStack {
+            ScrollViewReader { scroller in
             Form {
                 Section {
                     LabeledContent("Signed in as", value: account.displayName ?? "you")
@@ -130,7 +136,7 @@ struct SettingsView: View {
                             }
                         }
                     } header: {
-                        Text("Secrets waiting for you")
+                        Text("Secrets waiting for you").id(Self.waitingSecretsSection)
                     } footer: {
                         Text("Written by the server for a new suburb. Only you can see these, and they stay hidden until you approve them.")
                     }
@@ -226,9 +232,21 @@ struct SettingsView: View {
             .scrollContentBackground(.hidden)
             .background(Color.cream)
             .task { await model.refreshStepsToday() }
-            .task(id: account.isSignedIn) {
+            .task(id: "\(account.isSignedIn) \(navigation.secretsReviewRequest)") {
                 guard account.isSignedIn, let client = await account.client() else { waitingSecrets = nil; return }
-                waitingSecrets = await SecretsReview.waiting(client, userId: account.userId)
+                let request = navigation.secretsReviewRequest
+                let tapped = request > handledReviewRequest
+                let fresh = await SecretsReview.waiting(client, userId: account.userId)
+                guard !Task.isCancelled else { return }
+                // A failed look after a tap shouldn't take away a list that's already showing.
+                if fresh != nil || !tapped { waitingSecrets = fresh }
+                guard tapped else { return }
+                handledReviewRequest = request
+                // The section has only just been added, so the list needs a moment to lay it out.
+                try? await Task.sleep(for: .milliseconds(150))
+                guard waitingSecrets?.isEmpty == false else { return }
+                withAnimation { scroller.scrollTo(Self.waitingSecretsSection, anchor: .top) }
+            }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

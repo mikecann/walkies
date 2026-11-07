@@ -98,7 +98,7 @@ async function sendAll(environment: ApnsEnv, jwt: string, tokens: string[], payl
 export const send = internalAction({
   args: vPush,
   returns: v.null(),
-  handler: async (ctx, { userIds, title, body, threadId }) => {
+  handler: async (ctx, { userIds, title, body, threadId, open }) => {
     const cfg = config();
     if (!cfg) {
       console.log(`[apns] not set up, skipping: ${title}: ${body}`);
@@ -106,7 +106,7 @@ export const send = internalAction({
     }
     const targets = await ctx.runQuery(internal.devices.pushTargets, { userIds });
     if (targets.length === 0) return null;
-    const payload = JSON.stringify({ aps: { alert: { title, body }, sound: "default", "thread-id": threadId } });
+    const payload = JSON.stringify({ aps: { alert: { title, body }, sound: "default", "thread-id": threadId }, ...(open ? { open } : {}) });
     const jwt = await providerToken(cfg);
     const retry: { token: string; environment: ApnsEnv }[] = [];
     for (const environment of ["sandbox", "production"] as const) {
