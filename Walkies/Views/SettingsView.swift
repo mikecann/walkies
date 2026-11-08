@@ -13,6 +13,9 @@ struct SettingsView: View {
     @State private var reallyDeleting = false
     @State private var deleting = false
     @State private var deleteFailed: String?
+    /// A guest signing in from here, and what went wrong if it didn't work.
+    @State private var signingIn: Account.Provider?
+    @State private var signInFailed: String?
     /// Server secrets waiting for Mike's OK. Nil for everyone else, who never sees the list.
     @State private var waitingSecrets: [WaitingSecret]?
     @State private var reviewFailed: String?
@@ -65,6 +68,26 @@ struct SettingsView: View {
         }
     }
 
+    /// A guest signing in with Apple or Google. Their walks stay on the phone and go up to
+    /// that account on the next sync (`SyncEngine.adopt`).
+    private func signIn(with provider: Account.Provider) {
+        signingIn = provider
+        Task {
+            do {
+                try await account.signIn(with: provider)
+                sync.schedule()
+                model.refreshNeighbours()
+            } catch SignInError.cancelled {
+                // Closed the sheet: nothing to say.
+            } catch is URLError {
+                signInFailed = "Can't reach Walkies. Check your connection and try again."
+            } catch {
+                signInFailed = error.localizedDescription
+            }
+            signingIn = nil
+        }
+    }
+
     private func deleteAccount() {
         if model.activeWalk != nil {
             cantSignOut = "Finish your walk first."
@@ -95,6 +118,23 @@ struct SettingsView: View {
         NavigationStack {
             ScrollViewReader { scroller in
             Form {
+                if account.isGuest {
+                    Section {
+                        Button { signIn(with: .apple) } label: {
+                            HStack { Label("Sign in with Apple", systemImage: "apple.logo"); Spacer(); if signingIn == .apple { ProgressView() } }
+                        }
+                        Button { signIn(with: .google) } label: {
+                            HStack { Label("Continue with Google", systemImage: "g.circle"); Spacer(); if signingIn == .google { ProgressView() } }
+                        }
+                    } header: {
+                        Text("Account")
+                    } footer: {
+                        Text("You're using Walkies without an account. Sign in to back up your walks and get them back on a new phone. Everything on this phone comes with you.")
+                    }
+                    .disabled(signingIn != nil)
+                }
+
+                if !account.isGuest {
                 Section {
                     LabeledContent("Signed in as", value: account.displayName ?? "you")
                     if let email = account.email, email != account.displayName {
@@ -109,6 +149,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Account")
                 }
+                }
 
                 // Worded the same as "Deleting your account" on the website's privacy page.
                 if account.isSignedIn {
@@ -117,12 +158,14 @@ struct SettingsView: View {
                             if deleting {
                                 HStack { Text("Deleting…"); Spacer(); ProgressView() }
                             } else {
-                                Text("Delete account")
+                                Text(account.isGuest ? "Delete my data" : "Delete account")
                             }
                         }
                         .disabled(deleting)
                     } footer: {
-                        Text("Deletes your account and everything in it from Walkies' server, then clears Walkies off this phone and signs you out. You can't undo it.")
+                        Text(account.isGuest
+                             ? "Deletes everything you've done in Walkies from its server and this phone. You can't undo it."
+                             : "Deletes your account and everything in it from Walkies' server, then clears Walkies off this phone and signs you out. You can't undo it.")
                     }
                 }
 
@@ -212,6 +255,11 @@ struct SettingsView: View {
                 Button("OK") {}
             } message: {
                 Text(deleteFailed ?? "")
+            }
+            .alert("Couldn't sign in", isPresented: Binding(get: { signInFailed != nil }, set: { if !$0 { signInFailed = nil } })) {
+                Button("OK") {}
+            } message: {
+                Text(signInFailed ?? "")
             }
             .alert("Couldn't save that", isPresented: Binding(get: { reviewFailed != nil }, set: { if !$0 { reviewFailed = nil } })) {
                 Button("OK") {}

@@ -5,6 +5,7 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
+import { guestSignupsPerMinute } from "./users";
 
 const modules = import.meta.glob(["./**/*.{ts,js}", "!./**/*.test.ts"]);
 let privateKey: string;
@@ -34,15 +35,10 @@ function setup() {
 }
 
 describe("simulator test sign-in", () => {
-  test.each([undefined, "", "0", "true", "01"])("refuses wrapper and direct anonymous sign-in when flag is %s", async (flag) => {
+  test.each([undefined, "", "0", "true", "01"])("refuses the test wrapper when flag is %s", async (flag) => {
     const t = setup();
     vi.stubEnv("WALKIES_TEST_SIGNIN", flag);
     await expect(t.mutation(api.auth.signInForTesting, { name: "Sim A" })).rejects.toThrow("Test sign-in is disabled");
-    // A modified client must not bypass the wrapper's gate by using the provider.
-    await expect(t.mutation(api.auth.signInAnonymously)).rejects.toThrow("Test sign-in is disabled");
-    await expect(t.mutation(internal.users.createUserAnonymous, {
-      provider: { name: "anonymous", accountId: "forged", profile: {} },
-    })).rejects.toThrow("Test sign-in is disabled");
     expect(await t.run((ctx) => ctx.db.query("users").collect())).toEqual([]);
   });
 
@@ -57,8 +53,8 @@ describe("simulator test sign-in", () => {
     expect(a.tokens.userId).not.toBe(b.tokens.userId);
     const alice = t.withIdentity({ subject: a.tokens.userId });
     const bob = t.withIdentity({ subject: b.tokens.userId });
-    expect(await alice.query(api.users.me)).toEqual({ name: "Sim A", email: null, picture: null });
-    expect(await bob.query(api.users.me)).toEqual({ name: "Sim B", email: null, picture: null });
+    expect(await alice.query(api.users.me)).toEqual({ name: "Sim A", email: null, picture: null, guest: false });
+    expect(await bob.query(api.users.me)).toEqual({ name: "Sim B", email: null, picture: null, guest: false });
     const { teamId, inviteCode } = await alice.action(api.teams.createTeam, {
       name: "Simulator team", colour: "#e67834",
     });
@@ -70,18 +66,17 @@ describe("simulator test sign-in", () => {
     if (rotated.kind === "rotated") expect(rotated.tokens.userId).toBe(a.tokens.userId);
   });
 
-  test("unnamed, blank and direct sign-ins get generated names and no email", async () => {
+  test("unnamed and blank test sign-ins get generated names and no email", async () => {
     const t = setup();
     vi.stubEnv("WALKIES_TEST_SIGNIN", "1");
     const results = [
       await t.mutation(api.auth.signInForTesting, {}),
       await t.mutation(api.auth.signInForTesting, { name: "  " }),
-      await t.mutation(api.auth.signInAnonymously),
     ];
-    expect(new Set(results.map((r) => r.tokens.userId)).size).toBe(3);
+    expect(new Set(results.map((r) => r.tokens.userId)).size).toBe(2);
     for (const result of results) {
       const me = await t.withIdentity({ subject: result.tokens.userId }).query(api.users.me);
-      expect(me).toEqual({ name: expect.stringMatching(/^Test walker [0-9A-F]{4}$/), email: null, picture: null });
+      expect(me).toEqual({ name: expect.stringMatching(/^Test walker [0-9A-F]{4}$/), email: null, picture: null, guest: false });
     }
   });
 
@@ -90,5 +85,44 @@ describe("simulator test sign-in", () => {
     vi.stubEnv("WALKIES_TEST_SIGNIN", "1");
     await expect(t.mutation(api.auth.signInForTesting, { name: "A".repeat(81) })).rejects.toThrow("80 characters");
     expect(await t.run((ctx) => ctx.db.query("users").collect())).toEqual([]);
+  });
+});
+
+describe("guests", () => {
+  // App Store Guideline 5.1.1(v): Walkies has to work without signing up.
+  test.each([undefined, "1"])("anyone can start as a guest, test flag %s", async (flag) => {
+    const t = setup();
+    vi.stubEnv("WALKIES_TEST_SIGNIN", flag);
+    const result = await t.mutation(api.auth.signInAnonymously);
+    expect(result.status).toBe("complete");
+    const me = await t.withIdentity({ subject: result.tokens.userId }).query(api.users.me);
+    expect(me).toEqual({ name: expect.stringMatching(/^Walker [0-9A-F]{4}$/), email: null, picture: null, guest: true });
+    const rotated = await t.mutation(api.auth.refreshSession, { refreshToken: result.tokens.refreshToken });
+    expect(rotated.kind).toBe("rotated");
+  });
+
+  test("only so many guests a minute, then more once it's passed", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup();
+      for (let i = 0; i < guestSignupsPerMinute; i++) await t.mutation(api.auth.signInAnonymously);
+      await expect(t.mutation(api.auth.signInAnonymously)).rejects.toThrow("Try again in a minute");
+      expect((await t.run((ctx) => ctx.db.query("users").collect())).length).toBe(guestSignupsPerMinute);
+      vi.advanceTimersByTime(61_000);
+      await t.mutation(api.auth.signInAnonymously);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("deleteGuest deletes a guest and refuses a real account", async () => {
+    const t = setup();
+    vi.stubEnv("WALKIES_TEST_SIGNIN", "1");
+    const guest = await t.mutation(api.auth.signInAnonymously);
+    const real = await t.mutation(api.auth.signInForTesting, { name: "Sim A" });
+    await expect(t.withIdentity({ subject: real.tokens.userId }).mutation(api.users.deleteGuest)).rejects.toThrow("Only a guest");
+    expect(await t.withIdentity({ subject: real.tokens.userId }).query(api.users.me)).toMatchObject({ name: "Sim A" });
+    await t.withIdentity({ subject: guest.tokens.userId }).mutation(api.users.deleteGuest);
+    expect(await t.withIdentity({ subject: guest.tokens.userId }).query(api.users.me)).toBeNull();
   });
 });

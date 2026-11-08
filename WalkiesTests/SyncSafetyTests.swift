@@ -240,6 +240,87 @@ struct SyncSafetyTests {
         #expect(!(await bobServer.calls).contains("sync:savePlace"))
         #expect(!(await bobServer.calls).contains("sync:saveWalk"))
     }
+
+    /// A guest signing in with Apple or Google keeps everything on the phone, and it all
+    /// goes up to their new account, even what the guest account already had. It works
+    /// across a relaunch, so it doesn't matter when the app's killed.
+    @Test func aGuestSigningInTakesTheirWalksWithThem() async throws {
+        let store = Store(root: root())
+        defer { store.wipe() }
+        let place = city()
+        store.save([place])
+        store.save(walk(0, in: place))
+        let guestServer = SafetyServer()
+        let guestClient = client(guestServer)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, userId: { "guest" }, isGuest: { true },
+                                makeClient: { guestClient })
+        await engine.sync()
+        #expect(store.loadOwner() == "guest")
+        #expect(store.loadOwnerIsGuest())
+        #expect(await guestServer.calls.filter { $0 == "sync:saveWalk" }.count == 1)
+
+        // Signed in with Apple, then the app's relaunched before anything synced.
+        let relaunched = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        let aliceServer = SafetyServer()
+        let aliceClient = client(aliceServer)
+        let alice = SyncEngine(model: relaunched, store: store, isSignedIn: { true }, userId: { "alice" }, isGuest: { false },
+                               makeClient: { aliceClient })
+        await alice.sync()
+        #expect(alice.status == .idle)
+        #expect(store.loadOwner() == "alice")
+        #expect(!store.loadOwnerIsGuest())
+        #expect(relaunched.cities.count == 1)
+        #expect(relaunched.walks.count == 1)
+        #expect(await aliceServer.places.count == 1)
+        #expect(await aliceServer.calls.filter { $0 == "sync:saveWalk" }.count == 1)
+
+        // Alice's data is hers now: someone else signing in starts from scratch, as before.
+        let bobServer = SafetyServer()
+        let bobClient = client(bobServer)
+        let bob = SyncEngine(model: relaunched, store: store, isSignedIn: { true }, userId: { "bob" }, makeClient: { bobClient })
+        await bob.sync()
+        #expect(relaunched.cities.isEmpty)
+        #expect(relaunched.walks.isEmpty)
+    }
+
+    /// A sync for one account that's paused mid-download stops when someone else signs in
+    /// (a new guest after a session ran out), so the old account's walks never land in theirs.
+    @Test func aSyncStopsWhenSomeoneElseSignsInPartWay() async throws {
+        let store = Store(root: root())
+        defer { store.wipe() }
+        let place = city()
+        let server = SafetyServer()
+        await server.seed(place)
+        for n in 0..<3 { await server.seed(walk(n, in: place)) }
+        await server.pauseDownloads()
+        let client = client(server)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        var user = "alice"
+        let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, userId: { user }, makeClient: { client })
+        let syncing = Task { await engine.sync() }
+        await server.waitForDownload()
+        user = "guest"
+        await server.resumeDownloads()
+        await syncing.value
+        #expect(model.cities.isEmpty)
+        #expect(model.walks.isEmpty)
+        #expect(store.loadCities().isEmpty)
+    }
+
+    /// owner.json from before guests was just the user id, and still reads as a real account.
+    @Test func anOldOwnerFileStillReads() throws {
+        let root = root()
+        let store = Store(root: root)
+        defer { store.wipe() }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try JSONEncoder().encode("alice").write(to: root.appending(path: "owner.json"))
+        #expect(store.loadOwner() == "alice")
+        #expect(!store.loadOwnerIsGuest())
+        store.save(owner: "guest", guest: true)
+        #expect(store.loadOwner() == "guest")
+        #expect(store.loadOwnerIsGuest())
+    }
 }
 
 actor SafetyServer {

@@ -24,7 +24,16 @@ export default defineSchema({
      * tombstone, so Convex Auth's sign-ins that still point at it count as signed out.
      */
     deletedAt: v.optional(v.number()),
+    /**
+     * Using Walkies without signing in: an anonymous account with no name, email or
+     * photo. Signing in with Apple or Google later moves their walks to that account
+     * from the phone, and deletes this one (users:deleteAccount).
+     */
+    guest: v.optional(v.boolean()),
   }).index("by_email", ["email"]).index("by_mergedInto", ["mergedInto"]),
+
+  /** One row: how many guest accounts were made in the current minute (users.createUserAnonymous). */
+  guestSignups: defineTable({ windowStart: v.number(), count: v.number() }),
 
   /**
    * A deleted account's data going, a batch at a time. Each step records how far it
@@ -52,7 +61,9 @@ export default defineSchema({
     newTiles: v.number(),
     /** The walk exactly as the app saves it, GPS points and all. */
     file: v.id("_storage"),
-  }).index("by_user_client", ["userId", "clientId"]),
+  }).index("by_user_client", ["userId", "clientId"])
+    // Whether a file's already used, so a save can't take over someone else's (sync.ts).
+    .index("by_file", ["file"]),
 
   places: defineTable({
     userId: v.id("users"),
@@ -71,7 +82,8 @@ export default defineSchema({
     loreNoSuburb: v.optional(v.boolean()),
   }).index("by_user_client", ["userId", "clientId"])
     // Who has a suburb, to tell them when its secrets are ready (push.ts).
-    .index("by_osm", ["osmId"]),
+    .index("by_osm", ["osmId"])
+    .index("by_file", ["file"]),
 
   /**
    * Phones and their APNs tokens, for pushes (push.ts). `deviceId` is a UUID the app keeps.
@@ -148,7 +160,7 @@ export default defineSchema({
     /** When the place was found far too big to fetch streets for (a state, a country),
      * so it isn't looked up again for a while. */
     tooBigAt: v.optional(v.number()),
-  }).index("by_osm", ["osmId"]).index("by_queued", ["queuedAt"]),
+  }).index("by_osm", ["osmId"]).index("by_queued", ["queuedAt"]).index("by_file", ["file"]),
 
   // Secrets for new suburbs (lore.ts). One row per suburb that's been researched or is
   // waiting to be, shared by everyone, keyed by OSM relation like placeData.
@@ -236,7 +248,7 @@ export default defineSchema({
     // eslint-disable-next-line machines/no-optional-on-machine-tables -- drawn near the end of a run, or later by lore:resume from "stickers", and some secrets never get one
     stickerFile: v.optional(v.id("_storage")),
   }).index("by_osm_review", ["osmId", "state.kind"]).index("by_review", ["state.kind"]).index("by_entry", ["entryId"])
-    .index("by_osm_run", ["osmId", "run"]),
+    .index("by_osm_run", ["osmId", "run"]).index("by_sticker", ["stickerFile"]),
 
   // OpenRouter spend in US dollars, by UTC day, place and step, for the caps. `cost`
   // includes `held`: holds on calls still going, at the most each could cost.

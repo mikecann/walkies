@@ -84,7 +84,7 @@ describe("native Sign in with Apple", () => {
     });
     expect(result.status).toBe("complete");
     const me = await t.withIdentity({ subject: result.tokens.userId }).query(api.users.me);
-    expect(me).toEqual({ name: "Pat Lee", email: "walker@example.com", picture: null });
+    expect(me).toEqual({ name: "Pat Lee", email: "walker@example.com", picture: null, guest: false });
   });
 
   test("signing in again is the same person, and a missing name doesn't wipe the saved one", async () => {
