@@ -301,7 +301,10 @@ export const takeOverpass = internalMutation({
       if (interactive) await ctx.db.patch("placeData", row._id, { waitingAt: now });
       return interactive ? 500 : 2000;
     }
-    // Free, but someone opening a place is waiting for it: let them have it.
+    // Free, but someone opening a place is waiting for it: let them have it. Only
+    // background work steps aside. Someone else opening a place takes their next tile
+    // straight away, so two people's downloads go one after the other rather than
+    // tile by tile, where both could run out of time.
     if (!interactive && row?.waitingAt !== undefined && now - row.waitingAt < waitingFresh) return 2000;
     if (row) await ctx.db.patch("placeData", row._id, { fetchingAt: lease });
     else await ctx.db.insert("placeData", { osmId: overpassId, name: "Overpass slot", fetchedAt: 0, version, fetchingAt: lease });

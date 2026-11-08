@@ -138,6 +138,12 @@ test("background work lets someone opening a place have the slot next (WALKIES-B
   expect(await t.mutation(internal.places.takeOverpass, { lease: background + 2 })).toBeGreaterThan(0);
   expect(await t.mutation(internal.places.takeOverpass, { lease: background + 3, interactive: true })).toBe(0);
   await t.mutation(internal.places.releaseOverpass, { lease: background + 3 });
+  // Their download's next tile doesn't step aside for someone else waiting: one finishes first.
+  expect(await t.mutation(internal.places.takeOverpass, { lease: background + 4, interactive: true })).toBe(0);
+  expect(await t.mutation(internal.places.takeOverpass, { lease: background + 5, interactive: true })).toBeGreaterThan(0);
+  await t.mutation(internal.places.releaseOverpass, { lease: background + 4 });
+  expect(await t.mutation(internal.places.takeOverpass, { lease: background + 6, interactive: true })).toBe(0);
+  await t.mutation(internal.places.releaseOverpass, { lease: background + 6 });
   // Once nobody has asked for a few seconds, background work carries on.
   vi.setSystemTime(Date.now() + 5000);
   expect(await t.mutation(internal.places.takeOverpass, { lease: Date.now() })).toBe(0);
