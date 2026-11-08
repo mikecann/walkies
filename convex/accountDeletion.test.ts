@@ -214,7 +214,7 @@ describe("account deletion", { timeout: 60_000 }, () => {
       profile: { id: "google-alice", name: "Alice", email: "alice@example.com", emailVerified: true, picture: "https://example.com/new.png" },
     };
     await t.mutation(internal.users.onSignInGoogle, { provider, userId: oldId });
-    const profile = { name: "Alice", email: "alice@example.com", picture: "https://example.com/new.png" };
+    const profile = { name: "Alice", email: "alice@example.com", picture: "https://example.com/new.png", guest: false };
     expect(await t.withIdentity({ subject: oldId }).query(api.users.me)).toEqual(profile);
     expect(await alice.query(api.users.me)).toEqual(profile);
   });
@@ -228,7 +228,7 @@ describe("account deletion", { timeout: 60_000 }, () => {
     await expect(t.mutation(internal.users.onSignInApple, { provider, userId: aliceId })).rejects.toThrow("still being deleted");
     await drain(t);
     await t.mutation(internal.users.onSignInApple, { provider, userId: aliceId });
-    expect(await alice.query(api.users.me)).toEqual({ name: null, email: "alice@example.com", picture: null });
+    expect(await alice.query(api.users.me)).toEqual({ name: null, email: "alice@example.com", picture: null, guest: false });
     expect(await alice.query(api.sync.snapshot, {})).toEqual({ walks: [], places: [], secrets: [], progress: null });
   });
 

@@ -29,12 +29,12 @@ export const signInForTesting = mutation({
       throw new ConvexError("Test names must be 80 characters or fewer.");
     }
     const result = await ctx.runMutation(api.auth.signInAnonymously, {});
-    // Use only the newly minted user id, never a caller-supplied account id.
-    if (displayName) {
-      const userId = ctx.db.normalizeId("users", result.tokens.userId);
-      if (userId === null) throw new Error("Invalid test user id");
-      await ctx.db.patch("users", userId, { name: displayName });
-    }
+    // Use only the newly minted user id, never a caller-supplied account id. Test
+    // accounts stand in for Apple and Google ones, so they aren't guests.
+    const userId = ctx.db.normalizeId("users", result.tokens.userId);
+    if (userId === null) throw new Error("Invalid test user id");
+    const suffix = crypto.randomUUID().slice(0, 4).toUpperCase();
+    await ctx.db.patch("users", userId, { name: displayName || `Test walker ${suffix}`, guest: undefined });
     return result;
   },
 });

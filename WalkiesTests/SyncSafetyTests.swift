@@ -240,6 +240,37 @@ struct SyncSafetyTests {
         #expect(!(await bobServer.calls).contains("sync:savePlace"))
         #expect(!(await bobServer.calls).contains("sync:saveWalk"))
     }
+
+    /// A guest signing in with Apple or Google keeps everything on the phone, and it all
+    /// goes up to their new account, even what the guest account already had.
+    @Test func aGuestSigningInTakesTheirWalksWithThem() async throws {
+        let store = Store(root: root())
+        defer { store.wipe() }
+        let place = city()
+        store.save([place])
+        store.save(walk(0, in: place))
+        let guestServer = SafetyServer()
+        let guestClient = client(guestServer)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        var user = "guest"
+        let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, userId: { user }, makeClient: { guestClient })
+        await engine.sync()
+        #expect(store.loadOwner() == "guest")
+        #expect(await guestServer.calls.filter { $0 == "sync:saveWalk" }.count == 1)
+
+        // Account.finishSignIn calls this before the new session is saved.
+        engine.adopt(for: "alice")
+        user = "alice"
+        let aliceServer = SafetyServer()
+        SafetyProtocol.server = aliceServer
+        await engine.sync()
+        #expect(engine.status == .idle)
+        #expect(store.loadOwner() == "alice")
+        #expect(model.cities.count == 1)
+        #expect(model.walks.count == 1)
+        #expect(await aliceServer.places.count == 1)
+        #expect(await aliceServer.calls.filter { $0 == "sync:saveWalk" }.count == 1)
+    }
 }
 
 actor SafetyServer {

@@ -18,6 +18,9 @@ nonisolated struct Session: Codable, Sendable {
     var email: String?
     /// Their Google photo. Apple doesn't give one.
     var picture: String?
+    /// Using Walkies without signing in: an anonymous account with no email, which
+    /// signing in with Apple or Google later replaces.
+    var guest: Bool?
 }
 
 /// Signing in with Apple or Google through Convex Auth v2. Apple uses the iPhone's own
@@ -30,6 +33,8 @@ final class Account {
     enum Provider: String {
         case apple = "Apple"
         case google = "Google"
+        /// No account: Walkies has to be usable without signing up (App Store Guideline 5.1.1(v)).
+        case guest = "Guest"
         #if DEBUG && targetEnvironment(simulator)
         case test = "Test"
         #endif
@@ -53,16 +58,21 @@ final class Account {
         var name: String?
         var email: String?
         var picture: String?
+        var guest = false
 
         init(_ session: Session?) {
             signedIn = session != nil
             name = session?.name
             email = session?.email
             picture = session?.picture
+            guest = session?.guest == true
         }
     }
 
     var isSignedIn: Bool { profile.signedIn }
+    /// Using Walkies without an account (a guest one behind the scenes). Settings offers
+    /// them Apple and Google so their walks are backed up and come back on a new phone.
+    var isGuest: Bool { profile.signedIn && profile.guest }
     /// Who's signed in, for tying this phone's data to them. Not observed.
     var userId: String? { session?.userId }
     /// The name to show for whoever's signed in.
@@ -83,8 +93,13 @@ final class Account {
     @ObservationIgnored private let sheet = SignInSheet()
     @ObservationIgnored private let apple = AppleSignIn()
     @ObservationIgnored private var refreshing: Task<Session?, Never>?
+    /// A guest signing in with Apple or Google, with the new account's user id, before its
+    /// session is saved: this phone's data moves to that account (`SyncEngine.adopt`).
+    @ObservationIgnored var onGuestSignedIn: ((String) -> Void)?
     #if DEBUG && targetEnvironment(simulator)
     @ObservationIgnored private var automaticTestSignInRequested = false
+    /// `-guestSignIn`: taps "Continue without an account" at launch, for trying the guest path.
+    @ObservationIgnored private var automaticGuestSignInRequested = false
     #endif
 
     /// - Parameter waitForUnlock: the Keychain can't be read before the phone's first
@@ -100,9 +115,12 @@ final class Account {
         #if DEBUG
         // The made-up explorer gets a name, so their head on the map isn't a "?".
         if ScreenshotMode.isOn { profile.name = ScreenshotMode.explorerName }
+        // `-WalkiesGuest`: Settings as someone using Walkies without an account.
+        if ScreenshotMode.isOn && LaunchArguments.has("-WalkiesGuest") { profile.signedIn = true; profile.guest = true }
         #endif
         #if DEBUG && targetEnvironment(simulator)
         automaticTestSignInRequested = session == nil && ProcessInfo.processInfo.arguments.contains("-testSignIn")
+        automaticGuestSignInRequested = session == nil && ProcessInfo.processInfo.arguments.contains("-guestSignIn")
         #endif
     }
 
@@ -116,15 +134,25 @@ final class Account {
     // MARK: Signing in
 
     func signIn(with provider: Provider) async throws {
+        // A guest signing in properly: their guest account goes once the new one's in.
+        let guest = session?.guest == true && provider != .guest ? session : nil
         do {
-            try await performSignIn(with: provider)
+            try await performSignIn(with: provider, replacing: guest)
+            if let guest { Task { await Self.deleteGuest(guest) } }
         } catch {
             log.error("\(provider.rawValue, privacy: .public): \(String(describing: error), privacy: .public)")
             throw error
         }
     }
 
-    private func performSignIn(with provider: Provider) async throws {
+    private func performSignIn(with provider: Provider, replacing guest: Session?) async throws {
+        if provider == .guest {
+            let result: CompleteResult = try await ConvexClient().mutation("auth:signInAnonymously")
+            try await finishSignIn(result)
+            return
+        }
+        upgrading = guest
+        defer { upgrading = nil }
         #if DEBUG && targetEnvironment(simulator)
         if provider == .test {
             let arguments = ProcessInfo.processInfo.arguments
@@ -209,7 +237,16 @@ final class Account {
         automaticTestSignInRequested = false
         return requested && !isSignedIn
     }
+
+    func takeAutomaticGuestSignInRequest() -> Bool {
+        let requested = automaticGuestSignInRequested
+        automaticGuestSignInRequested = false
+        return requested && !isSignedIn
+    }
     #endif
+
+    /// The guest session being replaced by the sign-in in progress, if any.
+    @ObservationIgnored private var upgrading: Session?
 
     private func finishSignIn(_ result: CompleteResult) async throws {
         guard result.status == "complete", var tokens = result.tokens else { throw SignInError.failed }
@@ -218,7 +255,29 @@ final class Account {
         if let me: Me = try? await ConvexClient(token: tokens.accessToken).query("users:me") {
             me.apply(to: &tokens)
         }
+        if let upgrading, upgrading.userId != tokens.userId { onGuestSignedIn?(tokens.userId) }
         save(tokens)
+    }
+
+    /// Deletes the guest account someone's just signed in over, once their walks belong to
+    /// the new one. Its data is only a copy of this phone's, which now goes up to the new
+    /// account. If this fails (offline), the guest account just sits unused.
+    private static func deleteGuest(_ guest: Session) async {
+        var token = guest.accessToken
+        if guest.accessTokenExpiresAt - Date.now.timeIntervalSince1970 * 1000 < 5_000 {
+            guard let result: RefreshResult = try? await ConvexClient().mutation(
+                "auth:refreshSession", ["refreshToken": guest.refreshToken]
+            ), result.kind == "rotated", let tokens = result.tokens else { return }
+            token = tokens.accessToken
+        }
+        let client = ConvexClient(token: token)
+        await PushTokens.unregister(client)
+        do {
+            let _: Nothing = try await client.mutation("users:deleteAccount")
+            log.info("Deleted the guest account after signing in")
+        } catch {
+            log.error("Couldn't delete the guest account: \(String(describing: error), privacy: .public)")
+        }
     }
 
     /// Picks up a new name or photo for someone who's already signed in, such as a
@@ -262,6 +321,7 @@ final class Account {
                 tokens.name = current.name
                 tokens.email = current.email
                 tokens.picture = current.picture
+                tokens.guest = current.guest
                 save(tokens)
                 return tokens
             } catch {
@@ -361,11 +421,13 @@ private nonisolated struct Me: Decodable {
     var name: String?
     var email: String?
     var picture: String?
+    var guest: Bool?
 
     func apply(to session: inout Session) {
         session.name = name
         session.email = email
         session.picture = picture
+        session.guest = guest
     }
 }
 

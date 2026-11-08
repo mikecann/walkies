@@ -38,6 +38,15 @@ struct SignInView: View {
                     }
                     .buttonStyle(StickerButtonStyle(fill: .white, foreground: .ink))
 
+                    // Walkies has to work without an account (App Store Guideline 5.1.1(v)).
+                    Button { signIn(with: .guest) } label: {
+                        label("Continue without an account", provider: .guest) { EmptyView() }
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.ink.opacity(0.75))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, 6)
+
                     #if DEBUG && targetEnvironment(simulator)
                     Button { signIn(with: .test) } label: {
                         label("Test sign-in (simulator only)", provider: .test) {
@@ -58,7 +67,7 @@ struct SignInView: View {
                 }
                 .disabled(working != nil)
 
-                Text("Your walks are kept on your phone and backed up to your account. Walkies uses your email to let you know about things like new secrets.")
+                Text("Your walks are kept on your phone. Sign in to back them up and get them back on a new phone. Walkies uses your email to let you know about things like new secrets.")
                     .font(.footnote)
                     .foregroundStyle(Color.ink.opacity(0.6))
                     .multilineTextAlignment(.center)
@@ -71,6 +80,7 @@ struct SignInView: View {
         #if DEBUG && targetEnvironment(simulator)
         .task {
             if account.takeAutomaticTestSignInRequest() { signIn(with: .test) }
+            if account.takeAutomaticGuestSignInRequest() { signIn(with: .guest) }
         }
         #endif
     }

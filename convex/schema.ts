@@ -24,7 +24,16 @@ export default defineSchema({
      * tombstone, so Convex Auth's sign-ins that still point at it count as signed out.
      */
     deletedAt: v.optional(v.number()),
+    /**
+     * Using Walkies without signing in: an anonymous account with no name, email or
+     * photo. Signing in with Apple or Google later moves their walks to that account
+     * from the phone, and deletes this one (users:deleteAccount).
+     */
+    guest: v.optional(v.boolean()),
   }).index("by_email", ["email"]).index("by_mergedInto", ["mergedInto"]),
+
+  /** One row: how many guest accounts were made in the current minute (users.createUserAnonymous). */
+  guestSignups: defineTable({ windowStart: v.number(), count: v.number() }),
 
   /**
    * A deleted account's data going, a batch at a time. Each step records how far it

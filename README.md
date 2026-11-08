@@ -23,7 +23,7 @@ Based on an idea from James.
 - **Pushes**: when a suburb's research finishes with new secrets live, everyone who has it as a place gets a push ("5 secrets are hidden in Porlock"). Chef's admin (Mike) gets one for every run that finishes or fails, with how many secrets wait for his OK, and whenever someone else adds a place. Tapping one with secrets waiting opens Settings at "Secrets waiting for you", and it shows even with the app open. The iPhone hands its APNs token to the server after each sync (`devices:register`, `PushTokens` in `Walkies/Services/Notifier.swift`), signing out takes it off, and `convex/apns.ts` sends with the team's APNs key, the same one Poddle uses (`APNS_KEY_P8`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_ENV` on the deployment). Android doesn't get pushes yet. Working out a push never fails the sync or publish it comes from (`convex/devices.ts`).
 - **History**: every GPS fix from every walk is kept. A new city is built by replaying all past walks, so if you add a city later, the walks you've already done there count.
 - **Storage** is local-first: everything is JSON in the app's Application Support folder, and the app works fully offline. Whenever there's signal it syncs with your account on Convex, so a lost phone loses nothing and a new phone gets everything back when you sign in.
-- **Accounts** use Convex Auth v2 (`@convex-dev/auth` 2.0 beta) with Sign in with Apple and Google, so every account has an email address to reach people with. Each person only sees their own data.
+- **Accounts** use Convex Auth v2 (`@convex-dev/auth` 2.0 beta) with Sign in with Apple and Google. Signing in is optional (App Store Guideline 5.1.1(v), which rejected 1.0.0 on 7 Nov 2026 for making people sign up): "Continue without an account" makes a guest account with Convex Auth's anonymous method (`users.guest`, named "Walker 3F7A", no email), so syncing and everything else work the same. At most 30 guest accounts are made a minute across everyone (`guestSignupsPerMinute`), since `auth:signInAnonymously` is public. A guest signing in with Apple or Google later keeps everything on the phone: `SyncEngine.adopt` hands it to the new account before its session is saved, so it all goes up on the next sync, and the guest account is deleted. Settings shows guests the sign-in buttons instead of Sign out. Each person only sees their own data.
 
 ## Running it
 
@@ -49,7 +49,7 @@ To test always-on without waiting 10 minutes for a walk to end, launch with a sh
 
 ### Simulator test accounts
 
-Debug simulator builds have a small **Test sign-in (simulator only)** button. It uses Convex Auth v2's anonymous method to create a fresh account without Apple or Google. The server refuses both the test wrapper and direct anonymous sign-in unless `WALKIES_TEST_SIGNIN` is exactly `1`. Enable that variable only on dev (`resolute-pig-177`), never production. It is optional and disabled when unset. No user schema changes are needed.
+Debug simulator builds have a small **Test sign-in (simulator only)** button. It uses Convex Auth v2's anonymous method to create a fresh account without Apple or Google, then names it and marks it as not a guest. The server refuses the test wrapper unless `WALKIES_TEST_SIGNIN` is exactly `1`; plain anonymous sign-in is how guests start, so it works everywhere. Enable that variable only on dev (`resolute-pig-177`), never production. It is optional and disabled when unset. No user schema changes are needed.
 
 For two installed Debug simulators, launch each with its device UUID and a different name:
 

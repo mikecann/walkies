@@ -167,6 +167,17 @@ final class SyncEngine {
         countWaiting()
     }
 
+    /// A guest has just signed in with Apple or Google: this phone's walks, places and
+    /// progress now belong to that account, and everything goes up to it on the next sync
+    /// (the guest account they were in is deleted). Runs before the new session is saved,
+    /// so `claimLocalData` never sees a stranger's data and wipes it.
+    func adopt(for user: String) {
+        reset()
+        save()
+        UserDefaults.standard.removeObject(forKey: "lastSynced")
+        store.save(owner: user)
+    }
+
     /// Stops any sync in flight, then clears this phone, for signing out. A sync
     /// that was running can't put anything back afterwards.
     func wipe() async {

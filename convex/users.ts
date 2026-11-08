@@ -12,17 +12,27 @@ const vGoogle = v.object({ name: v.literal("google"), accountId: v.string(), pro
 
 type Details = { name?: string; email?: string; emailVerified: boolean; picture?: string };
 
+/** How many guest accounts can be made a minute, across everyone. */
+export const guestSignupsPerMinute = 30;
+
 export const createUserAnonymous = internalMutation({
   args: { provider: v.object({ name: v.literal("anonymous"), accountId: v.string(), profile: v.object({}) }) },
   returns: v.id("users"),
   handler: async (ctx) => {
-    // Every anonymous sign-in calls this, including direct calls that bypass the
-    // app's test wrapper. Refuse before a user or session can be created.
-    if (env.WALKIES_TEST_SIGNIN !== "1") {
-      throw new ConvexError("Test sign-in is disabled on this deployment.");
+    // Guests (App Store Guideline 5.1.1(v): Walkies can't make people sign up to use it)
+    // get an account with no name, email or photo, so their walks sync like anyone's.
+    // auth:signInAnonymously is public, so a cap on how fast they're made stops a script
+    // filling the users table. Simulator test sign-in renames these afterwards.
+    const now = Date.now();
+    const window = await ctx.db.query("guestSignups").first();
+    const current = window !== null && now < window.windowStart + 60_000;
+    if (current && window.count >= guestSignupsPerMinute) {
+      throw new ConvexError("Lots of people are starting Walkies right now. Try again in a minute.");
     }
+    if (window === null) await ctx.db.insert("guestSignups", { windowStart: now, count: 1 });
+    else await ctx.db.patch("guestSignups", window._id, { windowStart: current ? window.windowStart : now, count: current ? window.count + 1 : 1 });
     const suffix = crypto.randomUUID().slice(0, 4).toUpperCase();
-    return await ctx.db.insert("users", { name: `Test walker ${suffix}` });
+    return await ctx.db.insert("users", { name: `Walker ${suffix}`, guest: true });
   },
 });
 
@@ -147,13 +157,15 @@ export const me = query({
   args: {},
   returns: v.union(v.null(), v.object({
     name: v.union(v.string(), v.null()), email: v.union(v.string(), v.null()), picture: v.union(v.string(), v.null()),
+    /** True for someone using Walkies without signing in (createUserAnonymous). */
+    guest: v.boolean(),
   })),
   handler: async (ctx) => {
     const userId = await currentUserId(ctx);
     if (userId === null) return null;
     const user = await ctx.db.get("users", userId);
     if (user === null) return null;
-    return { name: user.name ?? null, email: user.email ?? null, picture: user.picture ?? null };
+    return { name: user.name ?? null, email: user.email ?? null, picture: user.picture ?? null, guest: user.guest === true };
   },
 });
 
