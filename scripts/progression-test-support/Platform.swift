@@ -66,3 +66,15 @@ extension Color {
     static let badgeTeal = Color(red: 0.29, green: 0.58, blue: 0.58)
     static let badgeGreen = Color(red: 0.62, green: 0.77, blue: 0.58)
 }
+// Clouds.swift picks the baked layer on the phone. That's built on UIKit (a display
+// link, layer hosting views and Metal), so here it's a stand-in with the same init.
+struct BakedCloudLayer: View {
+    let field: CloudField
+    let key: String
+    let handle: MapHandle
+    var walkTiles: Set<CloudField.Tile> = []
+    var body: some View { EmptyView() }
+}
+// The route renderer in Clouds.swift colours its MapKit line with UIColor, which is
+// NSColor on the Mac (and MKPolylineRenderer's strokeColor takes either).
+typealias UIColor = NSColor
