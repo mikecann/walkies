@@ -14,8 +14,10 @@ import simd
 // all start at once and kept the simulator's cores busy: the overview, made at utility
 // priority, took 3.8 s instead of 0.5, so it turned up after the first bake had given
 // up waiting for it, and a 2.5 s bake ran past its 3 s limit. Each test passed on its
-// own. Xcode runs the scheme's test targets one after another, so here nothing else
-// is running; and they're serialized so they don't compete with each other either.
+// own. Xcode runs the scheme's test targets one after another (unless it's told to
+// test in parallel, with -parallel-testing-enabled YES, so don't), so these start once
+// the rest have finished. They're serialized so they don't compete with each other
+// either, and the stuck-bake ones wait for the bakes they let go before they end.
 
 /// The baked renderer end to end: the engine's own layers, composited as Core Animation
 /// would, show the clouds where the live renderer draws them, including after the
@@ -68,6 +70,7 @@ struct BakedLayerTests {
         let engine = BakedCloudEngine(renderer: .baked)
         engine.testScreen = { (screen.camera.size, 3, screen.camera.projection) }
         engine.bakery = { gate.bake($0) }
+        engine.honeycombBakery = { gate.honeycomb($0) }
         let inputs = BakedCloudEngine.Inputs(
             field: field, key: "a", theme: "clouds.classic", walkTiles: [], marker: "marker.dot", reduceMotion: true
         )
@@ -79,6 +82,7 @@ struct BakedLayerTests {
         try await settle(engine, on: camera)
         #expect(gate.stuck, "the bake after the flight should have been the stuck one")
         try compare(engine, with: field, on: camera, "after flying out past a stuck bake")
+        await gate.finish()
     }
 
     /// Opening the app: MapKit starts on its own region, zoomed right out and off to
@@ -170,6 +174,7 @@ struct BakedLayerTests {
             if coarse { engine.overviewPixels = 400 }
             engine.testScreen = { (screen.camera.size, 3, screen.camera.projection) }
             engine.bakery = { gate.bake($0) }
+            engine.honeycombBakery = { gate.honeycomb($0) }
             engine.update(field: field, handle: MapHandle())
             try await settle(engine, on: camera)
             try await tick(engine, until: "the overview", within: 2) { engine.overview != nil }
@@ -200,6 +205,7 @@ struct BakedLayerTests {
                 #expect(engine.showingOverview && !engine.status.needsLive, "zoomed out, the overview stands in")
                 try compare(engine, with: field, on: away, "the overview standing in", simple: true)
             }
+            await gate.finish()
         }
     }
 
@@ -316,7 +322,8 @@ struct BakedLayerTests {
 }
 
 /// Bakes as the app does, except the first one after `stickNext()` (or every one
-/// after `stickAll()`), which doesn't finish until `release()`.
+/// after `stickAll()`), which doesn't finish until `release()`. The engine's honeycomb
+/// goes through it too, so `finish()` can wait for everything it was asked to draw.
 nonisolated private final class StuckBakery: @unchecked Sendable {
     private let lock = NSLock()
     private let gate = DispatchSemaphore(value: 0)
@@ -325,6 +332,8 @@ nonisolated private final class StuckBakery: @unchecked Sendable {
     private var held = false
     private var waiting = 0
     private var released = false
+    /// Every bake asked for, until it's done, or until its honeycomb's done if it has one.
+    private let busy = DispatchGroup()
 
     var stuck: Bool { lock.withLock { held } }
 
@@ -340,7 +349,16 @@ nonisolated private final class StuckBakery: @unchecked Sendable {
         for _ in 0..<count { gate.signal() }
     }
 
+    /// Lets the stuck bakes go and waits for them to be drawn, with their honeycombs:
+    /// once let go they bake for real, and left running they'd be drawing on a
+    /// background thread through the start of the next test, slowing its bakes down.
+    func finish() async {
+        release()
+        await withCheckedContinuation { done in busy.notify(queue: .global()) { done.resume() } }
+    }
+
     func bake(_ job: BakeJob) -> CloudBake {
+        busy.enter()
         let stick = lock.withLock {
             defer { armed = false }
             let stick = (armed || always) && !released
@@ -351,7 +369,16 @@ nonisolated private final class StuckBakery: @unchecked Sendable {
             return stick
         }
         if stick { gate.wait() }
-        return CloudBakery.bake(job)
+        let bake = CloudBakery.bake(job)
+        // With a honeycomb to make, the engine makes it straight after, on this thread,
+        // and it's done once that is.
+        if !job.honeycomb { busy.leave() }
+        return bake
+    }
+
+    func honeycomb(_ job: BakeJob) -> CGImage? {
+        defer { busy.leave() }
+        return CloudBakery.honeycomb(job)
     }
 }
 
