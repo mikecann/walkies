@@ -18,11 +18,27 @@ final class LocationTracker {
     func startAlwaysOn() {}
     func stopAlwaysOn() {}
     func refreshWatch() {}
+    func motionChanged() {}
+    // Always on asks these of AppModel; it sets them, the stub never calls them.
+    var isOnManualWalk: () -> Bool = { false }
+    var isOnConfirmedWalk: () -> Bool = { false }
+    var isOnScreen: () -> Bool = { false }
+    var isInForeground: () -> Bool = { false }
+    var askToStartWalk: () -> Void = {}
+    var withdrawWalkQuestion: () -> Void = {}
+    var canAskToStartWalk: () -> Bool = { false }
+    var isOnWheels: () -> Bool = { false }
+    var isStill: () -> Bool = { false }
+    var isOnFoot: () -> Bool = { false }
 }
 final class MotionMonitor {
+    static let canTell = false
     var onWheels = false
     var still = false
+    var onFoot = false
+    var onChange: (() -> Void)?
     func start() {}
+    func setOff(before now: Date) async -> Date? { nil }
 }
 final class StepCounter {
     func updateLive(from: Date?) {}
@@ -31,8 +47,12 @@ final class StepCounter {
     func count(from: Date, to: Date) async -> Int? { nil }
 }
 enum Notifier {
+    static let allowed = false
     static func requestPermission() {}
+    static func refreshAllowed() async {}
     static func stickersFound(_ entries: [LoreEntry]) {}
+    static func askToStartWalk() {}
+    static func withdrawWalkQuestion() {}
 }
 final class Account {
     var isSignedIn = false
