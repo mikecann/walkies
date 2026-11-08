@@ -103,6 +103,13 @@ export const queueExpiry = 30 * 24 * 60 * 60 * 1000;
 
 /** How many secrets a run aims for. Fewer than `enough` survive and the place is "quiet". */
 export const entries = { enough: 3, most: 8 };
+/**
+ * Whether sensitive secrets (First Nations heritage, deaths or crime, living people) wait for
+ * Mike's OK before going live. Off since 8 Nov 2026: Mike said to just let them all through.
+ * They're still tagged, and the First Nations rules (WA only, approved sources) still drop
+ * ones that break them, so turning this back on brings the review back as it was.
+ */
+export const reviewSensitive = false;
 export const day = 24 * 60 * 60 * 1000;
 /** A quiet place gets one more look after this, in case more has been written about it. */
 export const quietRetry = 90 * day;
