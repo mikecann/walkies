@@ -248,13 +248,18 @@ private nonisolated final class TeamHTTPProtocol: URLProtocol, @unchecked Sendab
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         guard let server = Self.server else { return }
+        // The class is already @unchecked Sendable, but in a clean build of
+        // scripts/test-progression-model.sh (Swift 6 mode) the compiler's region check
+        // still says the task's capture of `self` could race. This says it's fine.
+        nonisolated(unsafe) let this = self
+        let request = request
         Task {
             do {
                 let data = try await server.respond(request)
-                client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
-                client?.urlProtocol(self, didLoad: data)
-                client?.urlProtocolDidFinishLoading(self)
-            } catch { client?.urlProtocol(self, didFailWithError: error) }
+                this.client?.urlProtocol(this, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+                this.client?.urlProtocol(this, didLoad: data)
+                this.client?.urlProtocolDidFinishLoading(this)
+            } catch { this.client?.urlProtocol(this, didFailWithError: error) }
         }
     }
     override func stopLoading() {}
