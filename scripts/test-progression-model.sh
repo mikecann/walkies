@@ -24,7 +24,7 @@ lore = root / 'Sources/Walkies/Lore.swift'
 lore.write_text(lore.read_text().replace('Bundle.main', 'Bundle.module'))
 # Compile the actual renderer on macOS too, so team caching/Canvas changes don't
 # escape typechecking when CoreSimulator is unavailable.
-for name in ['Clouds', 'CloudScene', 'CloudProjection', 'WorldClouds', 'TrailLayout']:
+for name in ['Clouds', 'CloudScene', 'CloudProjection', 'CloudBakeMath', 'WorldClouds', 'TrailLayout']:
     shutil.copy(f'Walkies/Views/{name}.swift', root / 'Sources/Walkies')
 (root / 'Sources/Walkies/SplitMix64.swift').unlink(missing_ok=True)
 art = Path('Walkies/Views/CosmeticArt.swift').read_text()
