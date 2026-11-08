@@ -8,7 +8,7 @@ import Testing
 @MainActor
 struct GPUCloudsTests {
     @Test func theShaderDrawsTheCloudsWhereTheBakeDoes() throws {
-        let field = CloudTests().clearingField().after
+        let field = CloudFixtures.clearingField().after
         for (zoom, tilt) in [(0.2, 0.0), (0.2, 40.0), (1.0, 40.0)] {
             var camera = TestCamera().zoomed(zoom).tipped(tilt)
             camera.centre = field.clearings[0].centre

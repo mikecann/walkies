@@ -38,6 +38,16 @@
                ReferencedContainer = "container:Walkies.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "A1B2C3D40000000000000400"
+               BuildableName = "WalkiesTimingTests.xctest"
+               BlueprintName = "WalkiesTimingTests"
+               ReferencedContainer = "container:Walkies.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

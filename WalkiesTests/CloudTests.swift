@@ -4,22 +4,12 @@ import Testing
 @testable import Walkies
 
 struct CloudTests {
-    let start = Coordinate(lat: -33.638, lon: 115.386)
+    let start = CloudFixtures.start
 
-    func hex(q: Int32, r: Int32) -> Hex {
-        let base = HexGrid.world.hex(containing: start)
-        return Hex(q: base.q + q, r: base.r + r)
-    }
+    func hex(q: Int32, r: Int32) -> Hex { CloudFixtures.hex(q: q, r: r) }
 
     func city(tiles: Set<Hex>, visited: Set<Hex>, roads: [RoadLine]? = nil) -> City {
-        let projection = HexGrid.world.projection
-        let base = HexGrid.world.centre(of: hex(q: 0, r: 0))
-        let corners = [SIMD2(-500.0, -500.0), SIMD2(500, -500), SIMD2(500, 500), SIMD2(-500, 500)]
-        let boundary = Boundary(polygons: [GeoPolygon(outer: corners.map { projection.unproject(base + $0) }, holes: [])])
-        return City(
-            name: "Test", detail: "", boundary: boundary,
-            tiles: tiles, visited: visited, roads: roads
-        )
+        CloudFixtures.city(tiles: tiles, visited: visited, roads: roads)
     }
 
     @Test func wholeSuburbStartsUnderCloud() {
