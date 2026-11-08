@@ -10,7 +10,7 @@ import { v } from "convex/values";
 import type { DataModel, Doc, Id } from "./_generated/dataModel";
 import { env, type MutationCtx } from "./_generated/server";
 import { overBudget } from "./loreBudget";
-import { day, entries as wanted, failedRetry, maxAttempts, queueExpiry, quietRetry } from "./loreConfig";
+import { day, entries as wanted, failedRetry, maxAttempts, queueExpiry, quietRetry, reviewSensitive } from "./loreConfig";
 import type { LorePlaceState } from "./loreStates";
 import schema from "./schema";
 
@@ -270,7 +270,7 @@ export const loreEntry = defineMachine(
     },
     guards: {
       factChecked: "It hasn't passed the fact-check.",
-      notSensitive: "It's about First Nations heritage, a death or crime, or living people, so it waits for Mike.",
+      notSensitive: "It's about First Nations heritage, a death or crime, or living people, and those wait for Mike (when loreConfig.reviewSensitive is on).",
       notTheirFault: "A check dropped it for something in the secret itself.",
     },
     states: {
@@ -298,7 +298,7 @@ export const loreEntry = defineMachine(
   {
     guards: {
       factChecked: (_ctx, { row }) => row.factChecked,
-      notSensitive: (_ctx, { row }) => row.sensitive.length === 0,
+      notSensitive: (_ctx, { row }) => !reviewSensitive || row.sensitive.length === 0,
       notTheirFault: (_ctx, { state }) => notTheirFault.includes(state.by),
     },
     effects: {

@@ -349,7 +349,7 @@ export const applyRules = internalMutation({
 });
 
 /**
- * The last step. Sensitive secrets wait for Mike; the rest go live. A place with
+ * The last step. Secrets go live, sensitive ones too unless loreConfig.reviewSensitive says they wait for Mike. A place with
  * fewer than `entries.enough` secrets in all is quiet (the lorePlace machine decides
  * whether it gets one more look later).
  */

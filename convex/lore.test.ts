@@ -774,7 +774,7 @@ describe("the checks", () => {
     expect((await entryRows(t))[0]).toMatchObject({ title: "A Jetty", factChecked: true, sensitive: ["living-people"] });
   });
 
-  test("sensitive secrets wait for review and the rest go live", async () => {
+  test("sensitive secrets go live too, with the First Nations rules still applied", async () => {
     const { t } = await setup();
     await addPlace(t);
     await addEntry(t, { slug: "the-jetty" });
@@ -785,9 +785,11 @@ describe("the checks", () => {
     await addEntry(t, { slug: "the-name", category: "first-nations", body: "The Noongar name means place of the digging stick.", sources: ["https://busselton.wa.gov.au/names"] });
     await addEntry(t, { slug: "the-blog", category: "history", body: "A Wardandi camp was here, a blog says.", sources: ["https://someblog.example.com/post"] });
     await t.mutation(internal.loreRun.applyRules, { osmId: somewhere, run: 1, wa: true });
-    expect(await t.mutation(internal.loreRun.publish, { osmId: somewhere, run: 1 })).toEqual({ live: 2, pending: 3, dropped: 1, status: "ready" });
+    expect(await t.mutation(internal.loreRun.publish, { osmId: somewhere, run: 1 })).toEqual({ live: 5, pending: 0, dropped: 1, status: "ready" });
     const reviews = Object.fromEntries((await entryRows(t)).map((e) => [e.entryId.split("-").slice(1).join("-"), e.state.kind]));
-    expect(reviews).toEqual({ "the-jetty": "auto", "the-tuarts": "auto", "the-wreck": "pending", "the-mayor": "pending", "the-name": "pending", "the-blog": "dropped" });
+    expect(reviews).toEqual({ "the-jetty": "auto", "the-tuarts": "auto", "the-wreck": "auto", "the-mayor": "auto", "the-name": "auto", "the-blog": "dropped" });
+    // Still tagged, so turning loreConfig.reviewSensitive back on has something to go on.
+    expect((await entryRows(t)).find((e) => e.entryId.endsWith("the-mayor"))?.sensitive).toEqual(["living-people"]);
     expect((await lorePlaces(t))[0]).toMatchObject({ state: { kind: "ready" }, version: 1 });
   });
 
