@@ -159,24 +159,34 @@ nonisolated struct Store {
 
     /// The user id of the account this phone's data belongs to.
     func loadOwner() -> String? {
-        read(String.self, from: ownerURL)
-    }
-
-    func save(owner: String, guest: Bool = false) {
-        // The guest mark goes first: if the app's killed in between, a guest's data still
-        // reads as a guest's and moves to whoever signs in, rather than being wiped.
-        write(guest, to: ownerGuestURL)
-        write(owner, to: ownerURL)
+        loadOwnerRecord()?.id
     }
 
     /// Whether the owner is a guest (using Walkies without an account). Their data moves to
     /// whoever signs in next instead of being wiped (SyncEngine.claimLocalData).
     func loadOwnerIsGuest() -> Bool {
-        read(Bool.self, from: ownerGuestURL) ?? false
+        loadOwnerRecord()?.guest ?? false
+    }
+
+    /// Who and whether they're a guest go in one file, written in one go, so a kill can
+    /// never leave a guest's data marked as someone else's.
+    func save(owner: String, guest: Bool = false) {
+        write(OwnerRecord(id: owner, guest: guest), to: ownerURL)
+    }
+
+    private struct OwnerRecord: Codable {
+        var id: String
+        var guest: Bool
+    }
+
+    /// Before guests, the file was just the user id, so that still reads (as not a guest).
+    private func loadOwnerRecord() -> OwnerRecord? {
+        guard let data = try? Data(contentsOf: ownerURL) else { return nil }
+        if let record = try? JSONDecoder().decode(OwnerRecord.self, from: data) { return record }
+        return (try? JSONDecoder().decode(String.self, from: data)).map { OwnerRecord(id: $0, guest: false) }
     }
 
     private var ownerURL: URL { root.appending(path: "owner.json") }
-    private var ownerGuestURL: URL { root.appending(path: "owner-guest.json") }
 
     /// Suburbs around your places, so the map can offer them without asking OpenStreetMap every launch.
     func loadNearby() -> NearbyPlaces? {

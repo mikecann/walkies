@@ -283,6 +283,44 @@ struct SyncSafetyTests {
         #expect(relaunched.cities.isEmpty)
         #expect(relaunched.walks.isEmpty)
     }
+
+    /// A sync for one account that's paused mid-download stops when someone else signs in
+    /// (a new guest after a session ran out), so the old account's walks never land in theirs.
+    @Test func aSyncStopsWhenSomeoneElseSignsInPartWay() async throws {
+        let store = Store(root: root())
+        defer { store.wipe() }
+        let place = city()
+        let server = SafetyServer()
+        await server.seed(place)
+        for n in 0..<3 { await server.seed(walk(n, in: place)) }
+        await server.pauseDownloads()
+        let client = client(server)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        var user = "alice"
+        let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, userId: { user }, makeClient: { client })
+        let syncing = Task { await engine.sync() }
+        await server.waitForDownload()
+        user = "guest"
+        await server.resumeDownloads()
+        await syncing.value
+        #expect(model.cities.isEmpty)
+        #expect(model.walks.isEmpty)
+        #expect(store.loadCities().isEmpty)
+    }
+
+    /// owner.json from before guests was just the user id, and still reads as a real account.
+    @Test func anOldOwnerFileStillReads() throws {
+        let root = root()
+        let store = Store(root: root)
+        defer { store.wipe() }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try JSONEncoder().encode("alice").write(to: root.appending(path: "owner.json"))
+        #expect(store.loadOwner() == "alice")
+        #expect(!store.loadOwnerIsGuest())
+        store.save(owner: "guest", guest: true)
+        #expect(store.loadOwner() == "guest")
+        #expect(store.loadOwnerIsGuest())
+    }
 }
 
 actor SafetyServer {

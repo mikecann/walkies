@@ -106,6 +106,7 @@ final class SyncEngine {
 
     private func run() async {
         let revision = resetRevision
+        runningFor = userId()
         pending = false
         status = .syncing
         defer {
@@ -232,9 +233,19 @@ final class SyncEngine {
         store.save(owner: user, guest: guest)
     }
 
-    /// Throws when a sign-out or reset has happened since the sync started.
+    /// Who the sync that's running started for. Someone else signing in meanwhile (a new
+    /// guest after a session ran out, say) stops it, so their data never mixes with it.
+    @ObservationIgnored private var runningFor: String?
+
+    /// Whether the sync that started at `revision` can carry on: still signed in, as the
+    /// same person, with no sign-out or reset since.
+    private func stillCurrent(_ revision: Int) -> Bool {
+        isSignedIn() && resetRevision == revision && userId() == runningFor
+    }
+
+    /// Throws when a sign-out, reset or someone else signing in has happened since the sync started.
     private func check(_ revision: Int) throws {
-        guard isSignedIn(), resetRevision == revision, !Task.isCancelled else { throw CancellationError() }
+        guard stillCurrent(revision), !Task.isCancelled else { throw CancellationError() }
     }
 
     // MARK: Push
@@ -421,10 +432,10 @@ final class SyncEngine {
     }
 
     private func syncTeams(_ api: TeamsAPI, revision: Int) async throws {
-        guard isSignedIn(), resetRevision == revision else { throw CancellationError() }
+        guard stillCurrent(revision) else { throw CancellationError() }
         let membershipRevision = model.teamMembershipRevision
         let memberships = try await api.list()
-        guard isSignedIn(), resetRevision == revision else { throw CancellationError() }
+        guard stillCurrent(revision) else { throw CancellationError() }
         model.acceptTeamList(memberships, revision: membershipRevision)
     }
 
