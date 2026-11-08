@@ -17,6 +17,7 @@ final class LocationTracker {
     func stop() {}
     func startAlwaysOn() {}
     func stopAlwaysOn() {}
+    func refreshWatch() {}
 }
 final class MotionMonitor {
     var onWheels = false

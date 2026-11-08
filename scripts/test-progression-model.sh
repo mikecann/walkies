@@ -24,7 +24,7 @@ lore = root / 'Sources/Walkies/Lore.swift'
 lore.write_text(lore.read_text().replace('Bundle.main', 'Bundle.module'))
 # Compile the actual renderer on macOS too, so team caching/Canvas changes don't
 # escape typechecking when CoreSimulator is unavailable.
-for name in ['Clouds', 'TrailLayout']:
+for name in ['Clouds', 'CloudScene', 'CloudProjection', 'WorldClouds', 'TrailLayout']:
     shutil.copy(f'Walkies/Views/{name}.swift', root / 'Sources/Walkies')
 (root / 'Sources/Walkies/SplitMix64.swift').unlink(missing_ok=True)
 art = Path('Walkies/Views/CosmeticArt.swift').read_text()
@@ -32,6 +32,10 @@ art = Path('Walkies/Views/CosmeticArt.swift').read_text()
 colours = Path('Walkies/Views/TeamsView.swift').read_text()
 colours = colours[colours.index('extension Color {'):colours.index('enum TeamSheet')]
 (root / 'Sources/Walkies/TeamColours.swift').write_text('import SwiftUI\n' + colours)
+# Where a tapped push opens, which AppModel keeps; the rest of Notifier.swift is iOS only.
+notifier = Path('Walkies/Services/Notifier.swift').read_text()
+target = notifier[notifier.index('/// Where tapping a push'):notifier.index('/// The phone\'s APNs token')]
+(root / 'Sources/Walkies/NotificationTarget.swift').write_text('import Foundation\n' + target)
 # Exercise the actual app integration and sync on macOS too. Sensors and the
 # notification/account UI are stubbed; networking uses a URLProtocol test server.
 for name in ['Store', 'Sync', 'Convex', 'OSMClient', 'CachedPlaceData', 'CityBuilder', 'TeamsAPI']:
