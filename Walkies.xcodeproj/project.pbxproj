@@ -19,11 +19,19 @@
 			remoteGlobalIDString = A1B2C3D40000000000000010;
 			remoteInfo = Walkies;
 		};
+		A1B2C3D40000000000000407 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A1B2C3D400000000000000F0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A1B2C3D40000000000000010;
+			remoteInfo = Walkies;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		A1B2C3D40000000000000020 /* Walkies.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Walkies.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D40000000000000021 /* WalkiesTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WalkiesTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D40000000000000401 /* WalkiesTimingTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WalkiesTimingTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D40000000000000022 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1B2C3D40000000000000023 /* Walkies.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Walkies.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -37,6 +45,16 @@
 		A1B2C3D40000000000000031 /* WalkiesTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = WalkiesTests;
+			sourceTree = "<group>";
+		};
+		A1B2C3D40000000000000402 /* WalkiesTimingTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = WalkiesTimingTests;
+			sourceTree = "<group>";
+		};
+		A1B2C3D40000000000000403 /* TestSupport */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = TestSupport;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -58,6 +76,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A1B2C3D40000000000000405 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -66,6 +91,8 @@
 			children = (
 				A1B2C3D40000000000000030 /* Walkies */,
 				A1B2C3D40000000000000031 /* WalkiesTests */,
+				A1B2C3D40000000000000402 /* WalkiesTimingTests */,
+				A1B2C3D40000000000000403 /* TestSupport */,
 				A1B2C3D40000000000000052 /* Config */,
 				A1B2C3D40000000000000051 /* Products */,
 			);
@@ -76,6 +103,7 @@
 			children = (
 				A1B2C3D40000000000000020 /* Walkies.app */,
 				A1B2C3D40000000000000021 /* WalkiesTests.xctest */,
+				A1B2C3D40000000000000401 /* WalkiesTimingTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -131,12 +159,37 @@
 			);
 			fileSystemSynchronizedGroups = (
 				A1B2C3D40000000000000031 /* WalkiesTests */,
+				A1B2C3D40000000000000403 /* TestSupport */,
 			);
 			name = WalkiesTests;
 			packageProductDependencies = (
 			);
 			productName = WalkiesTests;
 			productReference = A1B2C3D40000000000000021 /* WalkiesTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A1B2C3D40000000000000400 /* WalkiesTimingTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1B2C3D40000000000000409 /* Build configuration list for PBXNativeTarget "WalkiesTimingTests" */;
+			buildPhases = (
+				A1B2C3D40000000000000404 /* Sources */,
+				A1B2C3D40000000000000405 /* Frameworks */,
+				A1B2C3D40000000000000406 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A1B2C3D40000000000000408 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A1B2C3D40000000000000402 /* WalkiesTimingTests */,
+				A1B2C3D40000000000000403 /* TestSupport */,
+			);
+			name = WalkiesTimingTests;
+			packageProductDependencies = (
+			);
+			productName = WalkiesTimingTests;
+			productReference = A1B2C3D40000000000000401 /* WalkiesTimingTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
@@ -153,6 +206,10 @@
 						CreatedOnToolsVersion = 27.1;
 					};
 					A1B2C3D40000000000000011 = {
+						CreatedOnToolsVersion = 27.1;
+						TestTargetID = A1B2C3D40000000000000010;
+					};
+					A1B2C3D40000000000000400 = {
 						CreatedOnToolsVersion = 27.1;
 						TestTargetID = A1B2C3D40000000000000010;
 					};
@@ -178,6 +235,7 @@
 			targets = (
 				A1B2C3D40000000000000010 /* Walkies */,
 				A1B2C3D40000000000000011 /* WalkiesTests */,
+				A1B2C3D40000000000000400 /* WalkiesTimingTests */,
 			);
 		};
 /* End PBXProject section */
@@ -191,6 +249,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		A1B2C3D40000000000000063 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1B2C3D40000000000000406 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -214,6 +279,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A1B2C3D40000000000000404 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -221,6 +293,11 @@
 			isa = PBXTargetDependency;
 			target = A1B2C3D40000000000000010 /* Walkies */;
 			targetProxy = A1B2C3D40000000000000001 /* PBXContainerItemProxy */;
+		};
+		A1B2C3D40000000000000408 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A1B2C3D40000000000000010 /* Walkies */;
+			targetProxy = A1B2C3D40000000000000407 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -402,6 +479,46 @@
 			};
 			name = Release;
 		};
+		A1B2C3D4000000000000040A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4DTAZSZL6B;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mikecann.walkiesTimingTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Walkies.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Walkies";
+			};
+			name = Debug;
+		};
+		A1B2C3D4000000000000040B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4DTAZSZL6B;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mikecann.walkiesTimingTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Walkies.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Walkies";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -460,6 +577,15 @@
 			buildConfigurations = (
 				A1B2C3D40000000000000080 /* Debug */,
 				A1B2C3D40000000000000081 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1B2C3D40000000000000409 /* Build configuration list for PBXNativeTarget "WalkiesTimingTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1B2C3D4000000000000040A /* Debug */,
+				A1B2C3D4000000000000040B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
