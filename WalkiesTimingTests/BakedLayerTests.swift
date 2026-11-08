@@ -74,8 +74,7 @@ struct BakedLayerTests {
 
         let engine = BakedCloudEngine(renderer: .baked)
         engine.testScreen = { (screen.camera.size, 3, screen.camera.projection) }
-        engine.bakery = { gate.bake($0) }
-        engine.honeycombBakery = { gate.honeycomb($0) }
+        gate.attach(engine)
         let inputs = BakedCloudEngine.Inputs(
             field: field, key: "a", theme: "clouds.classic", walkTiles: [], marker: "marker.dot", reduceMotion: true
         )
@@ -122,7 +121,9 @@ struct BakedLayerTests {
         #expect(engine.showingOverview, "zoomed out, the overview stands in: \(events)")
         #expect(!engine.status.needsLive)
         // The first bake, from MapKit's own region, once the camera's been still a moment.
-        try await tick(engine, until: "the first bake", within: 2) { engine.baking }
+        // Asked for, rather than still being made: it's asked for as the overview lands,
+        // and a test held up long enough could find it done (which it allows for below).
+        try await tick(engine, until: "the first bake", within: 2) { events.contains { $0.hasPrefix("ask #1 ") } }
 
         // Flies in while it's being made.
         handle.moving = true
@@ -183,11 +184,11 @@ struct BakedLayerTests {
             // The first bake waits for the overview, however slow the simulator is.
             engine.overviewWait = 60
             engine.testScreen = { (screen.camera.size, 3, screen.camera.projection) }
-            engine.bakery = { gate.bake($0) }
-            engine.honeycombBakery = { gate.honeycomb($0) }
+            gate.attach(engine)
             engine.update(field: field, handle: MapHandle())
+            // The overview first, then the bake that waited for it.
+            try await tick(engine, until: "the overview", within: 60) { engine.overview != nil }
             try await settle(engine, on: camera)
-            try await tick(engine, until: "the overview", within: 2) { engine.overview != nil }
             try await run(engine, for: BakePolicy.fade * 2 + 0.1)
             #expect(engine.showingFront && !engine.showingOverview && !engine.status.needsLive)
 
@@ -342,8 +343,17 @@ nonisolated private final class StuckBakery: @unchecked Sendable {
     private var held = false
     private var waiting = 0
     private var released = false
-    /// Every bake asked for, until it's done, or until its honeycomb's done if it has one.
+    /// Every bake the engine's asked for, from when it asks (not when a thread picks it
+    /// up), until it's done, or until its honeycomb's done if it has one.
     private let busy = DispatchGroup()
+
+    /// Has `engine` bake through this, and notes each bake as it's asked for.
+    @MainActor func attach(_ engine: BakedCloudEngine) {
+        engine.bakery = { self.bake($0) }
+        engine.honeycombBakery = { self.honeycomb($0) }
+        // Logged on the main thread as each bake's sent off to be made.
+        engine.log = { if $0.hasPrefix("ask #") { self.busy.enter() } }
+    }
 
     var stuck: Bool { lock.withLock { held } }
 
@@ -368,7 +378,6 @@ nonisolated private final class StuckBakery: @unchecked Sendable {
     }
 
     func bake(_ job: BakeJob) -> CloudBake {
-        busy.enter()
         let stick = lock.withLock {
             defer { armed = false }
             let stick = (armed || always) && !released
