@@ -14,23 +14,24 @@ import { boundaryBox, boundaryFromNominatim } from "./placeData";
 // tiles once when places:get hands them a newer version than the place was built with.
 const version = 2;
 const maxAge = 60 * 24 * 60 * 60 * 1000;
-// Longer than Nominatim, the wait for the Overpass slot and both 135-second
-// Overpass attempts. A crashed action cannot leave a place locked forever;
-// completion also checks ownership.
+// Longer than a whole fetch (jobBudget below), waits for the Overpass slot included.
+// A crashed action cannot leave a place locked forever; completion also checks ownership.
 const leaseDuration = 10 * 60 * 1000;
 const requestSpacing = 1100;
 // The warm queue's worker keeps a heartbeat on this sentinel row, so only one
 // runs at a time. Overpass turns away callers that run several queries at once.
 const workerId = -1;
-// Every Overpass query, the worker's or someone opening a place, holds this slot
-// while it runs. Longer than both 135-second attempts plus the Node action starting
-// up and saving a big suburb's file (placeStreets.ts), and a crash still frees it.
+// Every Overpass request, the worker's or someone opening a place, holds this slot
+// while it runs (placeStreets.ts). It's taken for each request rather than a whole
+// tiled download, which can run for minutes on a big suburb: when Santa Clara's held
+// it for nearly three, Sunnyvale's first load gave up waiting (WALKIES-B). Longer than
+// one 135-second request plus reading its answer, and a crash still frees it.
 const overpassId = -2;
-const overpassLease = 7 * 60 * 1000;
-// Someone opening a place waits this long for the worker's query to finish, so
-// the whole call stays inside the app's 6-minute timeout. The worker waits longer.
-const overpassWait = 45_000;
-const workerOverpassWait = 3 * 60 * 1000;
+const overpassLease = 3 * 60 * 1000;
+// Someone opening a place who finds the slot busy marks it, and background work (the
+// warm queue, lore jobs) leaves it for them while they've asked this recently. They
+// ask every half second while they wait.
+const waitingFresh = 3000;
 // How long a fetch may take from the start of the call, Nominatim and the wait for the
 // Overpass slot included: inside the app's 6-minute timeout for places:get, and inside
 // the 10-minute action limit and place lease for the worker and lore jobs.
@@ -122,7 +123,7 @@ export const get = action({
         return { url, fetchedAt: state.fetchedAt, version };
       }
       if (state.kind === "tooBig") throw new ConvexError(tooBigMessage(state.name));
-      if (state.kind === "fetch") return await fetchPlace(ctx, osmId, state.lease, overpassWait, deadline);
+      if (state.kind === "fetch") return await fetchPlace(ctx, osmId, state.lease, true, deadline);
       if (attempt < 20) await sleep(1000);
     }
     throw new ConvexError("This place is still getting ready");
@@ -137,7 +138,7 @@ export async function cachedFile(ctx: ActionCtx, osmId: number): Promise<Id<"_st
     const state = await ctx.runMutation(internal.places.claim, { osmId });
     if (state.kind === "ready") return state.file;
     if (state.kind === "tooBig") throw new Error(tooBigMessage(state.name));
-    if (state.kind === "fetch") await fetchPlace(ctx, osmId, state.lease, workerOverpassWait, Math.min(deadline, state.lease + jobBudget));
+    if (state.kind === "fetch") await fetchPlace(ctx, osmId, state.lease, false, Math.min(deadline, state.lease + jobBudget));
     else await sleep(2000);
   }
   throw new Error("This place is still getting ready");
@@ -244,7 +245,7 @@ export const drain = internalAction({
     if (next.kind === "done") return null;
     if (next.kind === "fetch") {
       // finish() records a failure and queues the retry, so carry on to the next place.
-      try { await fetchPlace(ctx, next.osmId, next.lease, workerOverpassWait, next.lease + jobBudget); } catch (error) {
+      try { await fetchPlace(ctx, next.osmId, next.lease, false, next.lease + jobBudget); } catch (error) {
         // Logged so a place that keeps failing can be found (WALKIES-6 and -7 couldn't say which one).
         console.warn(`Couldn't warm R${next.osmId}:`, error instanceof Error ? error.message : error);
       }
@@ -289,13 +290,22 @@ export const nominatimSlot = internalMutation({
   },
 });
 
-/** Takes the Overpass slot, or says how long to wait before asking again. */
+/** Takes the Overpass slot for one request, or says how long to wait before asking
+ * again. `interactive` is someone opening a place, who goes ahead of background work. */
 export const takeOverpass = internalMutation({
-  args: { lease: v.number() }, returns: v.number(),
-  handler: async (ctx, { lease }) => {
+  args: { lease: v.number(), interactive: v.optional(v.boolean()) }, returns: v.number(),
+  handler: async (ctx, { lease, interactive }) => {
     const row = await rowFor(ctx, overpassId);
     const now = Date.now();
-    if (row?.fetchingAt !== undefined && now - row.fetchingAt < overpassLease) return 500;
+    if (row?.fetchingAt !== undefined && now - row.fetchingAt < overpassLease) {
+      if (interactive) await ctx.db.patch("placeData", row._id, { waitingAt: now });
+      return interactive ? 500 : 2000;
+    }
+    // Free, but someone opening a place is waiting for it: let them have it. Only
+    // background work steps aside. Someone else opening a place takes their next tile
+    // straight away, so two people's downloads go one after the other rather than
+    // tile by tile, where both could run out of time.
+    if (!interactive && row?.waitingAt !== undefined && now - row.waitingAt < waitingFresh) return 2000;
     if (row) await ctx.db.patch("placeData", row._id, { fetchingAt: lease });
     else await ctx.db.insert("placeData", { osmId: overpassId, name: "Overpass slot", fetchedAt: 0, version, fetchingAt: lease });
     return 0;
@@ -358,27 +368,9 @@ export async function nominatim(ctx: ActionCtx, endpoint: string, params: Record
   return await fetchJSON(`https://nominatim.openstreetmap.org/${endpoint}?${new URLSearchParams(params)}`, 15_000);
 }
 
-/** Runs `query` while holding the Overpass slot, waiting up to `wait` for it. */
-async function withOverpass<T>(ctx: ActionCtx, wait: number, query: () => Promise<T>): Promise<T> {
-  const deadline = Date.now() + wait;
-  let lease = Date.now();
-  while (true) {
-    const retry = await ctx.runMutation(internal.places.takeOverpass, { lease });
-    if (retry === 0) break;
-    if (Date.now() + retry > deadline) throw new Error("Overpass is busy");
-    await sleep(retry);
-    lease = Date.now();
-  }
-  try {
-    return await query();
-  } finally {
-    await ctx.runMutation(internal.places.releaseOverpass, { lease });
-  }
-}
-
 /** `deadline` is when the whole fetch has to be done by; the Overpass download is fitted
  * into what's left of it. */
-async function fetchPlace(ctx: ActionCtx, osmId: number, lease: number, overpassWait: number, deadline: number): Promise<Cached> {
+async function fetchPlace(ctx: ActionCtx, osmId: number, lease: number, interactive: boolean, deadline: number): Promise<Cached> {
   try {
     const params = { osm_ids: `R${osmId}`, format: "jsonv2", polygon_geojson: "1", polygon_threshold: "0.0001" };
     const { name, boundary } = boundaryFromNominatim(await nominatim(ctx, "lookup", params), osmId);
@@ -389,9 +381,8 @@ async function fetchPlace(ctx: ActionCtx, osmId: number, lease: number, overpass
       throw new ConvexError(tooBigMessage(name));
     }
     // Overpass's answer is parsed and stored in Node (placeStreets.ts): it can be far
-    // bigger than this runtime's 64 MB.
-    const file = await withOverpass(ctx, overpassWait, () =>
-      ctx.runAction(internal.placeStreets.download, { boundary: JSON.stringify(boundary), deadline }));
+    // bigger than this runtime's 64 MB. It takes the Overpass slot for each request.
+    const file = await ctx.runAction(internal.placeStreets.download, { boundary: JSON.stringify(boundary), deadline, interactive });
     const fetchedAt = Date.now();
     const saved = await ctx.runMutation(internal.places.finish, { osmId, lease, name, file, fetchedAt });
     if (!saved) throw new Error("Place fetch lease expired");
