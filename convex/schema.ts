@@ -160,6 +160,9 @@ export default defineSchema({
     /** When the place was found far too big to fetch streets for (a state, a country),
      * so it isn't looked up again for a while. */
     tooBigAt: v.optional(v.number()),
+    /** On the Overpass slot's row only: when someone opening a place last asked for the
+     * slot and found it busy, so background work lets them have it next (places.ts). */
+    waitingAt: v.optional(v.number()),
   }).index("by_osm", ["osmId"]).index("by_queued", ["queuedAt"]).index("by_file", ["file"]),
 
   // Secrets for new suburbs (lore.ts). One row per suburb that's been researched or is

@@ -121,9 +121,90 @@ test("only one Overpass query runs at a time, and a crashed one frees the slot",
   expect(await t.mutation(internal.places.takeOverpass, { lease: first + 2 })).toBeGreaterThan(0);
   await t.mutation(internal.places.releaseOverpass, { lease: first });
   expect(await t.mutation(internal.places.takeOverpass, { lease: first + 3 })).toBe(0);
-  vi.setSystemTime(first + 3 + 7 * 60 * 1000 + 1);
+  // It's held for one request, so a crash frees it once that request's time is up.
+  vi.setSystemTime(first + 3 + 3 * 60 * 1000 + 1);
   expect(await t.mutation(internal.places.takeOverpass, { lease: Date.now() })).toBe(0);
 });
+
+test("background work lets someone opening a place have the slot next (WALKIES-B)", async () => {
+  vi.useFakeTimers();
+  const { t } = await signedIn();
+  const background = Date.now();
+  expect(await t.mutation(internal.places.takeOverpass, { lease: background })).toBe(0);
+  // Someone opening a place asks while the warm queue's request is running.
+  expect(await t.mutation(internal.places.takeOverpass, { lease: background + 1, interactive: true })).toBeGreaterThan(0);
+  await t.mutation(internal.places.releaseOverpass, { lease: background });
+  // The warm queue's next request waits, and they go first.
+  expect(await t.mutation(internal.places.takeOverpass, { lease: background + 2 })).toBeGreaterThan(0);
+  expect(await t.mutation(internal.places.takeOverpass, { lease: background + 3, interactive: true })).toBe(0);
+  await t.mutation(internal.places.releaseOverpass, { lease: background + 3 });
+  // Once nobody has asked for a few seconds, background work carries on.
+  vi.setSystemTime(Date.now() + 5000);
+  expect(await t.mutation(internal.places.takeOverpass, { lease: Date.now() })).toBe(0);
+});
+
+// A real timer, for letting the action run between steps of the fake clock.
+const realTimeout = globalThis.setTimeout.bind(globalThis);
+const realTick = () => new Promise((resolve) => realTimeout(resolve, 2));
+
+test("someone opening a place waits out another place's download rather than giving up after 45 s (WALKIES-B)", async () => {
+  vi.useFakeTimers();
+  const { t, client } = await signedIn();
+  stubOSM(() => overpassAnswer);
+  // Another place's download has the slot, as Santa Clara's did when Sunnyvale was opened.
+  const other = Date.now();
+  await t.mutation(internal.places.takeOverpass, { lease: other });
+  let outcome: { url: string } | Error | undefined;
+  void client.action(api.places.get, { osmId: 9 }).then((r) => { outcome = r; }, (e: Error) => { outcome = e; });
+  const wait = async (seconds: number) => {
+    for (let s = 0; s < seconds && !outcome; s++) { await realTick(); await vi.advanceTimersByTimeAsync(1000); }
+  };
+  await wait(90);
+  expect(outcome).toBeUndefined();
+  await t.mutation(internal.places.releaseOverpass, { lease: other });
+  await wait(10);
+  expect(outcome).toMatchObject({ url: expect.any(String) });
+});
+
+test("a tiled download holds the slot for each request, so someone opening a place can go between them", async () => {
+  const { t } = await signedIn();
+  const slot = () => t.run((ctx) => ctx.db.query("placeData").withIndex("by_osm", (q) => q.eq("osmId", -2)).unique());
+  const queries: string[] = [];
+  let heldDuring = 0;
+  let cutIn: number | undefined;
+  vi.stubGlobal("fetch", async (_input: string | URL, init?: RequestInit) => {
+    const query = new URLSearchParams(String(init?.body ?? "")).get("data") ?? "";
+    queries.push(query);
+    if ((await slot())?.fetchingAt !== undefined) heldDuring++;
+    if (queries.length === 1) {
+      // Someone opens a place while the first request is running: busy, so they wait.
+      expect(await t.mutation(internal.places.takeOverpass, { lease: Date.now(), interactive: true })).toBeGreaterThan(0);
+      // The whole suburb is too heavy, so it's split into quarters.
+      return new Response("error", { status: 504 });
+    }
+    return Response.json(footway(queries.length, query));
+  });
+  // They keep asking, and get in before the warm queue's quarters.
+  const waiting = (async () => {
+    while (queries.length === 0) await realTick();
+    while (true) {
+      const lease = Date.now();
+      if (await t.mutation(internal.places.takeOverpass, { lease, interactive: true }) === 0) {
+        cutIn = queries.length;
+        await t.mutation(internal.places.releaseOverpass, { lease });
+        return;
+      }
+      await new Promise((resolve) => realTimeout(resolve, 50));
+    }
+  })();
+  const file = await t.action(internal.placeStreets.download, { boundary: JSON.stringify(square), deadline: Date.now() + 9 * 60 * 1000 });
+  await waiting;
+  expect(cutIn).toBe(1);
+  expect(queries).toHaveLength(5);
+  expect(heldDuring).toBe(5);
+  expect(file).toBeDefined();
+  expect((await slot())?.fetchingAt).toBeUndefined();
+}, 20_000);
 
 test("the slot never shows up as a place on the warm queue", async () => {
   vi.useFakeTimers();
