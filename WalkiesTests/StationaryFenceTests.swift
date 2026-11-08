@@ -125,6 +125,33 @@ struct LocationTrackerFenceTests {
         #expect(T.watch(confirmedWalk: false, onScreen: true, onWheels: false, insideFence: true) == .live)
     }
 
+    @Test func withoutASessionTheCheapWatchesStandInAndOnlyAWalkOutGetsAsked() {
+        typealias T = LocationTracker
+        // Live updates stall in the pocket without a session: coarse while out, nothing at home.
+        #expect(T.withoutSession(.live, insideFence: false) == .light)
+        #expect(T.withoutSession(.live, insideFence: true) == .idle)
+        #expect(T.withoutSession(.light, insideFence: false) == .light)
+        #expect(T.withoutSession(.idle, insideFence: true) == .idle)
+        // Out on foot: ask once. Not in the garden or before the fence has loaded (not left),
+        // not sitting still, not from the car, not twice.
+        #expect(T.shouldAskToStartWalk(leftFence: true, onFoot: true, onWheels: false, asked: false))
+        #expect(!T.shouldAskToStartWalk(leftFence: false, onFoot: true, onWheels: false, asked: false))
+        #expect(!T.shouldAskToStartWalk(leftFence: true, onFoot: false, onWheels: false, asked: false))
+        #expect(!T.shouldAskToStartWalk(leftFence: true, onFoot: true, onWheels: true, asked: false))
+        #expect(!T.shouldAskToStartWalk(leftFence: true, onFoot: true, onWheels: false, asked: true))
+    }
+
+    @Test func theSessionIsOnlyLetGoAtHomeWithNoWalkGoing() {
+        typealias T = LocationTracker
+        // Settled at home, app closed, nothing going on: no session, so no blue arrow.
+        #expect(!T.wantsSession(holdAllDay: false, inForeground: false, live: false, insideFence: true, walking: false))
+        // A walk that isn't confirmed yet still keeps it, or you'd walk out without one (7 Nov).
+        #expect(T.wantsSession(holdAllDay: false, inForeground: false, live: false, insideFence: true, walking: true))
+        #expect(T.wantsSession(holdAllDay: false, inForeground: false, live: false, insideFence: false, walking: false))
+        #expect(T.wantsSession(holdAllDay: false, inForeground: true, live: false, insideFence: true, walking: false))
+        #expect(T.wantsSession(holdAllDay: true, inForeground: false, live: false, insideFence: true, walking: false))
+    }
+
     @Test func anAutomaticPauseKeepsALightWatchAndResumesOnMotion() {
         let tracker = LocationTracker(geofence: FakeFence())
         tracker.isOnConfirmedWalk = { true }

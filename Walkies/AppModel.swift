@@ -30,6 +30,7 @@ final class AppModel {
     private(set) var activeWalk: Walk? {
         didSet {
             updateLiveSteps()
+            scheduleStaleWalkCheck()
             if (activeWalk == nil) != (oldValue == nil) { tracker.refreshWatch() }
         }
     }
@@ -186,6 +187,16 @@ final class AppModel {
         tracker.isOnConfirmedWalk = { [weak self] in self.map { $0.activeWalk != nil && !$0.autoWalkPending } ?? false }
         tracker.isOnManualWalk = { [weak self] in self?.activeWalk?.isAutomatic == false }
         tracker.isOnScreen = { [weak self] in self.map { $0.inForeground && $0.mapVisible } ?? false }
+        tracker.isInForeground = { [weak self] in self?.inForeground ?? false }
+        if servicesEnabled {
+            tracker.askToStartWalk = { Notifier.askToStartWalk() }
+            tracker.withdrawWalkQuestion = { Notifier.withdrawWalkQuestion() }
+            tracker.canAskToStartWalk = { Notifier.allowed && MotionMonitor.canTell }
+            Task { [weak self] in
+                await Notifier.refreshAllowed()
+                self?.tracker.refreshWatch()
+            }
+        }
         tracker.isOnWheels = { [weak self] in self?.motion.onWheels ?? false }
         tracker.isStill = { [weak self] in self?.motion.still ?? false }
         tracker.isOnFoot = { [weak self] in self?.motion.onFoot ?? false }
@@ -882,6 +893,21 @@ final class AppModel {
     private func saveIfDue() {
         if Date.now.timeIntervalSince(lastSave) > 30 {
             saveNow()
+        }
+    }
+
+    @ObservationIgnored private var staleWalkCheck: Task<Void, Never>?
+
+    /// Fixes can stop altogether once you're home (the light watch only sends one every
+    /// 25 m), so a quiet walk also ends on the clock. Otherwise it kept holding the
+    /// background session, and the blue arrow, for the rest of the day.
+    private func scheduleStaleWalkCheck() {
+        staleWalkCheck?.cancel()
+        guard activeWalk?.isAutomatic == true else { staleWalkCheck = nil; return }
+        staleWalkCheck = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.autoWalkGap + 5))
+            guard !Task.isCancelled else { return }
+            self?.finishStaleAutoWalk()
         }
     }
 
@@ -1642,6 +1668,15 @@ final class AppModel {
         checkSpotOnNextFix = active
         if !active { spotToCheck = nil }
         tracker.refreshWatch()
+        // You might have turned notifications on or off in Settings. Turning them off with
+        // Walkies in the background only counts from the next time it's opened, as it
+        // can't take a session until then anyway.
+        if active, servicesEnabled {
+            Task { [weak self] in
+                await Notifier.refreshAllowed()
+                self?.tracker.refreshWatch()
+            }
+        }
     }
 
     /// The first good fix after the app comes to the front, from GPS or the map's blue
