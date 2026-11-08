@@ -27,7 +27,7 @@ They match `Walkies/PrivacyInfo.xcprivacy` and the website's privacy policy (`we
 | Identifiers | **User ID** | The Walkies account ID |
 | Diagnostics | **Crash Data** | Crash and error reports to Sentry, from Release builds only (`Walkies/Services/CrashReporting.swift`). No location, user or device ID in them |
 
-Leave everything else unticked: Health, Coarse Location (the GPS points are precise), Financial Info, Sensitive Info, Contacts, Emails or Text Messages, Customer Support, Browsing History, Search History (place searches go from the phone to Apple and OpenStreetMap, and the server's street cache is keyed by the place, not the person), Device ID (no push tokens or device IDs), Purchases (nothing to buy), Product Interaction, Advertising Data, Other Usage Data, Performance Data and Other Diagnostic Data (Sentry only gets crashes and errors: no tracing, sessions, launch times or hang reports), Other Data, Phone Number, Physical Address, Other User Contact Info.
+Leave everything else unticked: Health, Coarse Location (the GPS points are precise), Financial Info, Sensitive Info, Contacts, Emails or Text Messages, Customer Support, Browsing History, Search History (place searches go from the phone to Apple and OpenStreetMap, and the server's street cache is keyed by the place, not the person), Device ID (the push token and the random id the app makes for itself to send pushes aren't device-level identifiers, and only serve pushes), Purchases (nothing to buy), Product Interaction, Advertising Data, Other Usage Data, Performance Data and Other Diagnostic Data (Sentry only gets crashes and errors: no tracing, sessions, launch times or hang reports), Other Data, Phone Number, Physical Address, Other User Contact Info.
 
 ## 4. For each ticked type
 
@@ -48,3 +48,5 @@ The summary on the App Privacy page should read:
 - **Data Used to Track You:** none
 
 Then **Publish**.
+
+Published with Crash Data on 8 Nov 2026, for the build after the 5.1.1(v) rejection (the first with Sentry). Guests (no account) are covered by the same answers: their walks still sync to an account, just one with no name or email.
