@@ -56,6 +56,7 @@ enum Notifier {
 }
 final class Account {
     var isSignedIn = false
+    var isGuest = false
     var userId: String?
     func client() async -> ConvexClient? { nil }
 }

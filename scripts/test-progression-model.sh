@@ -32,10 +32,10 @@ art = Path('Walkies/Views/CosmeticArt.swift').read_text()
 colours = Path('Walkies/Views/TeamsView.swift').read_text()
 colours = colours[colours.index('extension Color {'):colours.index('enum TeamSheet')]
 (root / 'Sources/Walkies/TeamColours.swift').write_text('import SwiftUI\n' + colours)
-# Where a tapped push opens, which AppModel keeps; the rest of Notifier.swift is iOS only.
+# Where a tapped push opens (AppModel) and the push token sync hands over (Sync): the
+# rest of Notifier.swift shows notifications, which is iOS only and stubbed.
 notifier = Path('Walkies/Services/Notifier.swift').read_text()
-target = notifier[notifier.index('/// Where tapping a push'):notifier.index('/// The phone\'s APNs token')]
-(root / 'Sources/Walkies/NotificationTarget.swift').write_text('import Foundation\n' + target)
+(root / 'Sources/Walkies/PushTokens.swift').write_text('import Foundation\n' + notifier[notifier.index('/// Where tapping a push'):])
 # Exercise the actual app integration and sync on macOS too. Sensors and the
 # notification/account UI are stubbed; networking uses a URLProtocol test server.
 for name in ['Store', 'Sync', 'Convex', 'OSMClient', 'CachedPlaceData', 'CityBuilder', 'TeamsAPI']:
