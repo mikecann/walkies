@@ -164,13 +164,8 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         stationary = isStill()
         if stationary { pausedAt = pausedAt ?? lastLocation } else { pausedAt = nil }
         noteWalking()
-        // The light watch only sends a fix every 25 m, so a phone that's stopped gets none
-        // and can't settle, which kept the session (and the blue arrow) after a walk on
-        // 5 Nov 2026. Starting it again sends one straight away.
-        if stationary, outside, lightOn {
-            stopLight()
-            startLight()
-        }
+        settleTries = 0
+        if stationary { lookToSettle() } else { settleCheck?.cancel() }
         refreshWatch()
     }
 
@@ -277,6 +272,31 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         manager.distanceFilter = 5
     }
 
+    @ObservationIgnored private var settleCheck: Task<Void, Never>?
+    @ObservationIgnored private var settleTries = 0
+
+    /// The light watch only sends a fix every 25 m, and only to 100 m, so a phone that's
+    /// stopped outside the fence never got one good enough to settle (50 m), which kept the
+    /// session, and the blue arrow, after a walk on 5 Nov 2026. So when you go still out
+    /// there it asks for a precise fix for a minute, and tries again every five minutes,
+    /// three times at most until you move again.
+    private func lookToSettle() {
+        guard stationary, outside, lightOn, settleTries < 3 else { return }
+        settleTries += 1
+        stopLight()
+        startLight()
+        manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+        settleCheck?.cancel()
+        settleCheck = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(60))
+            guard let self, !Task.isCancelled else { return }
+            if self.lightOn { self.manager.desiredAccuracy = kCLLocationAccuracyHundredMeters }
+            try? await Task.sleep(for: .seconds(240))
+            guard !Task.isCancelled else { return }
+            self.lookToSettle()
+        }
+    }
+
     private func startLight() {
         guard !lightOn else { return }
         lightOn = true
@@ -330,6 +350,8 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     func stopAlwaysOn() {
         alwaysOnRunning = false
         outside = false
+        settleCheck?.cancel()
+        settleCheck = nil
         liveTask?.cancel()
         liveTask = nil
         walkingTimer?.cancel()
@@ -456,7 +478,11 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
                     if stationary, pausedAt == nil { pausedAt = Coordinate(location.coordinate) }
                     lastLocation = Coordinate(location.coordinate)
                     // Not in a car: stopping at the lights isn't settling somewhere.
-                    if lightOn, !isOnWheels() { settle(at: location, stationary: isStill()) }
+                    // Fresh fixes only: restarting the watch can hand back a cached one from
+                    // home, which would look like you'd settled back there (Codex, 8 Nov).
+                    if lightOn, !isOnWheels(), location.timestamp.timeIntervalSinceNow > -10 {
+                        settle(at: location, stationary: isStill())
+                    }
                 }
                 onLocation?(location)
             }
