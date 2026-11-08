@@ -141,6 +141,17 @@ struct LocationTrackerFenceTests {
         #expect(!T.shouldAskToStartWalk(leftFence: true, onFoot: true, onWheels: false, asked: true))
     }
 
+    @Test func theSessionIsOnlyLetGoAtHomeWithNoWalkGoing() {
+        typealias T = LocationTracker
+        // Settled at home, app closed, nothing going on: no session, so no blue arrow.
+        #expect(!T.wantsSession(holdAllDay: false, inForeground: false, live: false, insideFence: true, walking: false))
+        // A walk that isn't confirmed yet still keeps it, or you'd walk out without one (7 Nov).
+        #expect(T.wantsSession(holdAllDay: false, inForeground: false, live: false, insideFence: true, walking: true))
+        #expect(T.wantsSession(holdAllDay: false, inForeground: false, live: false, insideFence: false, walking: false))
+        #expect(T.wantsSession(holdAllDay: false, inForeground: true, live: false, insideFence: true, walking: false))
+        #expect(T.wantsSession(holdAllDay: true, inForeground: false, live: false, insideFence: true, walking: false))
+    }
+
     @Test func anAutomaticPauseKeepsALightWatchAndResumesOnMotion() {
         let tracker = LocationTracker(geofence: FakeFence())
         tracker.isOnConfirmedWalk = { true }

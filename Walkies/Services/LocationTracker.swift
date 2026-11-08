@@ -236,9 +236,18 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     /// With Always permission the session's only for live updates while the app's in your
     /// pocket, held until you've settled again so a coffee stop doesn't need another tap.
     /// While using the app, always on can't run in the background without one.
+    /// Any walk counts, not just a confirmed one: on 7 Nov Mike opened the app, set off and
+    /// put the phone away before the walk was confirmed, and letting go then (still inside
+    /// the fence) left him walking out with no session and no question yet.
+    nonisolated static func wantsSession(holdAllDay: Bool, inForeground: Bool, live: Bool,
+                                         insideFence: Bool, walking: Bool) -> Bool {
+        holdAllDay || inForeground || live || !insideFence || walking
+    }
+
     private func refreshSession(live: Bool) {
         let holdAllDay = !hasAlwaysPermission || !canAskToStartWalk()
-        let wanted = holdAllDay || isInForeground() || live || !insideFence || isOnConfirmedWalk()
+        let wanted = Self.wantsSession(holdAllDay: holdAllDay, inForeground: isInForeground(), live: live,
+                                       insideFence: insideFence, walking: isWalking())
         if !wanted {
             backgroundSession?.invalidate()
             backgroundSession = nil
