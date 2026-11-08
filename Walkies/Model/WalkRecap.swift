@@ -4,6 +4,14 @@ import Foundation
 /// up along the route, how each place moved on, and a guess at how long until
 /// you've finished. Worked out once, the moment the walk ends.
 nonisolated struct WalkRecap: Identifiable, Sendable {
+    /// Seconds for the replay's route to draw: 2 for every 10 minutes walked. At least 5,
+    /// so a short walk is still watchable, and at most 12, so a long one doesn't drag.
+    /// It was 5 seconds per 10 minutes, up to 30, which felt too long (Chef #12). Here
+    /// rather than on the player so the macOS model tests can check it.
+    static func replayDuration(walked: TimeInterval) -> Double {
+        min(12, max(5, walked / 600 * 2))
+    }
+
     /// A tile uncovered on the walk. `at` is how far along the route (0 to 1) you got to it.
     struct Reveal: Sendable {
         var place: UUID
