@@ -242,7 +242,8 @@ struct SyncSafetyTests {
     }
 
     /// A guest signing in with Apple or Google keeps everything on the phone, and it all
-    /// goes up to their new account, even what the guest account already had.
+    /// goes up to their new account, even what the guest account already had. It works
+    /// across a relaunch, so it doesn't matter when the app's killed.
     @Test func aGuestSigningInTakesTheirWalksWithThem() async throws {
         let store = Store(root: root())
         defer { store.wipe() }
@@ -252,24 +253,35 @@ struct SyncSafetyTests {
         let guestServer = SafetyServer()
         let guestClient = client(guestServer)
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
-        var user = "guest"
-        let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, userId: { user }, makeClient: { guestClient })
+        let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, userId: { "guest" }, isGuest: { true },
+                                makeClient: { guestClient })
         await engine.sync()
         #expect(store.loadOwner() == "guest")
+        #expect(store.loadOwnerIsGuest())
         #expect(await guestServer.calls.filter { $0 == "sync:saveWalk" }.count == 1)
 
-        // Account.finishSignIn calls this before the new session is saved.
-        engine.adopt(for: "alice")
-        user = "alice"
+        // Signed in with Apple, then the app's relaunched before anything synced.
+        let relaunched = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         let aliceServer = SafetyServer()
-        SafetyProtocol.server = aliceServer
-        await engine.sync()
-        #expect(engine.status == .idle)
+        let aliceClient = client(aliceServer)
+        let alice = SyncEngine(model: relaunched, store: store, isSignedIn: { true }, userId: { "alice" }, isGuest: { false },
+                               makeClient: { aliceClient })
+        await alice.sync()
+        #expect(alice.status == .idle)
         #expect(store.loadOwner() == "alice")
-        #expect(model.cities.count == 1)
-        #expect(model.walks.count == 1)
+        #expect(!store.loadOwnerIsGuest())
+        #expect(relaunched.cities.count == 1)
+        #expect(relaunched.walks.count == 1)
         #expect(await aliceServer.places.count == 1)
         #expect(await aliceServer.calls.filter { $0 == "sync:saveWalk" }.count == 1)
+
+        // Alice's data is hers now: someone else signing in starts from scratch, as before.
+        let bobServer = SafetyServer()
+        let bobClient = client(bobServer)
+        let bob = SyncEngine(model: relaunched, store: store, isSignedIn: { true }, userId: { "bob" }, makeClient: { bobClient })
+        await bob.sync()
+        #expect(relaunched.cities.isEmpty)
+        #expect(relaunched.walks.isEmpty)
     }
 }
 

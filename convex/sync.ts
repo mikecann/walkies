@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { currentUserId } from "./users";
+import type { Id } from "./_generated/dataModel";
 import { mergeLedgers, parseLedger } from "./progression";
 import { noticePlace, noticeWalk } from "./lore";
 import { placeAdded } from "./devices";
@@ -9,6 +10,23 @@ async function requireUser(ctx: QueryCtx | MutationCtx) {
   const userId = await currentUserId(ctx);
   if (userId === null) throw new ConvexError("Not signed in");
   return userId;
+}
+
+/**
+ * A file the caller can save a walk or place with: a fresh upload nothing points at yet,
+ * or the one already on the row being saved. Without this, the id of someone else's file
+ * (a street file from places:get, a secret's picture from lore:forPlace) would be taken
+ * over and then deleted by the next save. Anyone can get an account now (guests), so
+ * that's anyone on the internet.
+ */
+async function requireOwnFile(ctx: MutationCtx, file: Id<"_storage">, current?: Id<"_storage">) {
+  if (file === current) return;
+  const used =
+    (await ctx.db.query("walks").withIndex("by_file", (q) => q.eq("file", file)).first()) ??
+    (await ctx.db.query("places").withIndex("by_file", (q) => q.eq("file", file)).first()) ??
+    (await ctx.db.query("placeData").withIndex("by_file", (q) => q.eq("file", file)).first()) ??
+    (await ctx.db.query("loreEntries").withIndex("by_sticker", (q) => q.eq("stickerFile", file)).first());
+  if (used !== null) throw new ConvexError("That file is already in use");
 }
 
 /** Where to upload a walk or city file before saving it. */
@@ -39,6 +57,7 @@ export const saveWalk = mutation({
       .query("walks")
       .withIndex("by_user_client", (q) => q.eq("userId", userId).eq("clientId", walk.clientId))
       .unique();
+    await requireOwnFile(ctx, walk.file, existing?.file);
     if (existing !== null) {
       await ctx.db.patch("walks", existing._id, walk);
       if (existing.file !== walk.file) await ctx.storage.delete(existing.file);
@@ -69,16 +88,17 @@ export const savePlace = mutation({
       .query("places")
       .withIndex("by_user_client", (q) => q.eq("userId", userId).eq("clientId", place.clientId))
       .unique();
+    await requireOwnFile(ctx, place.file, existing?.file);
     if (existing === null) {
       const placeId = await ctx.db.insert("places", { userId, ...place });
       await noticePlace(ctx, (await ctx.db.get("places", placeId))!);
       await placeAdded(ctx, userId, place.name);
     } else if (place.updatedAt > existing.updatedAt) {
       await ctx.db.patch("places", existing._id, { name: place.name, updatedAt: place.updatedAt, file: place.file });
-      await ctx.storage.delete(existing.file);
+      if (existing.file !== place.file) await ctx.storage.delete(existing.file);
       // Saving after a walk is how the server hears where someone walked (lore.ts).
       await noticePlace(ctx, { ...existing, file: place.file });
-    } else {
+    } else if (place.file !== existing.file) {
       await ctx.storage.delete(place.file);
     }
     return null;

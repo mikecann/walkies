@@ -37,6 +37,7 @@ final class SyncEngine {
     @ObservationIgnored private let model: AppModel
     @ObservationIgnored private let isSignedIn: () -> Bool
     @ObservationIgnored private let userId: () -> String?
+    @ObservationIgnored private let isGuest: () -> Bool
     @ObservationIgnored private let makeClient: () async -> ConvexClient?
     @ObservationIgnored private let store: Store
     @ObservationIgnored private var state: SyncState
@@ -48,15 +49,18 @@ final class SyncEngine {
 
     convenience init(model: AppModel, account: Account) {
         self.init(model: model, store: Store(), isSignedIn: { account.isSignedIn }, userId: { account.userId },
+                  isGuest: { account.isGuest },
                   makeClient: { await account.client() })
     }
 
     init(model: AppModel, store: Store, isSignedIn: @escaping () -> Bool, userId: @escaping () -> String? = { nil },
+         isGuest: @escaping () -> Bool = { false },
          makeClient: @escaping () async -> ConvexClient?) {
         self.model = model
         self.store = store
         self.isSignedIn = isSignedIn
         self.userId = userId
+        self.isGuest = isGuest
         self.makeClient = makeClient
         state = store.loadSyncState()
         lastSynced = UserDefaults.standard.object(forKey: "lastSynced") as? Date
@@ -167,17 +171,6 @@ final class SyncEngine {
         countWaiting()
     }
 
-    /// A guest has just signed in with Apple or Google: this phone's walks, places and
-    /// progress now belong to that account, and everything goes up to it on the next sync
-    /// (the guest account they were in is deleted). Runs before the new session is saved,
-    /// so `claimLocalData` never sees a stranger's data and wipes it.
-    func adopt(for user: String) {
-        reset()
-        save()
-        UserDefaults.standard.removeObject(forKey: "lastSynced")
-        store.save(owner: user)
-    }
-
     /// Stops any sync in flight, then clears this phone, for signing out. A sync
     /// that was running can't put anything back afterwards.
     func wipe() async {
@@ -212,16 +205,31 @@ final class SyncEngine {
     /// say after a session ran out, starts from their own account instead. Anything the
     /// last account hadn't uploaded yet is lost here, but that's rare: their session
     /// would have to end with things still waiting.
+    ///
+    /// A guest's data is the exception: it only lives on this phone, so whoever signs in
+    /// next (the guest signing in with Apple or Google, or starting a fresh guest account
+    /// after theirs ran out) takes it over, and all of it goes up to their account. The
+    /// owner only changes here, at the start of a sync, so it can't be caught half done.
     private func claimLocalData() {
         guard let user = userId() else { return }
         let owner = store.loadOwner()
-        guard owner != user else { return }
-        if owner != nil {
-            model.wipeLocalData()
-            state = SyncState()
-            lastSynced = nil
+        let guest = isGuest()
+        guard owner != user else {
+            if store.loadOwnerIsGuest() != guest { store.save(owner: user, guest: guest) }
+            return
         }
-        store.save(owner: user)
+        if owner != nil {
+            if store.loadOwnerIsGuest() {
+                Self.log.info("A guest's data moving to the account that's signed in")
+            } else {
+                model.wipeLocalData()
+            }
+            state = SyncState()
+            save()
+            lastSynced = nil
+            UserDefaults.standard.removeObject(forKey: "lastSynced")
+        }
+        store.save(owner: user, guest: guest)
     }
 
     /// Throws when a sign-out or reset has happened since the sync started.

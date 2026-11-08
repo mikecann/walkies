@@ -30,7 +30,6 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         UNUserNotificationCenter.current().delegate = self
         model.makePlaceClient = { [weak account] in await account?.client() }
         model.requestSync = { [weak self] in self?.sync.schedule() }
-        account.onGuestSignedIn = { [weak self] user in self?.sync.adopt(for: user) }
         // Chef (Seth's feedback board): opened from Settings rather than floating over the map.
         ChefKit.install(client: ChefConnection(account: account))
         ChefKit.isHidden = true

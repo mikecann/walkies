@@ -93,9 +93,6 @@ final class Account {
     @ObservationIgnored private let sheet = SignInSheet()
     @ObservationIgnored private let apple = AppleSignIn()
     @ObservationIgnored private var refreshing: Task<Session?, Never>?
-    /// A guest signing in with Apple or Google, with the new account's user id, before its
-    /// session is saved: this phone's data moves to that account (`SyncEngine.adopt`).
-    @ObservationIgnored var onGuestSignedIn: ((String) -> Void)?
     #if DEBUG && targetEnvironment(simulator)
     @ObservationIgnored private var automaticTestSignInRequested = false
     /// `-guestSignIn`: taps "Continue without an account" at launch, for trying the guest path.
@@ -134,25 +131,24 @@ final class Account {
     // MARK: Signing in
 
     func signIn(with provider: Provider) async throws {
-        // A guest signing in properly: their guest account goes once the new one's in.
+        // A guest signing in properly: their guest account goes once the new one's in. Their
+        // walks stay on the phone and go up to the new account (SyncEngine.claimLocalData).
         let guest = session?.guest == true && provider != .guest ? session : nil
         do {
-            try await performSignIn(with: provider, replacing: guest)
-            if let guest { Task { await Self.deleteGuest(guest) } }
+            try await performSignIn(with: provider)
+            if let guest, guest.userId != session?.userId { Task { await Self.deleteGuest(guest) } }
         } catch {
             log.error("\(provider.rawValue, privacy: .public): \(String(describing: error), privacy: .public)")
             throw error
         }
     }
 
-    private func performSignIn(with provider: Provider, replacing guest: Session?) async throws {
+    private func performSignIn(with provider: Provider) async throws {
         if provider == .guest {
             let result: CompleteResult = try await ConvexClient().mutation("auth:signInAnonymously")
-            try await finishSignIn(result)
+            try await finishSignIn(result, guest: true)
             return
         }
-        upgrading = guest
-        defer { upgrading = nil }
         #if DEBUG && targetEnvironment(simulator)
         if provider == .test {
             let arguments = ProcessInfo.processInfo.arguments
@@ -245,17 +241,18 @@ final class Account {
     }
     #endif
 
-    /// The guest session being replaced by the sign-in in progress, if any.
-    @ObservationIgnored private var upgrading: Session?
-
-    private func finishSignIn(_ result: CompleteResult) async throws {
+    /// - Parameter guest: whether this is a guest account. It comes from how they signed
+    ///   in, not `users:me`, so a profile request that fails can't lose it.
+    private func finishSignIn(_ result: CompleteResult, guest: Bool = false) async throws {
         guard result.status == "complete", var tokens = result.tokens else { throw SignInError.failed }
 
         // Who this is, for Settings. Not essential, so a hiccup here doesn't stop sign-in.
         if let me: Me = try? await ConvexClient(token: tokens.accessToken).query("users:me") {
             me.apply(to: &tokens)
         }
-        if let upgrading, upgrading.userId != tokens.userId { onGuestSignedIn?(tokens.userId) }
+        tokens.guest = guest
+        // Any refresh still running belongs to the session being replaced.
+        refreshing = nil
         save(tokens)
     }
 
@@ -273,7 +270,9 @@ final class Account {
         let client = ConvexClient(token: token)
         await PushTokens.unregister(client)
         do {
-            let _: Nothing = try await client.mutation("users:deleteAccount")
+            // users:deleteGuest refuses anything but a guest account, so a mixed-up session
+            // can never delete a real one.
+            let _: Nothing? = try await client.mutation("users:deleteGuest")
             log.info("Deleted the guest account after signing in")
         } catch {
             log.error("Couldn't delete the guest account: \(String(describing: error), privacy: .public)")
@@ -283,10 +282,13 @@ final class Account {
     /// Picks up a new name or photo for someone who's already signed in, such as a
     /// photo saved after they first signed in. Once a launch is plenty.
     func refreshProfile() async {
-        guard let client = await client(),
+        guard let asked = session?.userId, let client = await client(),
               let me: Me = try? await client.query("users:me"),
-              var tokens = session else { return }
+              var tokens = session, tokens.userId == asked else { return }
+        // Sign-in decided whether this is a guest; the profile only fills in names.
+        let guest = tokens.guest
         me.apply(to: &tokens)
+        tokens.guest = guest
         save(tokens)
     }
 
@@ -314,6 +316,9 @@ final class Account {
                 let result: RefreshResult = try await ConvexClient().mutation(
                     "auth:refreshSession", ["refreshToken": current.refreshToken]
                 )
+                // Someone signed in (or out) while this was out: it's the old session's
+                // answer, so it mustn't replace or clear the new one.
+                guard session?.refreshToken == current.refreshToken else { return nil }
                 guard result.kind == "rotated", var tokens = result.tokens else {
                     clear()
                     return nil

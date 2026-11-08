@@ -162,11 +162,21 @@ nonisolated struct Store {
         read(String.self, from: ownerURL)
     }
 
-    func save(owner: String) {
+    func save(owner: String, guest: Bool = false) {
+        // The guest mark goes first: if the app's killed in between, a guest's data still
+        // reads as a guest's and moves to whoever signs in, rather than being wiped.
+        write(guest, to: ownerGuestURL)
         write(owner, to: ownerURL)
     }
 
+    /// Whether the owner is a guest (using Walkies without an account). Their data moves to
+    /// whoever signs in next instead of being wiped (SyncEngine.claimLocalData).
+    func loadOwnerIsGuest() -> Bool {
+        read(Bool.self, from: ownerGuestURL) ?? false
+    }
+
     private var ownerURL: URL { root.appending(path: "owner.json") }
+    private var ownerGuestURL: URL { root.appending(path: "owner-guest.json") }
 
     /// Suburbs around your places, so the map can offer them without asking OpenStreetMap every launch.
     func loadNearby() -> NearbyPlaces? {

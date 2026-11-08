@@ -114,4 +114,15 @@ describe("guests", () => {
       vi.useRealTimers();
     }
   });
+
+  test("deleteGuest deletes a guest and refuses a real account", async () => {
+    const t = setup();
+    vi.stubEnv("WALKIES_TEST_SIGNIN", "1");
+    const guest = await t.mutation(api.auth.signInAnonymously);
+    const real = await t.mutation(api.auth.signInForTesting, { name: "Sim A" });
+    await expect(t.withIdentity({ subject: real.tokens.userId }).mutation(api.users.deleteGuest)).rejects.toThrow("Only a guest");
+    expect(await t.withIdentity({ subject: real.tokens.userId }).query(api.users.me)).toMatchObject({ name: "Sim A" });
+    await t.withIdentity({ subject: guest.tokens.userId }).mutation(api.users.deleteGuest);
+    expect(await t.withIdentity({ subject: guest.tokens.userId }).query(api.users.me)).toBeNull();
+  });
 });

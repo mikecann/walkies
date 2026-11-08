@@ -198,6 +198,25 @@ export const deleteAccount = mutation({
 });
 
 /**
+ * Deletes the guest account a phone was using, once that guest has signed in with Apple
+ * or Google and their walks have moved to the new account (Account.swift). Only ever a
+ * guest: a real account here, from a session the app mixed up, is refused.
+ */
+export const deleteGuest = mutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const userId = await currentUserId(ctx);
+    if (userId === null) return null;
+    const user = await ctx.db.get("users", userId);
+    if (user?.guest !== true) throw new ConvexError("Only a guest account can be deleted this way.");
+    await ctx.db.patch("users", userId, { deletedAt: Date.now(), name: undefined });
+    await startDeletion(ctx, userId);
+    return null;
+  },
+});
+
+/**
  * Folds together users that share a verified email, made before sign-ins were
  * linked: the oldest keeps everything and the others point at it. Safe to run
  * again. `npx convex run users:mergeDuplicateUsers --prod`
