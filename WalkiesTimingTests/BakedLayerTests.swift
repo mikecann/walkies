@@ -18,6 +18,11 @@ import simd
 // test in parallel, with -parallel-testing-enabled YES, so don't), so these start once
 // the rest have finished. They're serialized so they don't compete with each other
 // either, and the stuck-bake ones wait for the bakes they let go before they end.
+//
+// Even alone, the overview took anywhere from 16 ms to 3 s, as the Mac running the
+// simulator (and the simulator, just booted) had other work on. So the tests that
+// need the overview before the first bake set `engine.overviewWait` long, rather than
+// count on it being done inside the second the app waits for it.
 
 /// The baked renderer end to end: the engine's own layers, composited as Core Animation
 /// would, show the clouds where the live renderer draws them, including after the
@@ -105,11 +110,14 @@ struct BakedLayerTests {
         engine.testScreen = { (screen.camera.size, 3, screen.camera.projection) }
         engine.bakery = { slow.bake($0) }
         engine.log = { events.append($0) }
+        // The overview first, as on a phone, where it takes well under a second. On a
+        // busy simulator it can take seconds, past the second the first bake waits for
+        // it, and then the first bake's done before the flight starts.
+        engine.overviewWait = 60
         engine.update(field: field, handle: handle)
 
-        // The overview's ready quickly (well under a second on a phone, slower on a
-        // simulator running the suite in parallel), and stands in at once.
-        try await tick(engine, until: "the overview", within: 5) { engine.overview != nil }
+        // Once it's ready, it stands in at once.
+        try await tick(engine, until: "the overview", within: 60) { engine.overview != nil }
         engine.tick()
         #expect(engine.showingOverview, "zoomed out, the overview stands in: \(events)")
         #expect(!engine.status.needsLive)
@@ -172,6 +180,8 @@ struct BakedLayerTests {
             defer { gate.release() }
             let engine = BakedCloudEngine(renderer: .baked)
             if coarse { engine.overviewPixels = 400 }
+            // The first bake waits for the overview, however slow the simulator is.
+            engine.overviewWait = 60
             engine.testScreen = { (screen.camera.size, 3, screen.camera.projection) }
             engine.bakery = { gate.bake($0) }
             engine.honeycombBakery = { gate.honeycomb($0) }

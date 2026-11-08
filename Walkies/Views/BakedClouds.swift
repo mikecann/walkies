@@ -389,6 +389,10 @@ final class BakedCloudEngine {
     private var overviewAsked: (key: String, theme: String, at: Double)?
     /// The overview's pixel budget. Tests make it tiny, to have it too soft to show.
     var overviewPixels = CloudBakery.overviewPixels
+    /// How long the first bake waits for the overview. Tests that need the overview
+    /// there first make it long: it's made at utility priority, so on a busy simulator
+    /// it can take seconds rather than milliseconds.
+    var overviewWait = BakePolicy.overviewWait
 
     /// What's on screen, as of the last tick.
     private(set) var showingFront = false
@@ -515,7 +519,7 @@ final class BakedCloudEngine {
         }
         // The overview first, as it's what shows until the bake's done, and they'd only
         // slow each other down; but not for long, should it be slow.
-        let awaitingOverview = front == nil && overview == nil && overviewAsked.map { now - $0.at < BakePolicy.overviewWait } ?? false
+        let awaitingOverview = front == nil && overview == nil && overviewAsked.map { now - $0.at < overviewWait } ?? false
         if !baking, !awaitingOverview { ask(projection: projection, size: size, moving: moving, clock: clock, displayScale: displayScale) }
 
         CATransaction.begin()
