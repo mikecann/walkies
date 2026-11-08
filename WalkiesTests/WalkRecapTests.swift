@@ -90,9 +90,9 @@ struct WalkRecapTests {
     }
 
     @Test func replayIsTwoSecondsPerTenMinutesBetweenFiveAndTwelve() {
-        #expect(ReplayPlayer.duration(walked: 3 * 60) == 5)
-        #expect(ReplayPlayer.duration(walked: 30 * 60) == 6)
-        #expect(ReplayPlayer.duration(walked: 60 * 60) == 12)
-        #expect(ReplayPlayer.duration(walked: 3 * 3600) == 12)
+        #expect(WalkRecap.replayDuration(walked: 3 * 60) == 5)
+        #expect(WalkRecap.replayDuration(walked: 30 * 60) == 6)
+        #expect(WalkRecap.replayDuration(walked: 60 * 60) == 12)
+        #expect(WalkRecap.replayDuration(walked: 3 * 3600) == 12)
     }
 }

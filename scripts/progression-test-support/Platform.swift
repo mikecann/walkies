@@ -17,11 +17,28 @@ final class LocationTracker {
     func stop() {}
     func startAlwaysOn() {}
     func stopAlwaysOn() {}
+    func refreshWatch() {}
+    func motionChanged() {}
+    // Always on asks these of AppModel; it sets them, the stub never calls them.
+    var isOnManualWalk: () -> Bool = { false }
+    var isOnConfirmedWalk: () -> Bool = { false }
+    var isOnScreen: () -> Bool = { false }
+    var isInForeground: () -> Bool = { false }
+    var askToStartWalk: () -> Void = {}
+    var withdrawWalkQuestion: () -> Void = {}
+    var canAskToStartWalk: () -> Bool = { false }
+    var isOnWheels: () -> Bool = { false }
+    var isStill: () -> Bool = { false }
+    var isOnFoot: () -> Bool = { false }
 }
 final class MotionMonitor {
+    static let canTell = false
     var onWheels = false
     var still = false
+    var onFoot = false
+    var onChange: (() -> Void)?
     func start() {}
+    func setOff(before now: Date) async -> Date? { nil }
 }
 final class StepCounter {
     func updateLive(from: Date?) {}
@@ -30,11 +47,16 @@ final class StepCounter {
     func count(from: Date, to: Date) async -> Int? { nil }
 }
 enum Notifier {
+    static let allowed = false
     static func requestPermission() {}
+    static func refreshAllowed() async {}
     static func stickersFound(_ entries: [LoreEntry]) {}
+    static func askToStartWalk() {}
+    static func withdrawWalkQuestion() {}
 }
 final class Account {
     var isSignedIn = false
+    var isGuest = false
     var userId: String?
     func client() async -> ConvexClient? { nil }
 }
@@ -44,3 +66,15 @@ extension Color {
     static let badgeTeal = Color(red: 0.29, green: 0.58, blue: 0.58)
     static let badgeGreen = Color(red: 0.62, green: 0.77, blue: 0.58)
 }
+// Clouds.swift picks the baked layer on the phone. That's built on UIKit (a display
+// link, layer hosting views and Metal), so here it's a stand-in with the same init.
+struct BakedCloudLayer: View {
+    let field: CloudField
+    let key: String
+    let handle: MapHandle
+    var walkTiles: Set<CloudField.Tile> = []
+    var body: some View { EmptyView() }
+}
+// The route renderer in Clouds.swift colours its MapKit line with UIColor, which is
+// NSColor on the Mac (and MKPolylineRenderer's strokeColor takes either).
+typealias UIColor = NSColor
