@@ -247,9 +247,7 @@ private nonisolated final class TeamHTTPProtocol: URLProtocol, @unchecked Sendab
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        // As the other suites' protocols do: a `guard let` here trips Swift 6's region
-        // checking in scripts/test-progression-model.sh.
-        let server = Self.server!
+        guard let server = Self.server else { return }
         Task {
             do {
                 let data = try await server.respond(request)
