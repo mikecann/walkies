@@ -269,6 +269,8 @@ struct MapScreen: View {
                 }
             }
             .padding(.horizontal)
+            // On an iPad the window's controls sit over the top-left corner (App Review, 10 Nov 2026).
+            .clearOfWindowControls()
         }
         .safeAreaInset(edge: .bottom) {
             VStack(alignment: .leading, spacing: 10) {
