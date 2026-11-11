@@ -191,7 +191,11 @@ final class AppModel {
         if servicesEnabled {
             tracker.askToStartWalk = { Notifier.askToStartWalk() }
             tracker.withdrawWalkQuestion = { Notifier.withdrawWalkQuestion() }
-            tracker.canAskToStartWalk = { Notifier.allowed && MotionMonitor.canTell }
+            // Off for now: the "Out for a walk?" question (#82) lost Mike's walks on 8 and 10 Nov.
+            // The trace shows it asked, he never saw the notification, so the app had no session
+            // and recorded nothing. Saying we can't ask makes always on hold the session all day,
+            // as before #82 (blue arrow back, walks reliable) until a no-tap start is proven.
+            tracker.canAskToStartWalk = { false }
             Task { [weak self] in
                 await Notifier.refreshAllowed()
                 self?.tracker.refreshWatch()
