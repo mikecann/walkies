@@ -43,7 +43,7 @@ describe("http routes", () => {
 
   test("the admin page is only ever served at /admin/machines", async () => {
     const t = setup();
-    for (const path of ["/admin", "/admin/", "/admin/index.html"]) {
+    for (const path of ["/admin", "/admin/"]) {
       const response = await t.fetch(path, { redirect: "manual" });
       expect(response.status).toBe(302);
       expect(response.headers.get("Location")).toBe("/admin/machines");

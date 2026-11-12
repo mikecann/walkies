@@ -9,7 +9,7 @@
 // loads straight away, "first" for the one to fetch first), {{gallery}} for the row of
 // every screenshot, {{appStoreBadge}}, {{promoVideo}} and {{icon <name>}} for an icon from web/icons. The screenshots are
 // web/public/screens/*.webp, made by scripts/make-web-screens.mjs.
-import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
@@ -229,4 +229,10 @@ await build({
   plugins: [react()],
   build: { outDir: join(dist, "admin"), emptyOutDir: false, assetsDir: "assets" },
 });
+// The page itself goes up as plain text, never as an .html file: static hosting serves every
+// file at its path (and at any percent-encoded spelling of it), without the page's CSP and
+// no-store. convex/http.ts reads this and serves it as HTML at /admin/machines only.
+renameSync(join(dist, "admin/index.html"), join(dist, "admin/page.txt"));
+const adminHtml = readdirSync(join(dist, "admin"), { recursive: true }).filter((f) => /\.html?$/i.test(f));
+if (adminHtml.length) throw new Error(`web/dist/admin must have no HTML files, so the page only goes out with its headers: ${adminHtml.join(", ")}`);
 console.log(`Built the admin page into web/dist/admin, for ${process.env.VITE_CONVEX_URL}.`);

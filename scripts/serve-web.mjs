@@ -16,12 +16,12 @@ createServer((req, res) => {
   let path = decodeURIComponent(new URL(req.url, "http://x").pathname);
   if (path === "/") path = "/index.html";
   if (path === "/privacy" || path === "/support") path += ".html";
-  if (path === "/admin/machines") path = "/admin/index.html";
+  if (path === "/admin/machines") path = "/admin/page.txt";
   const file = normalize(join(dist, path));
   if (!file.startsWith(dist) || !existsSync(file) || !statSync(file).isFile()) {
     res.writeHead(404, { "Content-Type": "text/plain" }).end("Not Found");
     return;
   }
-  res.writeHead(200, { "Content-Type": types[extname(file)] ?? "application/octet-stream" });
+  res.writeHead(200, { "Content-Type": file.endsWith("admin/page.txt") && req.url.startsWith("/admin/machines") ? types[".html"] : types[extname(file)] ?? "application/octet-stream" });
   createReadStream(file).pipe(res);
 }).listen(port, () => console.log(`http://localhost:${port}`));

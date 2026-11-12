@@ -114,9 +114,10 @@ for (const path of ["/privacy", "/support"]) {
 }
 
 // The admin page (web/admin): a sign-in, then the state machines viewer for Chef's admin
-// (viewer.ts decides who that is; this page is only its front end). It's one page, built
-// into the site's admin/index.html, served here at its own address so it can carry its own
-// headers. Its scripts are under /admin/assets/, which the static routes below serve.
+// (viewer.ts decides who that is; this page is only its front end). Its HTML is uploaded as
+// admin/page.txt, which static hosting serves as text/plain with nosniff, so a browser never
+// runs it from there; this route is the only place it's HTML, so it always has its headers.
+// Its scripts are under /admin/assets/, which the static routes below serve.
 const ADMIN_PAGE = "/admin/machines";
 
 function adminHeaders(): Record<string, string> {
@@ -144,14 +145,13 @@ http.route({
   path: ADMIN_PAGE,
   method: "GET",
   handler: httpAction(async (ctx) => {
-    const html = await uploadedPage(ctx, "/admin/index.html");
+    const html = await uploadedPage(ctx, "/admin/page.txt");
     if (html === null) return new Response("Not Found", { status: 404, headers: { "Content-Type": "text/plain" } });
     return new Response(html, { status: 200, headers: adminHeaders() });
   }),
 });
 
-// /admin, and the built file's own address, go to the page, so it's only ever served with its headers.
-for (const path of ["/admin", "/admin/", "/admin/index.html"]) {
+for (const path of ["/admin", "/admin/"]) {
   http.route({
     path,
     method: "GET",
