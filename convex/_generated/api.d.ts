@@ -39,6 +39,7 @@ import type * as stats from "../stats.js";
 import type * as sync from "../sync.js";
 import type * as teams from "../teams.js";
 import type * as users from "../users.js";
+import type * as viewer from "../viewer.js";
 
 import type {
   ApiFromModules,
@@ -78,6 +79,7 @@ declare const fullApi: ApiFromModules<{
   sync: typeof sync;
   teams: typeof teams;
   users: typeof users;
+  viewer: typeof viewer;
 }>;
 
 /**

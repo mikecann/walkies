@@ -1,7 +1,7 @@
 import { httpRouter } from "convex/server";
 import { registerStaticRoutes } from "@convex-dev/static-hosting";
 import { components } from "./_generated/api";
-import { httpAction, type ActionCtx } from "./_generated/server";
+import { env, httpAction, type ActionCtx } from "./_generated/server";
 
 const http = httpRouter();
 
@@ -110,6 +110,52 @@ for (const path of ["/privacy", "/support"]) {
         headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff" },
       });
     }),
+  });
+}
+
+// The admin page (web/admin): a sign-in, then the state machines viewer for Chef's admin
+// (viewer.ts decides who that is; this page is only its front end). Its HTML is uploaded as
+// admin/page.txt, which static hosting serves as text/plain with nosniff, so a browser never
+// runs it from there; this route is the only place it's HTML, so it always has its headers.
+// Its scripts are under /admin/assets/, which the static routes below serve.
+const ADMIN_PAGE = "/admin/machines";
+
+function adminHeaders(): Record<string, string> {
+  const cloud = new URL(env.CONVEX_CLOUD_URL);
+  // Only this deployment, over HTTPS and its websocket. Sign-in leaves the page with a
+  // top-level navigation to Apple or Google, which none of this limits.
+  const connect = `${cloud.origin} wss://${cloud.host}`;
+  return {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Security-Policy": [
+      "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' data:",
+      "font-src 'self'", `connect-src ${connect}`, "frame-ancestors 'none'", "base-uri 'none'", "form-action 'none'", "object-src 'none'",
+    ].join("; "),
+    "X-Frame-Options": "DENY",
+    // The sign-in comes back to this page with a one-time code in its address, until the
+    // page takes it off, so the address goes nowhere else.
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "X-Robots-Tag": "noindex",
+  };
+}
+
+http.route({
+  path: ADMIN_PAGE,
+  method: "GET",
+  handler: httpAction(async (ctx) => {
+    const html = await uploadedPage(ctx, "/admin/page.txt");
+    if (html === null) return new Response("Not Found", { status: 404, headers: { "Content-Type": "text/plain" } });
+    return new Response(html, { status: 200, headers: adminHeaders() });
+  }),
+});
+
+for (const path of ["/admin", "/admin/"]) {
+  http.route({
+    path,
+    method: "GET",
+    handler: httpAction(async () => new Response(null, { status: 302, headers: { Location: ADMIN_PAGE, "Cache-Control": "no-store" } })),
   });
 }
 

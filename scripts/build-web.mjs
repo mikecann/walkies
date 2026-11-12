@@ -2,15 +2,18 @@
 // Builds the website (walkies.mikecann.app) into web/dist for Convex static hosting:
 // web/src's pages wrapped in web/src/layout.html, with web/public copied alongside.
 // No bundler: it's three plain pages. `npm run web:build`, then `npm run web:upload:prod`.
-// `npm run web:serve` builds and serves web/dist on :5175.
+// `npm run web:serve` builds and serves web/dist on :5175. The admin page (web/admin, a small
+// React app) is the one exception: Vite builds it into web/dist/admin, so one upload deploys both.
 //
 // Pages can use {{phone <name>}} for a screenshot in a phone (add "hero" for one that
 // loads straight away, "first" for the one to fetch first), {{gallery}} for the row of
 // every screenshot, {{appStoreBadge}}, {{promoVideo}} and {{icon <name>}} for an icon from web/icons. The screenshots are
 // web/public/screens/*.webp, made by scripts/make-web-screens.mjs.
-import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import react from "@vitejs/plugin-react";
+import { build } from "vite";
 import { APP_STORE_LIVE, APP_STORE_URL, GITHUB_URL, PRIVACY_UPDATED, PROMO_VIDEO, SITE_URL, SUPPORT_EMAIL } from "../web/site.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -212,3 +215,24 @@ cpSync(join(src, "styles.css"), join(dist, "styles.css"));
 const urls = paths.sort().map((p) => `  <url><loc>${SITE_URL}${p}</loc></url>`).join("\n");
 writeFileSync(join(dist, "sitemap.xml"), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`);
 console.log(`Built ${pages.length} pages into web/dist.`);
+
+// The admin page talks to whichever deployment it's uploaded to: `static-hosting upload`
+// (npm run web:upload:dev or :prod) sets VITE_CONVEX_URL for its build. Built by hand, it's
+// dev's, from .env.local.
+if (!process.env.VITE_CONVEX_URL) {
+  const local = readFileSync(join(root, ".env.local"), "utf8").match(/^CONVEX_URL=(\S+)/m)?.[1];
+  if (!local) throw new Error("Set VITE_CONVEX_URL for the admin page, or run npx convex dev once for .env.local");
+  process.env.VITE_CONVEX_URL = local;
+}
+await build({
+  configFile: false, root: join(root, "web/admin"), base: "/admin/", publicDir: false, logLevel: "warn",
+  plugins: [react()],
+  build: { outDir: join(dist, "admin"), emptyOutDir: false, assetsDir: "assets" },
+});
+// The page itself goes up as plain text, never as an .html file: static hosting serves every
+// file at its path (and at any percent-encoded spelling of it), without the page's CSP and
+// no-store. convex/http.ts reads this and serves it as HTML at /admin/machines only.
+renameSync(join(dist, "admin/index.html"), join(dist, "admin/page.txt"));
+const adminHtml = readdirSync(join(dist, "admin"), { recursive: true }).filter((f) => /\.html?$/i.test(f));
+if (adminHtml.length) throw new Error(`web/dist/admin must have no HTML files, so the page only goes out with its headers: ${adminHtml.join(", ")}`);
+console.log(`Built the admin page into web/dist/admin, for ${process.env.VITE_CONVEX_URL}.`);

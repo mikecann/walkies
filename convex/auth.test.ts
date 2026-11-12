@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import { registerCore } from "@convex-dev/auth/test";
 import { registerAnonymousProvider } from "@convex-dev/auth/components/anonymous/test";
+import { registerGoogleOauth } from "@convex-dev/auth/components/google/test";
 import { convexTest } from "convex-test";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
@@ -124,5 +125,26 @@ describe("guests", () => {
     expect(await t.withIdentity({ subject: real.tokens.userId }).query(api.users.me)).toMatchObject({ name: "Sim A" });
     await t.withIdentity({ subject: guest.tokens.userId }).mutation(api.users.deleteGuest);
     expect(await t.withIdentity({ subject: guest.tokens.userId }).query(api.users.me)).toBeNull();
+  });
+});
+
+describe("where a web sign-in may come back to", () => {
+  // The iPhone app's sheet comes back to the deployment's own site, and the website's admin
+  // page to walkies.mikecann.app/admin/machines. Nowhere else gets the one-time code.
+  test("the deployment's site and the admin page, and nowhere else", async () => {
+    const t = setup();
+    vi.stubEnv("AUTH_GOOGLE_CLIENT_ID", "test-client");
+    vi.stubEnv("AUTH_GOOGLE_CLIENT_SECRET", "test-secret");
+    // convex-test hands components the process's env, not convex.config.ts's mapping.
+    vi.stubEnv("CLIENT_ID", "test-client");
+    vi.stubEnv("CLIENT_SECRET", "test-secret");
+    registerGoogleOauth(t);
+    for (const redirectTo of ["https://walkies-test.convex.site/app/signed-in", "https://walkies.mikecann.app/admin/machines#/t/loreEntries"]) {
+      const { redirect } = await t.mutation(api.auth.startSignInWithGoogle, { redirectTo });
+      expect(new URL(redirect).origin).toBe("https://accounts.google.com");
+    }
+    for (const redirectTo of ["https://evil.example/admin/machines", "http://walkies.mikecann.app/admin/machines", "https://walkies.mikecann.app.evil.example/", "walkies://signed-in"]) {
+      await expect(t.mutation(api.auth.startSignInWithGoogle, { redirectTo })).rejects.toThrow();
+    }
   });
 });

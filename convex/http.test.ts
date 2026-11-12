@@ -41,6 +41,17 @@ describe("http routes", () => {
     expect(await support.text()).toContain("walkies@mikecann.app");
   });
 
+  test("the admin page is only ever served at /admin/machines", async () => {
+    const t = setup();
+    for (const path of ["/admin", "/admin/"]) {
+      const response = await t.fetch(path, { redirect: "manual" });
+      expect(response.status).toBe(302);
+      expect(response.headers.get("Location")).toBe("/admin/machines");
+    }
+    // Before the site's uploaded there's nothing to serve.
+    expect((await t.fetch("/admin/machines")).status).toBe(404);
+  });
+
   test("everything else is static hosting: its setup page for /, a 404 for the rest", async () => {
     const t = setup();
     expect((await t.fetch("/")).status).toBe(503);
