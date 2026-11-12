@@ -771,8 +771,9 @@ final class AppModel {
     /// stopped for a while or ridden somewhere. Only on-foot fixes are kept, so drives
     /// don't fill the phone.
     private func recordAlwaysOn(_ point: TrackPoint) {
+        TrackerTrace.fix(point, walk: activeWalk != nil, pending: autoWalkPending)
         if let last = activeWalk?.points.last, point.time - last.time > Self.autoWalkGap {
-            finishAutoWalk()
+            finishAutoWalk(reason: "gap")
             // Still waiting on history or steps. Leave these fixes out rather than
             // run the next outing onto the end of this one.
             if activeWalk != nil { return }
@@ -788,12 +789,15 @@ final class AppModel {
         // The tracer's last spot can be hours old when the GPS has been off (the first fix
         // after a restart, then nothing until you head out). Start from this fix instead, or
         // the walk says it began back then: Dad's 16:20 walk on 30 Oct 2026 ran from 11:00.
-        if activeWalk == nil, let anchor, point.time - anchor.time > Self.freshStart { return }
+        if activeWalk == nil, let anchor, point.time - anchor.time > Self.freshStart {
+            TrackerTrace.write("fix skipped: tracer's last spot is \(Int(point.time - anchor.time)) s old")
+            return
+        }
         // Only decided once you're walking on from the new spot, so one bad fix can't
         // end a walk.
         if let last = activeWalk?.points.last, let anchor, rode(from: last, to: anchor) {
             rideArrival = anchor
-            finishAutoWalk()
+            finishAutoWalk(reason: "rode")
             // Still waiting on its step count. The next walk starts from the arrival
             // once that's in.
             if activeWalk != nil { return }
@@ -806,6 +810,7 @@ final class AppModel {
             freshTiles = [:]
             addedTiles = [:]
             autoWalkPending = true
+            TrackerTrace.write("auto walk started, pending until \(Int(Self.autoWalkConfirmDistance)) m from here")
             startFromWhenYouSetOff()
         }
         guard var walk = activeWalk else { return }
@@ -818,6 +823,7 @@ final class AppModel {
             walk.distance += step.distance
             if Self.displacement(of: walk.points) >= Self.autoWalkConfirmDistance {
                 // It's a real walk: uncover everything since it started in one go.
+                TrackerTrace.write("auto walk confirmed after \(walk.points.count) points")
                 autoWalkPending = false
                 let samples = CoverageTracer.samples(for: walk.points)
                 activePath = samples
@@ -921,26 +927,27 @@ final class AppModel {
         guard let last = activeWalk?.points.last,
               Date.now.timeIntervalSince1970 - last.time > Self.autoWalkGap
         else { return }
-        finishAutoWalk()
+        finishAutoWalk(reason: "quiet")
     }
 
     /// - Parameter byYou: you pressed End walk, so it ends now and is kept however short.
     ///   Otherwise it ended by itself, at its last fix, and only counts if it's long enough.
-    private func finishAutoWalk(byYou: Bool = false) {
+    /// - Parameter reason: why it ended, for the temporary tracker trace.
+    private func finishAutoWalk(byYou: Bool = false, reason: String = "you") {
         guard historyReady else {
             // Only the walk that was due to end. A later one may have started by then.
             let id = activeWalk?.id
-            Task { await historyTask?.value; if historyReady, id != nil, activeWalk?.id == id { finishAutoWalk(byYou: byYou) } }
+            Task { await historyTask?.value; if historyReady, id != nil, activeWalk?.id == id { finishAutoWalk(byYou: byYou, reason: reason) } }
             return
         }
         guard let walk = activeWalk, walk.isAutomatic else { return }
         let end = byYou ? Date.now : walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt
         withSteps(walk, endingAt: end) { [self] finished in
-            completeAutoWalk(finished, byYou: byYou)
+            completeAutoWalk(finished, byYou: byYou, reason: reason)
         }
     }
 
-    private func completeAutoWalk(_ finished: Walk, byYou: Bool) {
+    private func completeAutoWalk(_ finished: Walk, byYou: Bool, reason: String) {
         var walk = finished
         let wasPending = autoWalkPending
         finishCoverage(of: &walk)
@@ -958,7 +965,10 @@ final class AppModel {
         // Measure again by today's rules, so walks logged by older versions (or GPS
         // wobble at home) don't get kept as real ones. Tiles already uncovered stay.
         walk.distance = CoverageTracer.distance(for: walk.points)
-        if !wasPending, byYou || walk.distance >= Self.minimumAutoWalk {
+        let kept = !wasPending && (byYou || walk.distance >= Self.minimumAutoWalk)
+        TrackerTrace.walkEnded(walk, kept: kept, pending: wasPending, reason: reason,
+                               displacement: Self.displacement(of: walk.points))
+        if kept {
             let history = walks
             let counts = questTileCounts
             walks.append(walk)
@@ -1022,7 +1032,7 @@ final class AppModel {
 
     private func turnOffAlwaysOn() {
         tracker.stopAlwaysOn()
-        finishAutoWalk()
+        finishAutoWalk(reason: "always on off")
     }
 
     /// Marks these points as visited in every city, walked at `time` (seconds since
