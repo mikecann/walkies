@@ -21,20 +21,62 @@ stateDiagram-v2
   direction LR
   state "queued" as queued
   queued : queuedAt, manual, requestedBy?, resume?, was?, nearby?
+  note right of queued
+Waiting for a free research slot and
+room under the spending caps; Mike's
+asks go first, then walked places, then
+ones only nearby.
+  end note
   state "researching" as researching
   researching : manual, requestedBy?, startedAt, workflowId
+  note right of researching
+A paid research run is under way: models
+look into the suburb, write its secrets,
+fact-check them and draw their stickers.
+  end note
   state "ready" as ready
   ready : startedAt, finishedAt
+  note right of ready
+Researched, with enough secrets kept;
+the live ones show on people's phones.
+  end note
   state "quietWaiting" as quietWaiting
   quietWaiting : startedAt, finishedAt, retryAt
+  note right of quietWaiting
+Its first run found too few secrets; it
+gets one more look after 90 days, in
+case more has been written about it.
+  end note
   state "quiet" as quiet
   quiet : startedAt, finishedAt
+  note right of quiet
+Not much to find: its runs found too few
+secrets, and whatever they found still
+shows.
+  end note
   state "failedWaiting" as failedWaiting
   failedWaiting : startedAt, finishedAt, error, retryAt
+  note right of failedWaiting
+Its run broke, not on a spending cap,
+and it has a run left, so it goes back
+on the queue after a day.
+  end note
   state "failed" as failed
   failed : startedAt, finishedAt, error
+  note right of failed
+Its run broke and won't be tried again
+by itself, as it hit a spending cap or
+used all its runs; Mike decides what
+next.
+  end note
   state "expired" as expired
   expired : expiredAt
+  note right of expired
+A walk queued it and it never started
+within a month, so it's as if nobody had
+walked there; the next walk can queue it
+again.
+  end note
   [*] --> queued : QUEUE(manual, requestedBy?, nearby?) (server) / enqueue
   queued --> queued : QUEUE(manual, requestedBy?, nearby?) (server) / merge
   queued --> queued : FORGET_REQUESTER (server) / forget
@@ -76,12 +118,40 @@ stateDiagram-v2
 stateDiagram-v2
   direction LR
   state "checking" as checking
+  note right of checking
+Written by a run and going through its
+checks: its quotes against their
+sources, a fact-check, the rules and its
+sticker.
+  end note
   state "dropped" as dropped
   dropped : by
+  note right of dropped
+Left out and never shown: a check took
+it out, or the run stopped, ran out of
+budget, or never checked it.
+  end note
   state "auto" as auto
+  note right of auto
+Live on people's phones, put there by
+the run without needing Mike's OK.
+  end note
   state "pending" as pending
+  note right of pending
+Sensitive (First Nations heritage, a
+death or crime, or living people), so it
+waits for Mike's OK, when that review is
+switched on.
+  end note
   state "approved" as approved
+  note right of approved
+Live on people's phones, with Mike's OK.
+  end note
   state "hidden" as hidden
+  note right of hidden
+Kept off people's phones by Mike, and
+its sticker deleted.
+  end note
   [*] --> checking : DRAFTED (server)
   checking --> dropped : DROPPED(by) (server) / drop
   checking --> dropped : RUN_STOPPED from lorePlace / runStopped

@@ -852,8 +852,8 @@ export const hide = internalMutation({
 
 /** Whoever's signed in is Chef's admin, by the same role its own admin panel checks
  * (chef.ts, `amAdmin`). Asks the component directly, so this file (which sync.ts
- * loads) doesn't pull in the rest of the package. */
-async function isAdmin(ctx: QueryCtx) {
+ * loads) doesn't pull in the rest of the package. The machines viewer (viewer.ts) uses it too. */
+export async function isAdmin(ctx: QueryCtx) {
   const userId = await currentUserId(ctx);
   if (userId === null) return false;
   const user = await ctx.runQuery(components.feedback.users.get, { userId });

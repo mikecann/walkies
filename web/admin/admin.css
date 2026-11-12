@@ -1,0 +1,64 @@
+/* The admin page. Dark, to sit with the viewer's own dark theme (its colours, from viewer.css),
+   in the website's type (Manrope) with Walkies' burnt orange only on focus. */
+
+@font-face {
+  font-family: "Manrope"; src: url("/fonts/manrope.woff2") format("woff2");
+  font-weight: 200 800; font-style: normal; font-display: swap;
+}
+
+:root {
+  --bg: #111110; --panel: #181716; --raised: #201f1d; --line: #292725; --line2: #3b3835;
+  --ink: #f1ede6; --text: #cdc8c0; --muted: #8e887f;
+  --burnt: #e0745c;
+  --bar: 52px;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--text); min-height: 100dvh;
+  font: 15px/1.5 "Manrope", ui-sans-serif, system-ui, sans-serif; -webkit-font-smoothing: antialiased;
+}
+:focus-visible { outline: 2px solid var(--burnt); outline-offset: 2px; }
+
+.screen { min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
+.card {
+  width: min(100%, 360px); display: flex; flex-direction: column; align-items: center; gap: 16px;
+  padding: 40px 32px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+}
+.mark { border-radius: 14px; }
+h1 { color: var(--ink); font-size: 20px; line-height: 28px; font-weight: 700; }
+.note { color: var(--muted); font-size: 14px; }
+
+.buttons { width: 100%; display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 44px; padding: 0 16px;
+  font: inherit; font-weight: 600; color: var(--ink); background: var(--raised);
+  border: 1px solid var(--line2); border-radius: 10px; cursor: pointer;
+  transition: background 150ms, border-color 150ms, opacity 150ms;
+}
+.buttons .button { width: 100%; }
+.button:hover:not(:disabled) { background: #2a2826; border-color: #4a4642; }
+.button:disabled { cursor: default; opacity: .6; }
+.button.quiet { min-height: 32px; padding: 0 12px; font-size: 13px; font-weight: 500; color: var(--text); }
+.logo { width: 18px; height: 18px; flex: none; }
+
+.spinner {
+  width: 16px; height: 16px; flex: none; border-radius: 50%;
+  border: 2px solid var(--line2); border-top-color: var(--ink);
+  animation: spin 700ms linear infinite;
+}
+.screen > .spinner { width: 22px; height: 22px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
+
+/* Signed in as the admin: a slim bar, then the viewer the full width of the window. Its own
+   sticky bar and side panel stop under this one (--mv-top). */
+.admin { --mv-top: var(--bar); }
+.bar {
+  position: sticky; top: 0; z-index: 10; height: var(--bar); display: flex; align-items: center; gap: 10px;
+  padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.bar img { border-radius: 6px; }
+.bar .title { color: var(--ink); font-weight: 700; }
+.bar .who { margin-left: auto; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -42,7 +42,12 @@ export const signInForTesting = mutation({
 // The iPhone app runs Apple's and Google's sign-in pages in a secure sheet, which
 // ends on this deployment's own site (see http.ts). The app is linked to that
 // domain, so the sheet hands the one-time code straight back to it.
-const allowedRedirectOrigins = [new URL(env.CONVEX_SITE_URL).origin];
+// The website's admin page (http.ts, /admin/machines) signs in with the same flows
+// and comes back to itself. On prod that's walkies.mikecann.app, a custom domain that
+// isn't CONVEX_SITE_URL (Apple and Google's return URLs are registered on the
+// convex.site address), so it's allowed by name. Only the destination after the
+// provider's callback changes; the callbacks themselves are the same.
+const allowedRedirectOrigins = [new URL(env.CONVEX_SITE_URL).origin, "https://walkies.mikecann.app"];
 
 // Native Sign in with Apple (below) has to sign people into the same accounts as the web
 // flow, and Convex Auth keys accounts by provider name plus Apple's `sub`. A second provider
