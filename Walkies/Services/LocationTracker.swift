@@ -38,6 +38,11 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
 
     private let manager = CLLocationManager()
     @ObservationIgnored private var backgroundSession: CLBackgroundActivitySession?
+    /// Tells iOS always on wants Always permission. Without it Core Location treats an app that
+    /// uses CLMonitor as "while using", so the fence might not wake it from the pocket once the
+    /// background session (and its blue arrow) has gone. It doesn't show the arrow itself.
+    /// Apple says to make it again as soon as the app launches in the background.
+    @ObservationIgnored private var alwaysSession: CLServiceSession?
 
     var isDenied: Bool { authorization == .denied || authorization == .restricted }
 
@@ -159,8 +164,10 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         if stationary { pausedAt = pausedAt ?? lastLocation } else { pausedAt = nil }
         noteWalking()
         settleTries = 0
-        if stationary { lookToSettle() } else { settleCheck?.cancel() }
+        // After the refresh, so going still has already moved the pocket or live GPS over to
+        // the light watch that lookToSettle works with (Codex, 13 Nov).
         refreshWatch()
+        if stationary { lookToSettle() } else { settleCheck?.cancel() }
     }
 
     private func noteWalking() {
@@ -288,7 +295,9 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         pocketFixes = 0
         TrackerTrace.write("pocket GPS on")
         manager.desiredAccuracy = kCLLocationAccuracyBest
-        manager.distanceFilter = 5
+        // No filter: Apple's advice for background updates with the indicator hidden, or iOS
+        // can stop sending them. The tracer thins the fixes out itself.
+        manager.distanceFilter = kCLDistanceFilterNone
         manager.allowsBackgroundLocationUpdates = true
         manager.showsBackgroundLocationIndicator = false
         manager.startUpdatingLocation()
@@ -300,6 +309,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         TrackerTrace.write("pocket GPS off after \(pocketFixes) fixes")
         manager.stopUpdatingLocation()
         manager.allowsBackgroundLocationUpdates = false
+        manager.distanceFilter = 5
     }
 
     private func startLight() {
@@ -345,6 +355,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         guard !alwaysOnRunning else { return }
         alwaysOnRunning = true
         TrackerTrace.write("always on started")
+        if alwaysSession == nil { alwaysSession = CLServiceSession(authorization: .always) }
         // Left on by a manual walk earlier in this launch, it'd show the arrow all day.
         manager.showsBackgroundLocationIndicator = false
         manager.startMonitoringSignificantLocationChanges()
@@ -366,6 +377,8 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         stopIdle()
         stopPocket()
         manager.stopMonitoringSignificantLocationChanges()
+        alwaysSession?.invalidate()
+        alwaysSession = nil
         backgroundSession?.invalidate()
         backgroundSession = nil
         removeFence()
