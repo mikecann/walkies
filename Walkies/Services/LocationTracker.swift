@@ -7,11 +7,14 @@ import os
 /// runs all the time in always-on mode.
 ///
 /// iOS shows a blue location arrow for as long as the session's held. With Always
-/// permission, always on only holds it while you're out, so the arrow isn't up all day at
-/// home. iOS only hands out a session while the app's on screen, so when you head out with
-/// Walkies in your pocket it asks you to tap a notification, and keeps a coarse watch until
-/// you do (Mike's idea, 5 Nov 2026). Dropping the session without that cut his walk to
-/// Busselton Jetty off at 81 m on 3 Nov: live updates stall in the pocket without one.
+/// permission, always on only holds it while the app's open or a walk it started on screen
+/// is going, so the arrow isn't up all day at home. iOS only hands out a session while the
+/// app's on screen, and live updates stall in the pocket without one (Mike's walk to
+/// Busselton Jetty was cut off at 81 m on 3 Nov). So a walk that starts with the app in
+/// your pocket uses the pocket watch instead: plain CLLocationManager updates at full
+/// accuracy, which Always permission lets the app start and keep in the background with
+/// no session. A tap-to-start question was tried first (#82) and lost walks when the
+/// notification went unseen (#89); Mike wants walks picked up with no tap (13 Nov 2026).
 @Observable
 final class LocationTracker: NSObject, CLLocationManagerDelegate {
     nonisolated private static let log = Logger(subsystem: "com.mikecann.walkies", category: "location")
@@ -28,13 +31,6 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored var isOnScreen: () -> Bool = { false }
     /// The app's open, on any tab: the only time iOS will start a background session.
     @ObservationIgnored var isInForeground: () -> Bool = { false }
-    /// Asks you to open the app so the GPS can follow your walk.
-    @ObservationIgnored var askToStartWalk: () -> Void = {}
-    /// You've opened the app or settled again, so the question's out of date.
-    @ObservationIgnored var withdrawWalkQuestion: () -> Void = {}
-    /// Notifications are allowed and the motion chip can say you're on foot. Without
-    /// both the question never arrives, so the session's held all day as before.
-    @ObservationIgnored var canAskToStartWalk: () -> Bool = { false }
     /// The motion chip's answers (MotionMonitor).
     @ObservationIgnored var isOnWheels: () -> Bool = { false }
     @ObservationIgnored var isStill: () -> Bool = { false }
@@ -102,8 +98,10 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored private var stationary = false
     @ObservationIgnored private var pausedAt: Coordinate?
     @ObservationIgnored private var lastLocation: Coordinate?
-    /// Asked to start a walk since you last left where you'd settled.
-    @ObservationIgnored private var askedThisOuting = false
+    /// The pocket watch's GPS updates are running.
+    @ObservationIgnored private var pocketOn = false
+    /// Fixes the pocket watch has had this run, for the trace.
+    @ObservationIgnored private var pocketFixes = 0
 
     /// How hard always on works.
     enum Watch: Equatable {
@@ -114,6 +112,9 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         /// No GPS, just cell-tower updates we throw away. They keep the app running so the
         /// motion chip can tell us you've set off. The fence is the backstop if iOS kills it.
         case idle
+        /// GPS at full accuracy through plain CLLocationManager updates, for when live
+        /// updates would want a session the app can't get from the background.
+        case pocket
     }
 
     /// How long the chip has to say you're on foot before a walk from home gets the GPS.
@@ -137,18 +138,11 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         return .live
     }
 
-    /// Live updates stall in the background without a session, so until there's one the
-    /// cheap watches stand in: the coarse one while you're out, nothing at home.
-    nonisolated static func withoutSession(_ watch: Watch, insideFence: Bool) -> Watch {
-        guard watch == .live else { return watch }
-        return insideFence ? .idle : .light
-    }
-
-    /// Only once you've plainly left where you settled, on foot. Walking round the garden
-    /// for half a minute isn't worth a notification, and nor is the moment at launch before
-    /// the fence has loaded: that asked Mike while he sat at his desk (5 Nov 2026).
-    nonisolated static func shouldAskToStartWalk(leftFence: Bool, onFoot: Bool, onWheels: Bool, asked: Bool) -> Bool {
-        leftFence && onFoot && !onWheels && !asked
+    /// Live updates stall in the background without a session, so the pocket watch does
+    /// the same job. The light watch used to stand in, but its 100 m fixes are too rough to
+    /// record (the tracer wants 30 m), so walks on 10 Nov saved nothing.
+    nonisolated static func withoutSession(_ watch: Watch) -> Watch {
+        watch == .live ? .pocket : watch
     }
 
     private var insideFence: Bool { fence.center != nil && !outside }
@@ -199,21 +193,10 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     func refreshWatch() {
         guard alwaysOnRunning else { return }
         defer { traceState() }
-        // Settled again with the walk over (it can end on a timer, with no new fix), so
-        // the next time you head out is a new outing.
-        if askedThisOuting, insideFence, !isWalking() {
-            askedThisOuting = false
-            withdrawWalkQuestion()
-        }
         var watch = watch
         refreshSession(live: watch == .live)
         if watch == .live, backgroundSession == nil {
-            if Self.shouldAskToStartWalk(leftFence: outside, onFoot: isOnFoot(), onWheels: isOnWheels(), asked: askedThisOuting) {
-                askedThisOuting = true
-                TrackerTrace.write("asked to start a walk")
-                askToStartWalk()
-            }
-            watch = Self.withoutSession(watch, insideFence: insideFence)
+            watch = Self.withoutSession(watch)
         }
         if watch == .live {
             if liveTask == nil { startLiveUpdates() }
@@ -221,15 +204,17 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
             liveTask?.cancel()
             liveTask = nil
         }
-        // Stops first: light and idle share the manager, so stopping second would undo the start.
+        // Stops first: these share the manager, so stopping second would undo the start.
         if watch != .light { stopLight() }
         if watch != .idle { stopIdle() }
+        if watch != .pocket { stopPocket() }
         if watch == .light { startLight() }
         if watch == .idle { startIdle() }
+        if watch == .pocket { startPocket() }
     }
 
-    /// With Always permission the session's only for live updates while the app's in your
-    /// pocket, held until you've settled again so a coffee stop doesn't need another tap.
+    /// With Always permission the session's only for live updates that started with the app
+    /// open, held until you've settled again so a coffee stop doesn't drop to the pocket watch.
     /// While using the app, always on can't run in the background without one.
     /// Any walk counts, not just a confirmed one: on 7 Nov Mike opened the app, set off and
     /// put the phone away before the walk was confirmed, and letting go then (still inside
@@ -240,7 +225,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     }
 
     private func refreshSession(live: Bool) {
-        let holdAllDay = !hasAlwaysPermission || !canAskToStartWalk()
+        let holdAllDay = !hasAlwaysPermission
         let wanted = Self.wantsSession(holdAllDay: holdAllDay, inForeground: isInForeground(), live: live,
                                        insideFence: insideFence, walking: isWalking())
         if !wanted {
@@ -250,7 +235,6 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
             // With Always permission, one made in the background (iOS relaunching the app)
             // wouldn't keep live updates going, and would hide that there's no real one.
             backgroundSession = CLBackgroundActivitySession()
-            withdrawWalkQuestion()
         }
     }
 
@@ -295,6 +279,27 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
             guard !Task.isCancelled else { return }
             self.lookToSettle()
         }
+    }
+
+    /// Like the manual walk's GPS (start()), but with no session, so no blue arrow.
+    private func startPocket() {
+        guard !pocketOn else { return }
+        pocketOn = true
+        pocketFixes = 0
+        TrackerTrace.write("pocket GPS on")
+        manager.desiredAccuracy = kCLLocationAccuracyBest
+        manager.distanceFilter = 5
+        manager.allowsBackgroundLocationUpdates = true
+        manager.showsBackgroundLocationIndicator = false
+        manager.startUpdatingLocation()
+    }
+
+    private func stopPocket() {
+        guard pocketOn else { return }
+        pocketOn = false
+        TrackerTrace.write("pocket GPS off after \(pocketFixes) fixes")
+        manager.stopUpdatingLocation()
+        manager.allowsBackgroundLocationUpdates = false
     }
 
     private func startLight() {
@@ -359,11 +364,10 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         walkingForAWhile = false
         stopLight()
         stopIdle()
+        stopPocket()
         manager.stopMonitoringSignificantLocationChanges()
         backgroundSession?.invalidate()
         backgroundSession = nil
-        askedThisOuting = false
-        withdrawWalkQuestion()
         removeFence()
     }
 
@@ -415,21 +419,12 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
             if fence.settledInPlace, outside {
                 outside = false
                 TrackerTrace.write("settled back where the fence is")
-                if !isWalking() {
-                    askedThisOuting = false
-                    withdrawWalkQuestion()
-                }
                 refreshWatch()
             }
             return
         }
         outside = false
         TrackerTrace.write("settled somewhere new")
-        // A stop partway through a walk isn't a new outing, so it doesn't ask again.
-        if !isWalking() {
-            askedThisOuting = false
-            withdrawWalkQuestion()
-        }
         geofence.place(around: center, radius: StationaryFence.radius)
         refreshWatch()
     }
@@ -453,8 +448,8 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     private func traceState() {
         let line = "watch=\(watch) session=\(backgroundSession != nil) fence=\(fence.center != nil) outside=\(outside) "
             + "walk=\(isWalking()) confirmed=\(isOnConfirmedWalk()) still=\(stationary) foot=\(isOnFoot()) wheels=\(isOnWheels()) "
-            + "fg=\(isInForeground()) always=\(hasAlwaysPermission) canAsk=\(canAskToStartWalk()) asked=\(askedThisOuting) "
-            + "light=\(lightOn) idle=\(idleOn) live=\(liveTask != nil)"
+            + "fg=\(isInForeground()) always=\(hasAlwaysPermission) "
+            + "light=\(lightOn) idle=\(idleOn) pocket=\(pocketOn) live=\(liveTask != nil)"
         guard line != lastTrace else { return }
         lastTrace = line
         TrackerTrace.write(line)
@@ -480,8 +475,13 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
                     // Not in a car: stopping at the lights isn't settling somewhere.
                     // Fresh fixes only: restarting the watch can hand back a cached one from
                     // home, which would look like you'd settled back there (Codex, 8 Nov).
-                    if lightOn, !isOnWheels(), location.timestamp.timeIntervalSinceNow > -10 {
+                    if lightOn || pocketOn, !isOnWheels(), location.timestamp.timeIntervalSinceNow > -10 {
                         settle(at: location, stationary: isStill())
+                    }
+                    if pocketOn {
+                        pocketFixes += 1
+                        // Proof on the trace that the GPS kept going in the pocket.
+                        if pocketFixes % 50 == 0 { TrackerTrace.write("pocket GPS \(pocketFixes) fixes") }
                     }
                 }
                 onLocation?(location)

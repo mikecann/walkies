@@ -125,20 +125,13 @@ struct LocationTrackerFenceTests {
         #expect(T.watch(confirmedWalk: false, onScreen: true, onWheels: false, insideFence: true) == .live)
     }
 
-    @Test func withoutASessionTheCheapWatchesStandInAndOnlyAWalkOutGetsAsked() {
+    @Test func withoutASessionThePocketWatchKeepsTheGPSAtFullAccuracy() {
         typealias T = LocationTracker
-        // Live updates stall in the pocket without a session: coarse while out, nothing at home.
-        #expect(T.withoutSession(.live, insideFence: false) == .light)
-        #expect(T.withoutSession(.live, insideFence: true) == .idle)
-        #expect(T.withoutSession(.light, insideFence: false) == .light)
-        #expect(T.withoutSession(.idle, insideFence: true) == .idle)
-        // Out on foot: ask once. Not in the garden or before the fence has loaded (not left),
-        // not sitting still, not from the car, not twice.
-        #expect(T.shouldAskToStartWalk(leftFence: true, onFoot: true, onWheels: false, asked: false))
-        #expect(!T.shouldAskToStartWalk(leftFence: false, onFoot: true, onWheels: false, asked: false))
-        #expect(!T.shouldAskToStartWalk(leftFence: true, onFoot: false, onWheels: false, asked: false))
-        #expect(!T.shouldAskToStartWalk(leftFence: true, onFoot: true, onWheels: true, asked: false))
-        #expect(!T.shouldAskToStartWalk(leftFence: true, onFoot: true, onWheels: false, asked: true))
+        // Live updates stall in the pocket without a session, so the pocket watch takes over,
+        // at home too (a walk from the door) and out. The cheap watches stay as they are.
+        #expect(T.withoutSession(.live) == .pocket)
+        #expect(T.withoutSession(.light) == .light)
+        #expect(T.withoutSession(.idle) == .idle)
     }
 
     @Test func theSessionIsOnlyLetGoAtHomeWithNoWalkGoing() {
