@@ -18,6 +18,8 @@ nonisolated struct StationaryFence {
     /// The last fix settled you back inside the fence where it already is, so it didn't move.
     private(set) var settledInPlace = false
     private var settling: (point: Coordinate, time: TimeInterval)?
+    /// When you got to where you're settling now, if anywhere.
+    var settlingSince: TimeInterval? { settling?.time }
 
     init(center: Coordinate? = nil) {
         self.center = center
@@ -113,9 +115,11 @@ final class MonitorFence: Geofence {
             let monitor = await monitor.value
             let record = await monitor.record(for: Self.identifier)
             let condition = record?.condition as? CLMonitor.CircularGeographicCondition
-            // Already left it: there's no fence to be inside until you settle somewhere new.
+            // Already left it: still hand over where it is, so a stop on the walk iOS relaunched
+            // us for can't move it (that lost a walk on 15 Nov), then say you're outside.
             let left = record?.lastEvent.state == .unsatisfied
-            self?.onOpen?(left ? nil : condition.map { Coordinate($0.center) })
+            self?.onOpen?(condition.map { Coordinate($0.center) })
+            if left { self?.onExit?() }
             do {
                 for try await event in await monitor.events {
                     guard event.identifier == Self.identifier else { continue }

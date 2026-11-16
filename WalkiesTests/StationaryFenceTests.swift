@@ -112,18 +112,26 @@ struct LocationTrackerFenceTests {
         #expect(fake.placed.isEmpty)
     }
 
-    @Test func aStopPartwayRoundAWalkDoesNotMoveTheFence() {
+    private func fix(_ lat: Double, _ lon: Double, minutesAgo: Double) -> CLLocation {
+        CLLocation(coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon), altitude: 0,
+                   horizontalAccuracy: 10, verticalAccuracy: 10, timestamp: .now.addingTimeInterval(-minutesAgo * 60))
+    }
+
+    @Test func theFenceStaysRoundHomeThroughWalksAndShortStops() {
         let fake = FakeFence()
         let tracker = LocationTracker(geofence: fake)
         var walking = true
         tracker.isWalking = { walking }
         fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
-        // Stopped for a while about a kilometre from home, mid-walk: the fence stays at home.
-        tracker.settle(at: fix(-33.659, 115.35), stationary: true)
+        // Stopped about a kilometre from home, mid-walk: the fence stays at home (15 Nov).
+        tracker.settle(at: fix(-33.659, 115.35, minutesAgo: 40), stationary: true)
         #expect(fake.placed.isEmpty)
-        // Settling there once the walk's over moves it as usual.
+        // Walk over, but only a short sit at the café so far: still home.
         walking = false
-        tracker.settle(at: fix(-33.659, 115.35), stationary: true)
+        tracker.settle(at: fix(-33.659, 115.35, minutesAgo: 20), stationary: true)
+        #expect(fake.placed.isEmpty)
+        // Stayed there more than half an hour all told: now it moves.
+        tracker.settle(at: fix(-33.659, 115.35, minutesAgo: 0), stationary: true)
         #expect(fake.placed == [Coordinate(lat: -33.659, lon: 115.35)])
     }
 

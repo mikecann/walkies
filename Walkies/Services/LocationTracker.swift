@@ -103,6 +103,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored private var stationary = false
     @ObservationIgnored private var pausedAt: Coordinate?
     @ObservationIgnored private var lastLocation: Coordinate?
+    @ObservationIgnored private var wasWalking = false
     /// The pocket watch's GPS updates are running.
     @ObservationIgnored private var pocketOn = false
     /// Fixes the pocket watch has had this run, for the trace.
@@ -121,6 +122,9 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         /// updates would want a session the app can't get from the background.
         case pocket
     }
+
+    /// How long you have to stay somewhere before the fence moves there from where it is.
+    static let moveFenceAfter: TimeInterval = 30 * 60
 
     /// How long the chip has to say you're on foot before a walk from home gets the GPS.
     /// Long enough that crossing the kitchen doesn't count.
@@ -200,6 +204,14 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     func refreshWatch() {
         guard alwaysOnRunning else { return }
         defer { traceState() }
+        // A walk that's just ended may have stopped somewhere that only now counts as settled
+        // (it couldn't while the walk was on), so look for a precise fix again.
+        let walking = isWalking()
+        if wasWalking, !walking, outside {
+            settleTries = 0
+            DispatchQueue.main.async { [weak self] in self?.lookToSettle() }
+        }
+        wasWalking = walking
         var watch = watch
         refreshSession(live: watch == .live)
         if watch == .live, backgroundSession == nil {
@@ -427,6 +439,16 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         // Not a cached fix from wherever you were when updates started.
         guard stationary || location.timestamp.timeIntervalSinceNow > -10 else { return }
         let point = Coordinate(location.coordinate)
+        // Anywhere inside the circle counts as back: the house can be 40 m from where the
+        // fence was centred, and needing 30 m kept the session (and the arrow) on (Codex, 16 Nov).
+        if outside, let center = fence.center, location.horizontalAccuracy >= 0,
+           location.horizontalAccuracy <= StationaryFence.worstAccuracy,
+           center.distance(to: point) + location.horizontalAccuracy <= StationaryFence.radius {
+            outside = false
+            TrackerTrace.write("back inside the fence")
+            refreshWatch()
+            return
+        }
         var next = fence
         guard let center = next.add(point, time: location.timestamp.timeIntervalSince1970, accuracy: location.horizontalAccuracy, stationary: stationary, walking: isWalking()) else {
             fence = next
@@ -438,10 +460,20 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
             }
             return
         }
-        // A stop partway round a walk doesn't move the fence, so it stays round home. On
-        // 14 Nov it moved to a stop mid-walk, iOS later closed the app, and leaving home on
-        // 15 Nov woke nothing: that walk was lost. Android has done this since #58.
-        if isWalking(), fence.center != nil { return }
+        // The fence has to stay round home, because leaving it is what wakes the app once iOS
+        // has closed it. On 14 Nov it moved to a stop mid-walk, iOS closed the app, and leaving
+        // home on 15 Nov woke nothing: that walk was lost. So it never moves during a walk
+        // (Android has done this since #58), and only moves somewhere you've stayed a good
+        // while, so a café at the end of a walk doesn't take it either. Settling progress is
+        // kept, so a long stay still gets there.
+        if let current = fence.center {
+            let stayedFor = location.timestamp.timeIntervalSince1970 - (next.settlingSince ?? .infinity)
+            if isWalking() || stayedFor < Self.moveFenceAfter {
+                next.center = current
+                fence = next
+                return
+            }
+        }
         fence = next
         outside = false
         TrackerTrace.write("settled somewhere new")
