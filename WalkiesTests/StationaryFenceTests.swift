@@ -112,6 +112,21 @@ struct LocationTrackerFenceTests {
         #expect(fake.placed.isEmpty)
     }
 
+    @Test func aStopPartwayRoundAWalkDoesNotMoveTheFence() {
+        let fake = FakeFence()
+        let tracker = LocationTracker(geofence: fake)
+        var walking = true
+        tracker.isWalking = { walking }
+        fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
+        // Stopped for a while about a kilometre from home, mid-walk: the fence stays at home.
+        tracker.settle(at: fix(-33.659, 115.35), stationary: true)
+        #expect(fake.placed.isEmpty)
+        // Settling there once the walk's over moves it as usual.
+        walking = false
+        tracker.settle(at: fix(-33.659, 115.35), stationary: true)
+        #expect(fake.placed == [Coordinate(lat: -33.659, lon: 115.35)])
+    }
+
     @Test func watchesLightlyInsideTheFenceAndInCars() {
         typealias T = LocationTracker
         // Settled somewhere: nothing runs, the fence wakes the app.

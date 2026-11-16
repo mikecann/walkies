@@ -427,7 +427,9 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         // Not a cached fix from wherever you were when updates started.
         guard stationary || location.timestamp.timeIntervalSinceNow > -10 else { return }
         let point = Coordinate(location.coordinate)
-        guard let center = fence.add(point, time: location.timestamp.timeIntervalSince1970, accuracy: location.horizontalAccuracy, stationary: stationary, walking: isWalking()) else {
+        var next = fence
+        guard let center = next.add(point, time: location.timestamp.timeIntervalSince1970, accuracy: location.horizontalAccuracy, stationary: stationary, walking: isWalking()) else {
+            fence = next
             // Back where you were (home after a walk, say): inside again, though the fence stays put.
             if fence.settledInPlace, outside {
                 outside = false
@@ -436,6 +438,11 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
             }
             return
         }
+        // A stop partway round a walk doesn't move the fence, so it stays round home. On
+        // 14 Nov it moved to a stop mid-walk, iOS later closed the app, and leaving home on
+        // 15 Nov woke nothing: that walk was lost. Android has done this since #58.
+        if isWalking(), fence.center != nil { return }
+        fence = next
         outside = false
         TrackerTrace.write("settled somewhere new")
         geofence.place(around: center, radius: StationaryFence.radius)
