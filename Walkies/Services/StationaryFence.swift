@@ -51,6 +51,11 @@ nonisolated struct StationaryFence {
         center = nil
         settling = nil
     }
+
+    /// Back home: time spent somewhere else so far doesn't count towards settling there.
+    mutating func forgetSettling() {
+        settling = nil
+    }
 }
 
 /// A circle iOS watches for us, even while the app isn't running.

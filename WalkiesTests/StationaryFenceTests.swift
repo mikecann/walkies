@@ -95,6 +95,7 @@ struct LocationTrackerFenceTests {
     @Test func placesTheFenceWhereYouSettleAndRemovesItWhenTurnedOff() {
         let fake = FakeFence()
         let tracker = LocationTracker(geofence: fake)
+        fake.onOpen?(nil)
         tracker.settle(at: fix(-33.65, 115.35), stationary: false)
         tracker.settle(at: fix(-33.65, 115.35), stationary: true)
         #expect(fake.placed == [Coordinate(lat: -33.65, lon: 115.35)])
@@ -115,6 +116,17 @@ struct LocationTrackerFenceTests {
     private func fix(_ lat: Double, _ lon: Double, minutesAgo: Double) -> CLLocation {
         CLLocation(coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon), altitude: 0,
                    horizontalAccuracy: 10, verticalAccuracy: 10, timestamp: .now.addingTimeInterval(-minutesAgo * 60))
+    }
+
+    @Test func aFixBeforeTheSavedFenceLoadsDoesNotReplaceIt() {
+        let fake = FakeFence()
+        let tracker = LocationTracker(geofence: fake)
+        // Woken by leaving home: a fix comes in before CLMonitor hands the fence back.
+        tracker.settle(at: fix(-33.659, 115.35), stationary: true)
+        #expect(fake.placed.isEmpty)
+        fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
+        tracker.settle(at: fix(-33.659, 115.35), stationary: true)
+        #expect(fake.placed.isEmpty)
     }
 
     @Test func theFenceStaysRoundHomeThroughWalksAndShortStops() {
@@ -225,6 +237,7 @@ struct LocationTrackerFenceTests {
     @Test func settlingPutsYouInsideTheNewFence() {
         let fake = FakeFence()
         let tracker = LocationTracker(geofence: fake)
+        fake.onOpen?(nil)
         tracker.isOnWheels = { true }
         #expect(tracker.watch == .light)
         tracker.settle(at: fix(-33.65, 115.35), stationary: true)
@@ -234,6 +247,7 @@ struct LocationTrackerFenceTests {
     @Test func waitsWhileYouAreOnAWalk() {
         let fake = FakeFence()
         let tracker = LocationTracker(geofence: fake)
+        fake.onOpen?(nil)
         tracker.isWalking = { true }
         tracker.settle(at: fix(-33.65, 115.35), stationary: false)
         #expect(fake.placed.isEmpty)

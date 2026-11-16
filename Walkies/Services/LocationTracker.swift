@@ -50,7 +50,9 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         self.geofence = geofence
         super.init()
         geofence.onOpen = { [weak self] center in
-            guard let self, self.fence.center == nil else { return }
+            guard let self else { return }
+            self.fenceLoaded = true
+            guard self.fence.center == nil else { return }
             self.fence.center = center
             self.refreshWatch()
         }
@@ -104,6 +106,9 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored private var pausedAt: Coordinate?
     @ObservationIgnored private var lastLocation: Coordinate?
     @ObservationIgnored private var wasWalking = false
+    /// The saved fence has come back from CLMonitor. Until then a fix mustn't place a new
+    /// one, or it would replace home before home has loaded (Codex, 16 Nov).
+    @ObservationIgnored private var fenceLoaded = false
     /// The pocket watch's GPS updates are running.
     @ObservationIgnored private var pocketOn = false
     /// Fixes the pocket watch has had this run, for the trace.
@@ -284,7 +289,9 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     /// there it asks for a precise fix for a minute, and tries again every five minutes,
     /// three times at most until you move again.
     private func lookToSettle() {
-        guard stationary, outside, lightOn, settleTries < 3 else { return }
+        // Eight looks, five minutes apart, so one comes after the half hour the fence needs to
+        // move somewhere new (Codex, 16 Nov).
+        guard stationary, outside, lightOn, settleTries < 8 else { return }
         settleTries += 1
         stopLight()
         startLight()
@@ -434,21 +441,31 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         }
     }
 
+    /// Anywhere inside the circle counts as back: the house can be 40 m from where the fence
+    /// was centred, and needing 30 m kept the session (and the arrow) on (Codex, 16 Nov).
+    /// Checked even while the chip still says you're in the car, which it can after you've
+    /// parked at home.
+    @discardableResult
+    private func noteBackInside(_ location: CLLocation) -> Bool {
+        guard outside, let center = fence.center, location.horizontalAccuracy >= 0,
+              location.horizontalAccuracy <= StationaryFence.worstAccuracy,
+              location.timestamp.timeIntervalSinceNow > -10,
+              center.distance(to: Coordinate(location.coordinate)) + location.horizontalAccuracy <= StationaryFence.radius
+        else { return false }
+        outside = false
+        fence.forgetSettling()
+        TrackerTrace.write("back inside the fence")
+        refreshWatch()
+        return true
+    }
+
     /// Moves the stationary fence when this fix means you've settled somewhere new.
     func settle(at location: CLLocation, stationary: Bool) {
         // Not a cached fix from wherever you were when updates started.
         guard stationary || location.timestamp.timeIntervalSinceNow > -10 else { return }
         let point = Coordinate(location.coordinate)
-        // Anywhere inside the circle counts as back: the house can be 40 m from where the
-        // fence was centred, and needing 30 m kept the session (and the arrow) on (Codex, 16 Nov).
-        if outside, let center = fence.center, location.horizontalAccuracy >= 0,
-           location.horizontalAccuracy <= StationaryFence.worstAccuracy,
-           center.distance(to: point) + location.horizontalAccuracy <= StationaryFence.radius {
-            outside = false
-            TrackerTrace.write("back inside the fence")
-            refreshWatch()
-            return
-        }
+        if noteBackInside(location) { return }
+        guard fenceLoaded else { return }
         var next = fence
         guard let center = next.add(point, time: location.timestamp.timeIntervalSince1970, accuracy: location.horizontalAccuracy, stationary: stationary, walking: isWalking()) else {
             fence = next
@@ -527,7 +544,8 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
                     // Not in a car: stopping at the lights isn't settling somewhere.
                     // Fresh fixes only: restarting the watch can hand back a cached one from
                     // home, which would look like you'd settled back there (Codex, 8 Nov).
-                    if lightOn || pocketOn, !isOnWheels(), location.timestamp.timeIntervalSinceNow > -10 {
+                    if lightOn || pocketOn, location.timestamp.timeIntervalSinceNow > -10,
+                       !noteBackInside(location), !isOnWheels() {
                         settle(at: location, stationary: isStill())
                     }
                     if pocketOn {
