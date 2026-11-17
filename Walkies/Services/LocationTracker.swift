@@ -107,6 +107,10 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored private var pausedAt: Coordinate?
     @ObservationIgnored private var lastLocation: Coordinate?
     @ObservationIgnored private var wasWalking = false
+    /// A fence exit that came in before always on started (the launch it relaunched us for),
+    /// handled once it has.
+    @ObservationIgnored private var exitWaiting = false
+    @ObservationIgnored private var stopExitWaiting = false
     /// Where the stop fence is, if this run has placed one.
     @ObservationIgnored private var stopCenter: Coordinate?
     /// The saved fence has come back from CLMonitor. Until then a fix mustn't place a new
@@ -386,17 +390,23 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         manager.startMonitoringSignificantLocationChanges()
         geofence.open()
         refreshWatch()
+        if exitWaiting { exitWaiting = false; leftFence() }
+        if stopExitWaiting { stopExitWaiting = false; leftStop() }
     }
 
     #if DEBUG
     /// Always on's bookkeeping without Core Location's sessions, for the fence tests.
     func startAlwaysOnForTesting() {
         alwaysOnRunning = true
+        if exitWaiting { exitWaiting = false; leftFence() }
+        if stopExitWaiting { stopExitWaiting = false; leftStop() }
     }
     #endif
 
     func stopAlwaysOn() {
         alwaysOnRunning = false
+        exitWaiting = false
+        stopExitWaiting = false
         outside = false
         settleCheck?.cancel()
         settleCheck = nil
@@ -519,7 +529,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     /// You've left where you settled. Live updates should pick up again by themselves,
     /// but start them afresh unless they're plainly already coming in.
     private func leftFence() {
-        guard alwaysOnRunning else { return }
+        guard alwaysOnRunning else { exitWaiting = true; return }
         TrackerTrace.write("left the fence")
         outside = true
         wakeUp()
@@ -552,12 +562,14 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
 
     /// You've walked on from where the app was stopped while you were out.
     private func leftStop() {
-        guard alwaysOnRunning else { return }
+        guard alwaysOnRunning else { stopExitWaiting = true; return }
         TrackerTrace.write("left the stop fence")
         // Any fix from here on puts it round you again.
         stopCenter = nil
-        // Already home (an old one that fired as the app opened): nothing to wake for.
-        guard outside else { return dropStopFence() }
+        // It only goes up while you're out, so take it you're out, even when home's fence still
+        // says you're in (after a relaunch that's just the last event it saw, not where you are).
+        // The GPS this turns on settles it: a fix back home puts you inside and takes it down.
+        if fence.center != nil { outside = true }
         wakeUp()
     }
 

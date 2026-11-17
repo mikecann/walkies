@@ -130,14 +130,30 @@ struct LocationTrackerFenceTests {
         #expect(fake.stopsRemoved > removedBefore)
     }
 
-    @Test func anOldStopFenceThatFiresAtHomeIsJustRemoved() {
+    /// Home's fence can still say you're in after a relaunch (it's only the last event it saw),
+    /// so a stop exit means look, and a fix back home is what takes it down.
+    @Test func aStopExitWhileHomeSaysInsideLooksBeforeRemovingIt() {
         let fake = FakeFence()
         let tracker = LocationTracker(geofence: fake)
         tracker.startAlwaysOnForTesting()
         fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
         fake.onStopExit?()
+        #expect(fake.stopsRemoved == 0)
+        tracker.settle(at: fix(-33.65, 115.35), stationary: true)
         #expect(fake.stopsRemoved == 1)
-        #expect(fake.stops.isEmpty)
+    }
+
+    /// An exit that arrives before always on has started (as the launch it caused is still
+    /// going) isn't dropped.
+    @Test func anExitBeforeAlwaysOnStartsIsHandledOnceItDoes() {
+        let fake = FakeFence()
+        let tracker = LocationTracker(geofence: fake)
+        fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
+        fake.onStopExit?()
+        tracker.startAlwaysOnForTesting()
+        // It took you to be out, so a fix back home counts as coming back in.
+        tracker.settle(at: fix(-33.65, 115.35), stationary: true)
+        #expect(fake.stopsRemoved == 1)
     }
 
     private func fix(_ lat: Double, _ lon: Double, accuracy: Double = 10) -> CLLocation {
