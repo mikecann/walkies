@@ -188,19 +188,6 @@ final class AppModel {
         tracker.isOnManualWalk = { [weak self] in self?.activeWalk?.isAutomatic == false }
         tracker.isOnScreen = { [weak self] in self.map { $0.inForeground && $0.mapVisible } ?? false }
         tracker.isInForeground = { [weak self] in self?.inForeground ?? false }
-        if servicesEnabled {
-            tracker.askToStartWalk = { Notifier.askToStartWalk() }
-            tracker.withdrawWalkQuestion = { Notifier.withdrawWalkQuestion() }
-            // Off for now: the "Out for a walk?" question (#82) lost Mike's walks on 8 and 10 Nov.
-            // The trace shows it asked, he never saw the notification, so the app had no session
-            // and recorded nothing. Saying we can't ask makes always on hold the session all day,
-            // as before #82 (blue arrow back, walks reliable) until a no-tap start is proven.
-            tracker.canAskToStartWalk = { false }
-            Task { [weak self] in
-                await Notifier.refreshAllowed()
-                self?.tracker.refreshWatch()
-            }
-        }
         tracker.isOnWheels = { [weak self] in self?.motion.onWheels ?? false }
         tracker.isStill = { [weak self] in self?.motion.still ?? false }
         tracker.isOnFoot = { [weak self] in self?.motion.onFoot ?? false }
@@ -1682,15 +1669,6 @@ final class AppModel {
         checkSpotOnNextFix = active
         if !active { spotToCheck = nil }
         tracker.refreshWatch()
-        // You might have turned notifications on or off in Settings. Turning them off with
-        // Walkies in the background only counts from the next time it's opened, as it
-        // can't take a session until then anyway.
-        if active, servicesEnabled {
-            Task { [weak self] in
-                await Notifier.refreshAllowed()
-                self?.tracker.refreshWatch()
-            }
-        }
     }
 
     /// The first good fix after the app comes to the front, from GPS or the map's blue

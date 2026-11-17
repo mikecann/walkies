@@ -17,11 +17,6 @@ final class MotionMonitor {
     /// Called after each update, so always on can change how hard it works.
     @ObservationIgnored var onChange: (() -> Void)?
 
-    /// The chip is there and you've let Walkies ask it.
-    static var canTell: Bool {
-        CMMotionActivityManager.isActivityAvailable() && CMMotionActivityManager.authorizationStatus() == .authorized
-    }
-
     func start() {
         guard !started, CMMotionActivityManager.isActivityAvailable() else { return }
         started = true

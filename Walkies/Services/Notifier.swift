@@ -37,36 +37,6 @@ enum Notifier {
         guard (try? png.write(to: url)) != nil else { return nil }
         return try? UNNotificationAttachment(identifier: entry.id, url: url)
     }
-
-    private static let walkQuestion = "walk-question"
-
-    /// Whether notifications can be shown, read as the app opens and leaves the screen.
-    /// Always on only relies on the walk question when they can. Saved, so a background
-    /// relaunch knows straight away rather than after the check comes back.
-    @MainActor private(set) static var allowed = UserDefaults.standard.bool(forKey: "notificationsAllowed")
-
-    @MainActor static func refreshAllowed() async {
-        let settings = await UNUserNotificationCenter.current().notificationSettings()
-        allowed = [.authorized, .provisional, .ephemeral].contains(settings.authorizationStatus)
-        UserDefaults.standard.set(allowed, forKey: "notificationsAllowed")
-    }
-
-    /// Opening the app from this is what lets the GPS follow you (see LocationTracker).
-    static func askToStartWalk() {
-        guard UIApplication.shared.applicationState != .active else { return }
-        let content = UNMutableNotificationContent()
-        content.title = "Out for a walk?"
-        content.body = "Tap to start recording it."
-        content.sound = .default
-        let request = UNNotificationRequest(identifier: walkQuestion, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
-    }
-
-    static func withdrawWalkQuestion() {
-        let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [walkQuestion])
-        center.removeDeliveredNotifications(withIdentifiers: [walkQuestion])
-    }
 }
 
 /// Where tapping a push opens, from the `open` the server puts in it (convex/devices.ts).

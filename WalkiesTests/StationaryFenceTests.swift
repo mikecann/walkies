@@ -95,6 +95,7 @@ struct LocationTrackerFenceTests {
     @Test func placesTheFenceWhereYouSettleAndRemovesItWhenTurnedOff() {
         let fake = FakeFence()
         let tracker = LocationTracker(geofence: fake)
+        fake.onOpen?(nil)
         tracker.settle(at: fix(-33.65, 115.35), stationary: false)
         tracker.settle(at: fix(-33.65, 115.35), stationary: true)
         #expect(fake.placed == [Coordinate(lat: -33.65, lon: 115.35)])
@@ -112,6 +113,40 @@ struct LocationTrackerFenceTests {
         #expect(fake.placed.isEmpty)
     }
 
+    private func fix(_ lat: Double, _ lon: Double, minutesAgo: Double) -> CLLocation {
+        CLLocation(coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon), altitude: 0,
+                   horizontalAccuracy: 10, verticalAccuracy: 10, timestamp: .now.addingTimeInterval(-minutesAgo * 60))
+    }
+
+    @Test func aFixBeforeTheSavedFenceLoadsDoesNotReplaceIt() {
+        let fake = FakeFence()
+        let tracker = LocationTracker(geofence: fake)
+        // Woken by leaving home: a fix comes in before CLMonitor hands the fence back.
+        tracker.settle(at: fix(-33.659, 115.35), stationary: true)
+        #expect(fake.placed.isEmpty)
+        fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
+        tracker.settle(at: fix(-33.659, 115.35), stationary: true)
+        #expect(fake.placed.isEmpty)
+    }
+
+    @Test func theFenceStaysRoundHomeThroughWalksAndShortStops() {
+        let fake = FakeFence()
+        let tracker = LocationTracker(geofence: fake)
+        var walking = true
+        tracker.isWalking = { walking }
+        fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
+        // Stopped about a kilometre from home, mid-walk: the fence stays at home (15 Nov).
+        tracker.settle(at: fix(-33.659, 115.35, minutesAgo: 40), stationary: true)
+        #expect(fake.placed.isEmpty)
+        // Walk over, but only a short sit at the café so far: still home.
+        walking = false
+        tracker.settle(at: fix(-33.659, 115.35, minutesAgo: 20), stationary: true)
+        #expect(fake.placed.isEmpty)
+        // Stayed there more than half an hour all told: now it moves.
+        tracker.settle(at: fix(-33.659, 115.35, minutesAgo: 0), stationary: true)
+        #expect(fake.placed == [Coordinate(lat: -33.659, lon: 115.35)])
+    }
+
     @Test func watchesLightlyInsideTheFenceAndInCars() {
         typealias T = LocationTracker
         // Settled somewhere: nothing runs, the fence wakes the app.
@@ -125,20 +160,13 @@ struct LocationTrackerFenceTests {
         #expect(T.watch(confirmedWalk: false, onScreen: true, onWheels: false, insideFence: true) == .live)
     }
 
-    @Test func withoutASessionTheCheapWatchesStandInAndOnlyAWalkOutGetsAsked() {
+    @Test func withoutASessionThePocketWatchKeepsTheGPSAtFullAccuracy() {
         typealias T = LocationTracker
-        // Live updates stall in the pocket without a session: coarse while out, nothing at home.
-        #expect(T.withoutSession(.live, insideFence: false) == .light)
-        #expect(T.withoutSession(.live, insideFence: true) == .idle)
-        #expect(T.withoutSession(.light, insideFence: false) == .light)
-        #expect(T.withoutSession(.idle, insideFence: true) == .idle)
-        // Out on foot: ask once. Not in the garden or before the fence has loaded (not left),
-        // not sitting still, not from the car, not twice.
-        #expect(T.shouldAskToStartWalk(leftFence: true, onFoot: true, onWheels: false, asked: false))
-        #expect(!T.shouldAskToStartWalk(leftFence: false, onFoot: true, onWheels: false, asked: false))
-        #expect(!T.shouldAskToStartWalk(leftFence: true, onFoot: false, onWheels: false, asked: false))
-        #expect(!T.shouldAskToStartWalk(leftFence: true, onFoot: true, onWheels: true, asked: false))
-        #expect(!T.shouldAskToStartWalk(leftFence: true, onFoot: true, onWheels: false, asked: true))
+        // Live updates stall in the pocket without a session, so the pocket watch takes over,
+        // at home too (a walk from the door) and out. The cheap watches stay as they are.
+        #expect(T.withoutSession(.live) == .pocket)
+        #expect(T.withoutSession(.light) == .light)
+        #expect(T.withoutSession(.idle) == .idle)
     }
 
     @Test func theSessionIsOnlyLetGoAtHomeWithNoWalkGoing() {
@@ -209,6 +237,7 @@ struct LocationTrackerFenceTests {
     @Test func settlingPutsYouInsideTheNewFence() {
         let fake = FakeFence()
         let tracker = LocationTracker(geofence: fake)
+        fake.onOpen?(nil)
         tracker.isOnWheels = { true }
         #expect(tracker.watch == .light)
         tracker.settle(at: fix(-33.65, 115.35), stationary: true)
@@ -218,6 +247,7 @@ struct LocationTrackerFenceTests {
     @Test func waitsWhileYouAreOnAWalk() {
         let fake = FakeFence()
         let tracker = LocationTracker(geofence: fake)
+        fake.onOpen?(nil)
         tracker.isWalking = { true }
         tracker.settle(at: fix(-33.65, 115.35), stationary: false)
         #expect(fake.placed.isEmpty)
