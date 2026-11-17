@@ -57,6 +57,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
             self.refreshWatch()
         }
         geofence.onExit = { [weak self] in self?.leftFence() }
+        geofence.onStopExit = { [weak self] in self?.leftStop() }
         manager.delegate = self
         manager.activityType = .fitness
         manager.desiredAccuracy = kCLLocationAccuracyBest
@@ -106,6 +107,8 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored private var pausedAt: Coordinate?
     @ObservationIgnored private var lastLocation: Coordinate?
     @ObservationIgnored private var wasWalking = false
+    /// Where the stop fence is, if this run has placed one.
+    @ObservationIgnored private var stopCenter: Coordinate?
     /// The saved fence has come back from CLMonitor. Until then a fix mustn't place a new
     /// one, or it would replace home before home has loaded (Codex, 16 Nov).
     @ObservationIgnored private var fenceLoaded = false
@@ -127,6 +130,9 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         /// updates would want a session the app can't get from the background.
         case pocket
     }
+
+    /// How far you get from the stop fence's middle before it's moved up to you.
+    static let stopFenceStep = 50.0
 
     /// How long you have to stay somewhere before the fence moves there from where it is.
     static let moveFenceAfter: TimeInterval = 30 * 60
@@ -382,6 +388,13 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         refreshWatch()
     }
 
+    #if DEBUG
+    /// Always on's bookkeeping without Core Location's sessions, for the fence tests.
+    func startAlwaysOnForTesting() {
+        alwaysOnRunning = true
+    }
+    #endif
+
     func stopAlwaysOn() {
         alwaysOnRunning = false
         outside = false
@@ -411,6 +424,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     func removeFence() {
         fence.reset()
         geofence.remove()
+        dropStopFence()
     }
 
     private func startLiveUpdates() {
@@ -427,6 +441,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
                         self.lastLocation = Coordinate(location.coordinate)
                         if update.stationary { self.pausedAt = Coordinate(location.coordinate) }
                         self.noteOutside(location)
+                        self.followWithStopFence(location)
                         self.onLocation?(location)
                     }
                     if let last {
@@ -454,6 +469,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         else { return false }
         outside = false
         fence.forgetSettling()
+        dropStopFence()
         TrackerTrace.write("back inside the fence")
         refreshWatch()
         return true
@@ -472,6 +488,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
             // Back where you were (home after a walk, say): inside again, though the fence stays put.
             if fence.settledInPlace, outside {
                 outside = false
+                dropStopFence()
                 TrackerTrace.write("settled back where the fence is")
                 refreshWatch()
             }
@@ -493,6 +510,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         }
         fence = next
         outside = false
+        dropStopFence()
         TrackerTrace.write("settled somewhere new")
         geofence.place(around: center, radius: StationaryFence.radius)
         refreshWatch()
@@ -504,6 +522,46 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         guard alwaysOnRunning else { return }
         TrackerTrace.write("left the fence")
         outside = true
+        wakeUp()
+    }
+
+    /// The stationary fence stays round home all through a walk, so once you're out it can't
+    /// wake the app again. On 17 Nov 2026 Mike walked to his mother-in-law's, sat there half
+    /// an hour, and iOS suspended the app; nothing woke it for the walk on, or the walk home,
+    /// until he came back within reach of home's fence: that whole stretch was lost. So while
+    /// you're out a second circle follows you, moved up whenever you're `stopFenceStep` from
+    /// its middle, and wherever the app's stopped, walking on out of it wakes it again.
+    private func followWithStopFence(_ location: CLLocation) {
+        guard alwaysOnRunning, outside, fence.center != nil,
+              location.horizontalAccuracy >= 0, location.horizontalAccuracy <= StationaryFence.worstAccuracy,
+              location.timestamp.timeIntervalSinceNow > -10 else { return }
+        let here = Coordinate(location.coordinate)
+        // Back within home's circle: that fence will do, and the fix is about to say you're in.
+        if let home = fence.center, home.distance(to: here) <= StationaryFence.radius { return }
+        if let stopCenter, stopCenter.distance(to: here) < Self.stopFenceStep { return }
+        stopCenter = here
+        geofence.placeStop(around: here, radius: StationaryFence.radius)
+    }
+
+    /// Home again, or the stationary fence has moved to where you are: it's the one to leave now.
+    /// Removed even when this run didn't place it, as one from before a relaunch may still be there.
+    private func dropStopFence() {
+        stopCenter = nil
+        geofence.removeStop()
+    }
+
+    /// You've walked on from where the app was stopped while you were out.
+    private func leftStop() {
+        guard alwaysOnRunning else { return }
+        TrackerTrace.write("left the stop fence")
+        // Any fix from here on puts it round you again.
+        stopCenter = nil
+        // Already home (an old one that fired as the app opened): nothing to wake for.
+        guard outside else { return dropStopFence() }
+        wakeUp()
+    }
+
+    private func wakeUp() {
         stationary = false
         pausedAt = nil
         guard liveTask != nil, backgroundSession != nil else { return refreshWatch() }
@@ -538,6 +596,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
                 // Light watch and significant-change fixes, while always on.
                 if alwaysOnRunning {
                     noteOutside(location)
+                    followWithStopFence(location)
                     noteMovement(location)
                     if stationary, pausedAt == nil { pausedAt = Coordinate(location.coordinate) }
                     lastLocation = Coordinate(location.coordinate)

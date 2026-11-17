@@ -58,15 +58,20 @@ nonisolated struct StationaryFence {
     }
 }
 
-/// A circle iOS watches for us, even while the app isn't running.
+/// A circle iOS watches for us, even while the app isn't running. Two of them: the
+/// stationary fence round home, and the stop fence that follows you while you're out.
 protocol Geofence: AnyObject {
-    /// Called when you leave the circle.
+    /// Called when you leave the stationary fence.
     var onExit: (() -> Void)? { get set }
-    /// Called once it's open, with where the circle was left last time.
+    /// Called when you leave the stop fence.
+    var onStopExit: (() -> Void)? { get set }
+    /// Called once it's open, with where the stationary fence was left last time.
     var onOpen: ((Coordinate?) -> Void)? { get set }
     func open()
     func place(around center: Coordinate, radius: Double)
     func remove()
+    func placeStop(around center: Coordinate, radius: Double)
+    func removeStop()
 }
 
 /// The stationary fence as a CLMonitor. iOS keeps its condition between launches and
@@ -79,8 +84,11 @@ final class MonitorFence: Geofence {
     /// Letters and digits only: CLMonitor throws on anything else.
     private static let name = "WalkiesStationary"
     private static let identifier = "here"
+    /// The stop fence, in the same monitor so one relaunch delivers both.
+    private static let stopIdentifier = "stop"
 
     var onExit: (() -> Void)?
+    var onStopExit: (() -> Void)?
     var onOpen: ((Coordinate?) -> Void)?
     private var monitor: Task<CLMonitor, Never>?
     private var events: Task<Void, Never>?
@@ -94,21 +102,37 @@ final class MonitorFence: Geofence {
     }
 
     func place(around center: Coordinate, radius: Double) {
+        add(around: center, radius: radius, identifier: Self.identifier)
+    }
+
+    func remove() {
+        remove(Self.identifier)
+    }
+
+    func placeStop(around center: Coordinate, radius: Double) {
+        add(around: center, radius: radius, identifier: Self.stopIdentifier)
+    }
+
+    func removeStop() {
+        remove(Self.stopIdentifier)
+    }
+
+    private func add(around center: Coordinate, radius: Double, identifier: String) {
         let monitor = opened()
         let previous = change
         change = Task {
             await previous?.value
             let condition = CLMonitor.CircularGeographicCondition(center: center.cl, radius: radius)
-            await monitor.value.add(condition, identifier: Self.identifier, assuming: .satisfied)
+            await monitor.value.add(condition, identifier: identifier, assuming: .satisfied)
         }
     }
 
-    func remove() {
+    private func remove(_ identifier: String) {
         let monitor = opened()
         let previous = change
         change = Task {
             await previous?.value
-            await monitor.value.remove(Self.identifier)
+            await monitor.value.remove(identifier)
         }
     }
 
@@ -123,13 +147,17 @@ final class MonitorFence: Geofence {
             // Already left it: still hand over where it is, so a stop on the walk iOS relaunched
             // us for can't move it (that lost a walk on 15 Nov), then say you're outside.
             let left = record?.lastEvent.state == .unsatisfied
+            // The stop fence is only there to wake the app, so having left it is all that matters.
+            let leftStop = await monitor.record(for: Self.stopIdentifier)?.lastEvent.state == .unsatisfied
             self?.onOpen?(condition.map { Coordinate($0.center) })
             if left { self?.onExit?() }
+            if leftStop { self?.onStopExit?() }
             do {
                 for try await event in await monitor.events {
-                    guard event.identifier == Self.identifier else { continue }
-                    Self.log.info("Stationary fence: \(String(describing: event.state))")
-                    if event.state == .unsatisfied { self?.onExit?() }
+                    Self.log.info("Fence \(event.identifier): \(String(describing: event.state))")
+                    guard event.state == .unsatisfied else { continue }
+                    if event.identifier == Self.identifier { self?.onExit?() }
+                    if event.identifier == Self.stopIdentifier { self?.onStopExit?() }
                 }
             } catch {
                 Self.log.error("Stationary fence stopped: \(error)")
