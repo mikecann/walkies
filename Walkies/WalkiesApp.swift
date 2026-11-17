@@ -8,7 +8,7 @@ import UserNotifications
 /// first unlock since it started, when saved files and the Keychain can't be read yet,
 /// so they wait for it.
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
-    private lazy var locked = !UIApplication.shared.isProtectedDataAvailable
+    private lazy var locked = !FirstUnlock.happened()
     lazy var model: AppModel = {
         #if DEBUG
         // App Store screenshots: a made-up explorer, never the saved data.
@@ -145,6 +145,31 @@ struct WalkiesApp: App {
             .environment(delegate.model)
             .environment(delegate.account)
             .environment(delegate.sync)
+        }
+    }
+}
+
+/// Whether the phone's been unlocked since it started, so saved files and the Keychain can be read.
+///
+/// `isProtectedDataAvailable` isn't the test: it's false whenever the phone's locked, not just
+/// before the first unlock, while Walkies' files (the default protection) and its Keychain item
+/// (after first unlock) can be read any time after that. On 17 Nov 2026 iOS relaunched the app
+/// at 6:01 pm as Mike set off from his mother-in-law's with the phone locked in his pocket, and
+/// it waited for an unlock that came at 8:27 pm, so always on never started and the walk on
+/// and the walk home were lost. So try a small file of the same protection class instead.
+enum FirstUnlock {
+    static func happened() -> Bool {
+        if UIApplication.shared.isProtectedDataAvailable { return true }
+        let dir = URL.applicationSupportDirectory
+        let probe = dir.appending(path: "first-unlock-probe")
+        if (try? Data(contentsOf: probe)) != nil { return true }
+        // Not there yet, or unreadable. Before the first unlock, making it fails too.
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data("ok".utf8).write(to: probe, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            return true
+        } catch {
+            return false
         }
     }
 }

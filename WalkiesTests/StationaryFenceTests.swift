@@ -79,12 +79,81 @@ struct StationaryFenceTests {
 struct LocationTrackerFenceTests {
     private final class FakeFence: Geofence {
         var onExit: (() -> Void)?
+        var onStopExit: (() -> Void)?
         var onOpen: ((Coordinate?) -> Void)?
         var placed: [Coordinate] = []
         var removed = 0
+        var stops: [Coordinate] = []
+        var stopsRemoved = 0
         func open() {}
         func place(around center: Coordinate, radius: Double) { placed.append(center) }
         func remove() { removed += 1 }
+        func placeStop(around center: Coordinate, radius: Double) { stops.append(center) }
+        func removeStop() { stopsRemoved += 1 }
+    }
+
+    /// 17 Nov: iOS suspended the app at a stop away from home and nothing woke it for the
+    /// rest of the walk, because the stationary fence stays round home.
+    @Test func aStopFenceFollowsYouWhileYouAreOutAndGoesWhenYouAreHome() {
+        let fake = FakeFence()
+        let tracker = LocationTracker(geofence: fake)
+        tracker.startAlwaysOnForTesting()
+        tracker.isWalking = { true }
+        tracker.isOnConfirmedWalk = { true }
+        fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
+        let manager = CLLocationManager()
+        // At home: no stop fence.
+        tracker.locationManager(manager, didUpdateLocations: [fix(-33.65, 115.35)])
+        #expect(fake.stops.isEmpty)
+        // A kilometre out: one round you.
+        tracker.locationManager(manager, didUpdateLocations: [fix(-33.659, 115.35)])
+        #expect(fake.stops == [Coordinate(lat: -33.659, lon: 115.35)])
+        // About 22 m on: close enough to leave where it is.
+        tracker.locationManager(manager, didUpdateLocations: [fix(-33.6592, 115.35)])
+        #expect(fake.stops.count == 1)
+        // A vague fix doesn't move it.
+        tracker.locationManager(manager, didUpdateLocations: [fix(-33.661, 115.35, accuracy: 200)])
+        #expect(fake.stops.count == 1)
+        // About 67 m on: moved up to you.
+        tracker.locationManager(manager, didUpdateLocations: [fix(-33.6596, 115.35)])
+        #expect(fake.stops.last == Coordinate(lat: -33.6596, lon: 115.35))
+        #expect(fake.stops.count == 2)
+        // Leaving it wakes the app, and the next fix puts a fresh one round you, however close.
+        fake.onStopExit?()
+        tracker.locationManager(manager, didUpdateLocations: [fix(-33.6597, 115.35)])
+        #expect(fake.stops.count == 3)
+        // Home again: it goes.
+        tracker.locationManager(manager, didUpdateLocations: [fix(-33.6501, 115.35)])
+        #expect(fake.stops.count == 3)
+        let removedBefore = fake.stopsRemoved
+        tracker.settle(at: fix(-33.65, 115.35), stationary: true)
+        #expect(fake.stopsRemoved > removedBefore)
+    }
+
+    /// Home's fence can still say you're in after a relaunch (it's only the last event it saw),
+    /// so a stop exit means look, and a fix back home is what takes it down.
+    @Test func aStopExitWhileHomeSaysInsideLooksBeforeRemovingIt() {
+        let fake = FakeFence()
+        let tracker = LocationTracker(geofence: fake)
+        tracker.startAlwaysOnForTesting()
+        fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
+        fake.onStopExit?()
+        #expect(fake.stopsRemoved == 0)
+        tracker.settle(at: fix(-33.65, 115.35), stationary: true)
+        #expect(fake.stopsRemoved == 1)
+    }
+
+    /// An exit that arrives before always on has started (as the launch it caused is still
+    /// going) isn't dropped.
+    @Test func anExitBeforeAlwaysOnStartsIsHandledOnceItDoes() {
+        let fake = FakeFence()
+        let tracker = LocationTracker(geofence: fake)
+        fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
+        fake.onStopExit?()
+        tracker.startAlwaysOnForTesting()
+        // It took you to be out, so a fix back home counts as coming back in.
+        tracker.settle(at: fix(-33.65, 115.35), stationary: true)
+        #expect(fake.stopsRemoved == 1)
     }
 
     private func fix(_ lat: Double, _ lon: Double, accuracy: Double = 10) -> CLLocation {
