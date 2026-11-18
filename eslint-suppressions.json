@@ -1,0 +1,60 @@
+{
+  "convex/accountDeletion.ts": {
+    "@convex-dev/explicit-table-ids": {
+      "count": 14
+    },
+    "@convex-dev/no-collect-in-query": {
+      "count": 3
+    }
+  },
+  "convex/devices.ts": {
+    "@convex-dev/no-collect-in-query": {
+      "count": 7
+    }
+  },
+  "convex/lore.ts": {
+    "@convex-dev/no-collect-in-query": {
+      "count": 15
+    }
+  },
+  "convex/loreMachines.ts": {
+    "@convex-dev/no-collect-in-query": {
+      "count": 3
+    }
+  },
+  "convex/loreRun.ts": {
+    "@convex-dev/no-collect-in-query": {
+      "count": 10
+    }
+  },
+  "convex/places.test.ts": {
+    "mikecann-lint/no-sleep-in-tests": {
+      "count": 2
+    }
+  },
+  "convex/places.ts": {
+    "@convex-dev/no-collect-in-query": {
+      "count": 1
+    }
+  },
+  "convex/stats.ts": {
+    "@convex-dev/no-collect-in-query": {
+      "count": 10
+    }
+  },
+  "convex/sync.ts": {
+    "@convex-dev/no-collect-in-query": {
+      "count": 3
+    }
+  },
+  "convex/teams.ts": {
+    "@convex-dev/no-collect-in-query": {
+      "count": 1
+    }
+  },
+  "convex/users.ts": {
+    "@convex-dev/no-collect-in-query": {
+      "count": 9
+    }
+  }
+}
