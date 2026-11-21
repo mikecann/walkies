@@ -7,6 +7,11 @@
       "count": 3
     }
   },
+  "convex/auth.test.ts": {
+    "@typescript-eslint/no-unused-vars": {
+      "count": 1
+    }
+  },
   "convex/devices.ts": {
     "@convex-dev/no-collect-in-query": {
       "count": 7
@@ -55,6 +60,9 @@
   "convex/users.ts": {
     "@convex-dev/no-collect-in-query": {
       "count": 9
+    },
+    "@typescript-eslint/no-unused-vars": {
+      "count": 1
     }
   }
 }
