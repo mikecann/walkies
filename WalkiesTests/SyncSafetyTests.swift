@@ -329,6 +329,14 @@ actor SafetyServer {
     private(set) var walks: [String: String] = [:]
     private(set) var deleted: [String] = []
     private var files: [String: Data] = [:]
+    enum PushFault: String, CaseIterable, Sendable { case upload, save, acknowledgement }
+    private var pushFault: PushFault?
+    func failNextPush(_ phase: PushFault) { pushFault = phase }
+    func uploadedWalk(_ id: UUID) throws -> Walk? {
+        try walks[id.uuidString].flatMap { file in
+            try files[file].map { try JSONDecoder().decode(Walk.self, from: $0) }
+        }
+    }
     private var failing: String?
     private var garbled: Set<String> = []
     private var paused = false
@@ -376,6 +384,7 @@ actor SafetyServer {
             return (200, files[file]!)
         }
         if url.path == "/upload" {
+            if pushFault == .upload { pushFault = nil; return (503, Data()) }
             let id = UUID().uuidString
             files[id] = body
             return (200, Data(#"{"storageId":"\#(id)"}"#.utf8))
@@ -384,6 +393,7 @@ actor SafetyServer {
         let path = call["path"] as! String
         let args = call["args"] as! [String: Any]
         calls.append(path)
+        if path == "sync:saveWalk", pushFault == .save { pushFault = nil; return (503, Data()) }
         var value: Any = NSNull()
         switch path {
         case "teams:myTeams": value = [] as [String]
@@ -391,6 +401,7 @@ actor SafetyServer {
         case "sync:savePlace": places[args["clientId"] as! String] = (args["updatedAt"] as! Double, args["file"] as! String)
         case "sync:saveWalk":
             walks[args["clientId"] as! String] = args["file"] as? String
+            if pushFault == .acknowledgement { pushFault = nil; return (503, Data()) }
             if let hook = duringSaveWalk {
                 duringSaveWalk = nil
                 await hook()

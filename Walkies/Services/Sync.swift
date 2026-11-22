@@ -40,6 +40,7 @@ final class SyncEngine {
     @ObservationIgnored private let isGuest: () -> Bool
     @ObservationIgnored private let makeClient: () async -> ConvexClient?
     @ObservationIgnored private let store: Store
+    @ObservationIgnored private let sleep: (Duration) async throws -> Void
     @ObservationIgnored private var state: SyncState
     @ObservationIgnored private var scheduled: Task<Void, Never>?
     @ObservationIgnored private var current: Task<Void, Never>?
@@ -55,13 +56,15 @@ final class SyncEngine {
 
     init(model: AppModel, store: Store, isSignedIn: @escaping () -> Bool, userId: @escaping () -> String? = { nil },
          isGuest: @escaping () -> Bool = { false },
-         makeClient: @escaping () async -> ConvexClient?) {
+         makeClient: @escaping () async -> ConvexClient?,
+         sleep: @escaping (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.model = model
         self.store = store
         self.isSignedIn = isSignedIn
         self.userId = userId
         self.isGuest = isGuest
         self.makeClient = makeClient
+        self.sleep = sleep
         state = store.loadSyncState()
         lastSynced = UserDefaults.standard.object(forKey: "lastSynced") as? Date
         model.placesDeleted = { [weak self] in self?.deleted(places: $0) }
@@ -86,11 +89,16 @@ final class SyncEngine {
         }
         scheduled?.cancel()
         scheduled = Task {
-            try? await Task.sleep(for: .seconds(2))
+            try? await sleep(.seconds(2))
             guard !Task.isCancelled else { return }
             await sync()
         }
     }
+
+    #if DEBUG
+    /// Waits for a scheduled sync without replacing it with a direct sync in tests.
+    func waitForScheduledSync() async { await scheduled?.value }
+    #endif
 
     func sync() async {
         guard isSignedIn() else { return }
@@ -154,7 +162,7 @@ final class SyncEngine {
         if model.worldGridResetPending, !pending {
             scheduled?.cancel()
             scheduled = Task {
-                try? await Task.sleep(for: .seconds(30))
+                try? await sleep(.seconds(30))
                 guard !Task.isCancelled else { return }
                 await sync()
             }
