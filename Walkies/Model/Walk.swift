@@ -53,6 +53,35 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
     /// walks saved before always-on existed still load.
     var automatic: Bool?
 
+    /// Local continuation metadata, kept separately from accepted walking points.
+    /// Missing in older files, where continuation defaults to walking.
+    var continuation: Continuation?
+    var resumeAnchor: TrackPoint?
+    var endReason: EndReason?
+
+    enum EndReason: String, Codable, Sendable {
+        case gap, quiet, rode, you, recovered
+        case alwaysOnOff = "always on off"
+    }
+
+    enum Continuation: String, Codable, Sendable {
+        case walking, rode
+
+        enum Event { case observedRide, acceptedWalkingStep, finished }
+
+        /// A rejected riding fix must survive until a walking step settles the arrival.
+        func moving(_ event: Event) -> Self {
+            switch (self, event) {
+            case (_, .observedRide): .rode
+            case (_, .acceptedWalkingStep), (_, .finished): .walking
+            }
+        }
+    }
+
+    mutating func continueAfter(_ event: Continuation.Event) {
+        continuation = (continuation ?? .walking).moving(event)
+    }
+
     /// Old server files may still contain local-grid hexes. Keep only their GPS.
     mutating func resetGridCoverage() {
         gridVersion = HexGrid.version
@@ -110,9 +139,14 @@ nonisolated struct CoverageTracer: Sendable {
     mutating func restart(from point: TrackPoint) { anchor = point }
 
     mutating func add(_ point: TrackPoint) -> Step {
+        // Motion classification remains valid even when the GPS fix is inaccurate.
+        if point.wheels == true {
+            anchor = nil
+            return .none
+        }
         guard point.accuracy >= 0, point.accuracy <= Self.maxAccuracy else { return .none }
         // On a bike or in a car: start again from scratch once you're back on foot.
-        if point.wheels == true || (point.speed ?? 0) > Self.maxSpeed {
+        if (point.speed ?? 0) > Self.maxSpeed {
             anchor = nil
             return .none
         }

@@ -1,0 +1,302 @@
+{
+  "version": 1,
+  "startTime": 100000,
+  "origin": {
+    "lat": 12.345,
+    "lon": 45.678
+  },
+  "initial": {
+    "xs": [
+      0,
+      50,
+      100,
+      150,
+      200,
+      250,
+      300,
+      350,
+      400
+    ],
+    "interval": 40
+  },
+  "scenarios": [
+    {
+      "name": "known ride uninterrupted",
+      "events": [
+        {
+          "action": "fix",
+          "x": 450,
+          "time": 340,
+          "wheels": true
+        },
+        {
+          "action": "fix",
+          "x": 900,
+          "time": 720
+        },
+        {
+          "action": "fix",
+          "x": 950,
+          "time": 760
+        }
+      ],
+      "expected": {
+        "active": "different",
+        "finished": 1,
+        "points": 2,
+        "endTime": 320,
+        "startTime": 720,
+        "finishedDistance": 400,
+        "distance": 50
+      }
+    },
+    {
+      "name": "known ride then relaunch",
+      "events": [
+        {
+          "action": "fix",
+          "x": 450,
+          "time": 340,
+          "wheels": true
+        },
+        {
+          "action": "relaunch"
+        },
+        {
+          "action": "fix",
+          "x": 900,
+          "time": 720
+        },
+        {
+          "action": "fix",
+          "x": 950,
+          "time": 760
+        }
+      ],
+      "expected": {
+        "active": "different",
+        "finished": 1,
+        "points": 2,
+        "endTime": 320,
+        "startTime": 720,
+        "finishedDistance": 400,
+        "distance": 50
+      }
+    },
+    {
+      "name": "known ride then arrival relaunch",
+      "events": [
+        {
+          "action": "fix",
+          "x": 450,
+          "time": 340,
+          "wheels": true
+        },
+        {
+          "action": "fix",
+          "x": 900,
+          "time": 720
+        },
+        {
+          "action": "relaunch"
+        },
+        {
+          "action": "fix",
+          "x": 950,
+          "time": 760
+        }
+      ],
+      "expected": {
+        "active": "different",
+        "finished": 1,
+        "points": 2,
+        "endTime": 320,
+        "startTime": 720,
+        "finishedDistance": 400,
+        "distance": 50
+      }
+    },
+    {
+      "name": "walking rest then relaunch",
+      "events": [
+        {
+          "action": "advance",
+          "time": 500
+        },
+        {
+          "action": "relaunch"
+        },
+        {
+          "action": "fix",
+          "x": 450,
+          "time": 520
+        },
+        {
+          "action": "fix",
+          "x": 500,
+          "time": 560
+        }
+      ],
+      "expected": {
+        "active": "same",
+        "finished": 0,
+        "points": 11
+      }
+    },
+    {
+      "name": "walking dropout then relaunch",
+      "events": [
+        {
+          "action": "relaunch"
+        },
+        {
+          "action": "fix",
+          "x": 600,
+          "time": 500
+        },
+        {
+          "action": "fix",
+          "x": 650,
+          "time": 540
+        }
+      ],
+      "expected": {
+        "active": "same",
+        "finished": 0,
+        "points": 11
+      }
+    },
+    {
+      "name": "wild fix then relaunch",
+      "events": [
+        {
+          "action": "fix",
+          "x": 700,
+          "time": 325,
+          "speed": 9
+        },
+        {
+          "action": "relaunch"
+        },
+        {
+          "action": "fix",
+          "x": 450,
+          "time": 365
+        },
+        {
+          "action": "fix",
+          "x": 500,
+          "time": 405
+        }
+      ],
+      "expected": {
+        "active": "same",
+        "finished": 0,
+        "points": 11
+      }
+    },
+    {
+      "name": "walking exactly at ten minute gap",
+      "events": [
+        {
+          "action": "fix",
+          "x": 450,
+          "time": 920
+        },
+        {
+          "action": "fix",
+          "x": 500,
+          "time": 960
+        }
+      ],
+      "expected": {
+        "active": "different",
+        "finished": 1,
+        "points": 2,
+        "endTime": 320,
+        "startTime": 920,
+        "finishedDistance": 400,
+        "distance": 50
+      }
+    },
+    {
+      "name": "relaunch exactly at ten minute gap",
+      "events": [
+        {
+          "action": "advance",
+          "time": 920
+        },
+        {
+          "action": "relaunch"
+        }
+      ],
+      "expected": {
+        "active": "none",
+        "finished": 1,
+        "endTime": 320
+      }
+    },
+    {
+      "name": "no further fixes stale check",
+      "events": [
+        {
+          "action": "advance",
+          "time": 920.001
+        },
+        {
+          "action": "stale"
+        }
+      ],
+      "expected": {
+        "active": "none",
+        "finished": 1,
+        "endTime": 320
+      }
+    },
+    {
+      "name": "another vague wheels fix invalidates old arrival",
+      "events": [
+        {
+          "action": "fix",
+          "x": 450,
+          "time": 340,
+          "wheels": true
+        },
+        {
+          "action": "fix",
+          "x": 900,
+          "time": 720
+        },
+        {
+          "action": "fix",
+          "x": 905,
+          "time": 730,
+          "wheels": true,
+          "accuracy": 80
+        },
+        {
+          "action": "relaunch"
+        },
+        {
+          "action": "fix",
+          "x": 950,
+          "time": 760
+        },
+        {
+          "action": "fix",
+          "x": 1000,
+          "time": 800
+        }
+      ],
+      "expected": {
+        "active": "different",
+        "finished": 1,
+        "points": 2,
+        "endTime": 320,
+        "startTime": 760,
+        "finishedDistance": 400,
+        "distance": 50
+      }
+    }
+  ]
+}

@@ -45,13 +45,14 @@ for name in ['Store', 'Sync', 'Convex', 'OSMClient', 'CachedPlaceData', 'CityBui
     shutil.copy(f'Walkies/Services/{name}.swift', root / 'Sources/Walkies')
 shutil.copy('Walkies/AppModel.swift', root / 'Sources/Walkies')
 shutil.copy('scripts/progression-test-support/Platform.swift', root / 'Sources/Walkies')
-for name in ['ModelFixesTests', 'AlwaysOnRideTests', 'RideRelaunchTests', 'StepTests', 'ProgressionTests', 'WalkRecapTests', 'LevelMeterTests', 'ProgressionIntegrationTests', 'TeamTests', 'CloudTests', 'TrailLayoutTests', 'CoverageTests', 'HexGridTests', 'WorldGridResetTests', 'LoreTests', 'SecretsBookTests', 'SyncSafetyTests', 'FixtureExportTests', 'WalkableRuleTests', 'MistTests']:
+for name in ['ModelFixesTests', 'AlwaysOnRideTests', 'RideRelaunchTests', 'WalkLifecycleTests', 'WalkBoundaryTests', 'ExplicitEndTests', 'WalkDiagnosticsTests', 'StepTests', 'ProgressionTests', 'WalkRecapTests', 'LevelMeterTests', 'ProgressionIntegrationTests', 'TeamTests', 'CloudTests', 'TrailLayoutTests', 'CoverageTests', 'HexGridTests', 'WorldGridResetTests', 'LoreTests', 'SecretsBookTests', 'SyncSafetyTests', 'FixtureExportTests', 'WalkableRuleTests', 'MistTests']:
     shutil.copy(f'WalkiesTests/{name}.swift', root / 'Tests/WalkiesTests')
 print('macOS model suites: ' + ', '.join(p.stem for p in sorted((root / 'Tests/WalkiesTests').glob('*.swift'))))
 print('Native-only coverage: ModelFixesTests.anAutomaticPauseKeepsTheSameWalkAndResumesCoverage, StationaryFenceTests (run in iOS host)')
 # CloudTests builds its suburbs from these.
 shutil.copy('TestSupport/CloudFixtures.swift', root / 'Tests/WalkiesTests')
 PY
+export WALKIES_LIFECYCLE_FIXTURES="$PWD/shared/fixtures/walk-lifecycle.json"
 export WALKIES_TEST_ROOT="$PWD/build/progression-test-data"
 export CLANG_MODULE_CACHE_PATH="$PWD/build/module-cache"
 swift test --disable-sandbox --package-path build/progression-model-tests \
