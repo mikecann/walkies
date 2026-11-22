@@ -7,6 +7,9 @@ python3 - <<'PY'
 from pathlib import Path
 import shutil
 root = Path('build/progression-model-tests')
+# Clear generated sources, keeping only SwiftPM's build cache between runs.
+shutil.rmtree(root / 'Sources', ignore_errors=True)
+shutil.rmtree(root / 'Tests', ignore_errors=True)
 (root / 'Sources/Walkies').mkdir(parents=True, exist_ok=True)
 (root / 'Tests/WalkiesTests').mkdir(parents=True, exist_ok=True)
 (root / 'Package.swift').write_text('''// swift-tools-version: 6.0
@@ -38,12 +41,14 @@ notifier = Path('Walkies/Services/Notifier.swift').read_text()
 (root / 'Sources/Walkies/PushTokens.swift').write_text('import Foundation\n' + notifier[notifier.index('/// Where tapping a push'):])
 # Exercise the actual app integration and sync on macOS too. Sensors and the
 # notification/account UI are stubbed; networking uses a URLProtocol test server.
-for name in ['Store', 'Sync', 'Convex', 'OSMClient', 'CachedPlaceData', 'CityBuilder', 'TeamsAPI']:
+for name in ['Store', 'Sync', 'Convex', 'OSMClient', 'CachedPlaceData', 'CityBuilder', 'TeamsAPI', 'TrackerTrace']:
     shutil.copy(f'Walkies/Services/{name}.swift', root / 'Sources/Walkies')
 shutil.copy('Walkies/AppModel.swift', root / 'Sources/Walkies')
 shutil.copy('scripts/progression-test-support/Platform.swift', root / 'Sources/Walkies')
-for name in ['StepTests', 'ProgressionTests', 'WalkRecapTests', 'LevelMeterTests', 'ProgressionIntegrationTests', 'TeamTests', 'CloudTests', 'TrailLayoutTests', 'CoverageTests', 'HexGridTests', 'WorldGridResetTests', 'LoreTests', 'SecretsBookTests', 'SyncSafetyTests', 'FixtureExportTests', 'WalkableRuleTests', 'MistTests']:
+for name in ['ModelFixesTests', 'AlwaysOnRideTests', 'RideRelaunchTests', 'StepTests', 'ProgressionTests', 'WalkRecapTests', 'LevelMeterTests', 'ProgressionIntegrationTests', 'TeamTests', 'CloudTests', 'TrailLayoutTests', 'CoverageTests', 'HexGridTests', 'WorldGridResetTests', 'LoreTests', 'SecretsBookTests', 'SyncSafetyTests', 'FixtureExportTests', 'WalkableRuleTests', 'MistTests']:
     shutil.copy(f'WalkiesTests/{name}.swift', root / 'Tests/WalkiesTests')
+print('macOS model suites: ' + ', '.join(p.stem for p in sorted((root / 'Tests/WalkiesTests').glob('*.swift'))))
+print('Native-only coverage: ModelFixesTests.anAutomaticPauseKeepsTheSameWalkAndResumesCoverage, StationaryFenceTests (run in iOS host)')
 # CloudTests builds its suburbs from these.
 shutil.copy('TestSupport/CloudFixtures.swift', root / 'Tests/WalkiesTests')
 PY
@@ -51,4 +56,11 @@ export WALKIES_TEST_ROOT="$PWD/build/progression-test-data"
 export CLANG_MODULE_CACHE_PATH="$PWD/build/module-cache"
 swift test --disable-sandbox --package-path build/progression-model-tests \
     --scratch-path build/progression-model-tests/.build \
-    -Xswiftc -default-isolation -Xswiftc MainActor -Xswiftc -strict-concurrency=complete "$@"
+    -Xswiftc -default-isolation -Xswiftc MainActor -Xswiftc -strict-concurrency=complete "$@" 2>&1 | tee build/progression-model-tests/test-output.log
+# SwiftPM returns success for a misspelled filter. That must not pass a regression gate.
+python3 - <<'PY_CHECK'
+from pathlib import Path
+import sys
+if 'Test run with 0 tests passed' in Path('build/progression-model-tests/test-output.log').read_text():
+    sys.exit('No model tests matched. Check the filter and included suites.')
+PY_CHECK

@@ -117,6 +117,8 @@ struct ModelFixesTests {
         #expect(try #require(walk.points.first).coordinate.distance(to: coordinate(in: place, x: -400)) < 1)
     }
 
+    #if canImport(UIKit)
+    // Requires the real iOS tracker; the macOS checker replaces OS services.
     @Test func anAutomaticPauseKeepsTheSameWalkAndResumesCoverage() async throws {
         let store = store()
         defer { store.wipe() }
@@ -143,6 +145,8 @@ struct ModelFixesTests {
         #expect(try #require(model.activeWalk).distance > before.distance + 90)
         #expect(model.walks.isEmpty)
     }
+
+    #endif
 
     @Test func onlyTheVisibleMapAsksForForegroundAccuracy() {
         let store = store()
