@@ -41,11 +41,11 @@ notifier = Path('Walkies/Services/Notifier.swift').read_text()
 (root / 'Sources/Walkies/PushTokens.swift').write_text('import Foundation\n' + notifier[notifier.index('/// Where tapping a push'):])
 # Exercise the actual app integration and sync on macOS too. Sensors and the
 # notification/account UI are stubbed; networking uses a URLProtocol test server.
-for name in ['Store', 'Sync', 'Convex', 'OSMClient', 'CachedPlaceData', 'CityBuilder', 'TeamsAPI', 'TrackerTrace']:
+for name in ['Store', 'Sync', 'Convex', 'OSMClient', 'CachedPlaceData', 'CityBuilder', 'TeamsAPI', 'TrackerTrace', 'AppStartup', 'FirstUnlock']:
     shutil.copy(f'Walkies/Services/{name}.swift', root / 'Sources/Walkies')
 shutil.copy('Walkies/AppModel.swift', root / 'Sources/Walkies')
 shutil.copy('scripts/progression-test-support/Platform.swift', root / 'Sources/Walkies')
-for name in ['ModelFixesTests', 'AlwaysOnRideTests', 'RideRelaunchTests', 'WalkLifecycleTests', 'WalkBoundaryTests', 'ExplicitEndTests', 'WalkDiagnosticsTests', 'StepTests', 'ProgressionTests', 'WalkRecapTests', 'LevelMeterTests', 'ProgressionIntegrationTests', 'TeamTests', 'CloudTests', 'TrailLayoutTests', 'CoverageTests', 'HexGridTests', 'WorldGridResetTests', 'LoreTests', 'SecretsBookTests', 'SyncSafetyTests', 'FixtureExportTests', 'WalkableRuleTests', 'MistTests']:
+for name in ['ModelFixesTests', 'AlwaysOnRideTests', 'RideRelaunchTests', 'WalkLifecycleTests', 'WalkBoundaryTests', 'ExplicitEndTests', 'WalkDiagnosticsTests', 'StartupTests', 'StoreTests', 'StoreFailureTests', 'SyncRecoveryTests', 'StepTests', 'ProgressionTests', 'WalkRecapTests', 'LevelMeterTests', 'ProgressionIntegrationTests', 'TeamTests', 'CloudTests', 'TrailLayoutTests', 'CoverageTests', 'HexGridTests', 'WorldGridResetTests', 'LoreTests', 'SecretsBookTests', 'SyncSafetyTests', 'FixtureExportTests', 'WalkableRuleTests', 'MistTests']:
     shutil.copy(f'WalkiesTests/{name}.swift', root / 'Tests/WalkiesTests')
 print('macOS model suites: ' + ', '.join(p.stem for p in sorted((root / 'Tests/WalkiesTests').glob('*.swift'))))
 print('Native-only coverage: ModelFixesTests.anAutomaticPauseKeepsTheSameWalkAndResumesCoverage, StationaryFenceTests (run in iOS host)')
