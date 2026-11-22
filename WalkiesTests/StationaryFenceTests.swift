@@ -77,6 +77,11 @@ struct StationaryFenceTests {
 
 @MainActor
 struct LocationTrackerFenceTests {
+    private func makeTracker(geofence: any Geofence) -> LocationTracker {
+        LocationTracker(geofence: geofence, manager: TrackingTestDriver(),
+                        makeBackgroundSession: { TrackingTestSession() }, makeAlwaysSession: { TrackingTestSession() })
+    }
+
     private final class FakeFence: Geofence {
         var onExit: (() -> Void)?
         var onStopExit: (() -> Void)?
@@ -96,8 +101,8 @@ struct LocationTrackerFenceTests {
     /// rest of the walk, because the stationary fence stays round home.
     @Test func aStopFenceFollowsYouWhileYouAreOutAndGoesWhenYouAreHome() {
         let fake = FakeFence()
-        let tracker = LocationTracker(geofence: fake)
-        tracker.startAlwaysOnForTesting()
+        let tracker = makeTracker(geofence: fake)
+        tracker.startAlwaysOn()
         tracker.isWalking = { true }
         tracker.isOnConfirmedWalk = { true }
         fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
@@ -123,19 +128,21 @@ struct LocationTrackerFenceTests {
         tracker.locationManager(manager, didUpdateLocations: [fix(-33.6597, 115.35)])
         #expect(fake.stops.count == 3)
         // Home again: it goes.
+        let removedBefore = fake.stopsRemoved
         tracker.locationManager(manager, didUpdateLocations: [fix(-33.6501, 115.35)])
         #expect(fake.stops.count == 3)
-        let removedBefore = fake.stopsRemoved
-        tracker.settle(at: fix(-33.65, 115.35), stationary: true)
         #expect(fake.stopsRemoved > removedBefore)
+        let removedAtHome = fake.stopsRemoved
+        tracker.settle(at: fix(-33.65, 115.35), stationary: true)
+        #expect(fake.stopsRemoved == removedAtHome)
     }
 
     /// Home's fence can still say you're in after a relaunch (it's only the last event it saw),
     /// so a stop exit means look, and a fix back home is what takes it down.
     @Test func aStopExitWhileHomeSaysInsideLooksBeforeRemovingIt() {
         let fake = FakeFence()
-        let tracker = LocationTracker(geofence: fake)
-        tracker.startAlwaysOnForTesting()
+        let tracker = makeTracker(geofence: fake)
+        tracker.startAlwaysOn()
         fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
         fake.onStopExit?()
         #expect(fake.stopsRemoved == 0)
@@ -147,10 +154,10 @@ struct LocationTrackerFenceTests {
     /// going) isn't dropped.
     @Test func anExitBeforeAlwaysOnStartsIsHandledOnceItDoes() {
         let fake = FakeFence()
-        let tracker = LocationTracker(geofence: fake)
+        let tracker = makeTracker(geofence: fake)
         fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
         fake.onStopExit?()
-        tracker.startAlwaysOnForTesting()
+        tracker.startAlwaysOn()
         // It took you to be out, so a fix back home counts as coming back in.
         tracker.settle(at: fix(-33.65, 115.35), stationary: true)
         #expect(fake.stopsRemoved == 1)
@@ -163,7 +170,7 @@ struct LocationTrackerFenceTests {
 
     @Test func placesTheFenceWhereYouSettleAndRemovesItWhenTurnedOff() {
         let fake = FakeFence()
-        let tracker = LocationTracker(geofence: fake)
+        let tracker = makeTracker(geofence: fake)
         fake.onOpen?(nil)
         tracker.settle(at: fix(-33.65, 115.35), stationary: false)
         tracker.settle(at: fix(-33.65, 115.35), stationary: true)
@@ -176,7 +183,7 @@ struct LocationTrackerFenceTests {
 
     @Test func keepsTheFenceFromLastTimeWhenItOpens() {
         let fake = FakeFence()
-        let tracker = LocationTracker(geofence: fake)
+        let tracker = makeTracker(geofence: fake)
         fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
         tracker.settle(at: fix(-33.65, 115.35), stationary: true)
         #expect(fake.placed.isEmpty)
@@ -189,7 +196,7 @@ struct LocationTrackerFenceTests {
 
     @Test func aFixBeforeTheSavedFenceLoadsDoesNotReplaceIt() {
         let fake = FakeFence()
-        let tracker = LocationTracker(geofence: fake)
+        let tracker = makeTracker(geofence: fake)
         // Woken by leaving home: a fix comes in before CLMonitor hands the fence back.
         tracker.settle(at: fix(-33.659, 115.35), stationary: true)
         #expect(fake.placed.isEmpty)
@@ -200,7 +207,7 @@ struct LocationTrackerFenceTests {
 
     @Test func theFenceStaysRoundHomeThroughWalksAndShortStops() {
         let fake = FakeFence()
-        let tracker = LocationTracker(geofence: fake)
+        let tracker = makeTracker(geofence: fake)
         var walking = true
         tracker.isWalking = { walking }
         fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
@@ -250,7 +257,7 @@ struct LocationTrackerFenceTests {
     }
 
     @Test func anAutomaticPauseKeepsALightWatchAndResumesOnMotion() {
-        let tracker = LocationTracker(geofence: FakeFence())
+        let tracker = makeTracker(geofence: FakeFence())
         tracker.isOnConfirmedWalk = { true }
         var still = false
         tracker.isStill = { still }
@@ -264,7 +271,7 @@ struct LocationTrackerFenceTests {
     }
 
     @Test func aNewStillAnswerEndsAnUnconfirmedWake() {
-        let tracker = LocationTracker(geofence: FakeFence())
+        let tracker = makeTracker(geofence: FakeFence())
         tracker.isStill = { true }
         #expect(tracker.watch == .live)
         tracker.motionChanged()
@@ -281,7 +288,7 @@ struct LocationTrackerFenceTests {
 
     @Test func aPausedAutomaticWalkResumesInsideItsFence() {
         let fake = FakeFence()
-        let tracker = LocationTracker(geofence: fake)
+        let tracker = makeTracker(geofence: fake)
         tracker.isOnConfirmedWalk = { true }
         var still = true
         tracker.isStill = { still }
@@ -295,7 +302,7 @@ struct LocationTrackerFenceTests {
 
     @Test func theFenceFromLastTimeMeansYouAreInsideIt() {
         let fake = FakeFence()
-        let tracker = LocationTracker(geofence: fake)
+        let tracker = makeTracker(geofence: fake)
         #expect(tracker.watch == .live)
         fake.onOpen?(Coordinate(lat: -33.65, lon: 115.35))
         #expect(tracker.watch == .idle)
@@ -305,7 +312,7 @@ struct LocationTrackerFenceTests {
 
     @Test func settlingPutsYouInsideTheNewFence() {
         let fake = FakeFence()
-        let tracker = LocationTracker(geofence: fake)
+        let tracker = makeTracker(geofence: fake)
         fake.onOpen?(nil)
         tracker.isOnWheels = { true }
         #expect(tracker.watch == .light)
@@ -315,7 +322,7 @@ struct LocationTrackerFenceTests {
 
     @Test func waitsWhileYouAreOnAWalk() {
         let fake = FakeFence()
-        let tracker = LocationTracker(geofence: fake)
+        let tracker = makeTracker(geofence: fake)
         fake.onOpen?(nil)
         tracker.isWalking = { true }
         tracker.settle(at: fix(-33.65, 115.35), stationary: false)

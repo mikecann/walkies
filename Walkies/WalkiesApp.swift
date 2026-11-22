@@ -8,17 +8,33 @@ import UserNotifications
 /// first unlock since it started, when saved files and the Keychain can't be read yet,
 /// so they wait for it.
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
-    private lazy var locked = !FirstUnlock.happened()
+    private lazy var startup = AppStartup(
+        waitForUnlock: !FirstUnlock.happened(),
+        openFence: { [weak self] in self?.model.tracker.openFence() },
+        observeUnlock: { callback in
+            let observer = NotificationCenter.default.addObserver(
+                forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main
+            ) { _ in MainActor.assumeIsolated { callback() } }
+            return { NotificationCenter.default.removeObserver(observer) }
+        },
+        protectedDataAvailable: { UIApplication.shared.isProtectedDataAvailable },
+        loadSaved: { [weak self] in
+            guard let self else { return }
+            self.account.loadSession()
+            self.model.loadSaved()
+            self.sync.reload()
+        },
+        start: { [weak self] in self?.start() }
+    )
     lazy var model: AppModel = {
         #if DEBUG
         // App Store screenshots: a made-up explorer, never the saved data.
         if ScreenshotMode.isOn { return AppModel(store: ScreenshotMode.makeStore(), servicesEnabled: false, alwaysOn: false) }
         #endif
-        return AppModel(waitForUnlock: locked)
+        return AppModel(waitForUnlock: startup.waitForUnlock)
     }()
-    lazy var account = Account(waitForUnlock: locked)
+    lazy var account = Account(waitForUnlock: startup.waitForUnlock)
     lazy var sync = SyncEngine(model: model, account: account)
-    private var unlockObserver: NSObjectProtocol?
 
     func application(
         _ application: UIApplication,
@@ -33,19 +49,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // Chef (Seth's feedback board): opened from Settings rather than floating over the map.
         ChefKit.install(client: ChefConnection(account: account))
         ChefKit.isHidden = true
-        // Straight away, even before the first unlock, so the exit that relaunched us arrives.
-        model.tracker.openFence()
-        if model.locked {
-            unlockObserver = NotificationCenter.default.addObserver(
-                forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.unlocked() }
-            }
-            // In case it unlocked just before the observer was added.
-            if application.isProtectedDataAvailable { unlocked() }
-        } else {
-            start()
-        }
+        startup.launch()
         return true
     }
 
@@ -73,16 +77,6 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         PushTokens.save(deviceToken)
         sync.schedule()
-    }
-
-    private func unlocked() {
-        guard model.locked else { return }
-        if let unlockObserver { NotificationCenter.default.removeObserver(unlockObserver) }
-        unlockObserver = nil
-        account.loadSession()
-        model.loadSaved()
-        sync.reload()
-        start()
     }
 
     private func start() {
@@ -145,31 +139,6 @@ struct WalkiesApp: App {
             .environment(delegate.model)
             .environment(delegate.account)
             .environment(delegate.sync)
-        }
-    }
-}
-
-/// Whether the phone's been unlocked since it started, so saved files and the Keychain can be read.
-///
-/// `isProtectedDataAvailable` isn't the test: it's false whenever the phone's locked, not just
-/// before the first unlock, while Walkies' files (the default protection) and its Keychain item
-/// (after first unlock) can be read any time after that. On 17 Nov 2026 iOS relaunched the app
-/// at 6:01 pm as Mike set off from his mother-in-law's with the phone locked in his pocket, and
-/// it waited for an unlock that came at 8:27 pm, so always on never started and the walk on
-/// and the walk home were lost. So try a small file of the same protection class instead.
-enum FirstUnlock {
-    static func happened() -> Bool {
-        if UIApplication.shared.isProtectedDataAvailable { return true }
-        let dir = URL.applicationSupportDirectory
-        let probe = dir.appending(path: "first-unlock-probe")
-        if (try? Data(contentsOf: probe)) != nil { return true }
-        // Not there yet, or unreadable. Before the first unlock, making it fails too.
-        do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try Data("ok".utf8).write(to: probe, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-            return true
-        } catch {
-            return false
         }
     }
 }

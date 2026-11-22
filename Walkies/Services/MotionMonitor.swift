@@ -29,16 +29,25 @@ final class MotionMonitor {
     }
 
     private func update(with activity: CMMotionActivity) {
+        update(confidence: activity.confidence, stationary: activity.stationary,
+               walking: activity.walking, running: activity.running,
+               cycling: activity.cycling, automotive: activity.automotive)
+    }
+
+    /// The live sample's fields, separate from Core Motion's read-only sample object so
+    /// confidence and mixed classifications can be replayed without starting its service.
+    func update(confidence: CMMotionActivityConfidence, stationary: Bool,
+                walking: Bool, running: Bool, cycling: Bool, automotive: Bool) {
         // An uncertain sample mustn't wake GPS after a confident stationary answer.
-        guard activity.confidence != .low else { return }
-        still = activity.stationary && !activity.walking && !activity.running && activity.confidence != .low
-        if activity.walking || activity.running {
+        guard confidence != .low else { return }
+        still = stationary && !walking && !running
+        if walking || running {
             onWheels = false
             onFoot = true
-        } else if (activity.cycling || activity.automotive), activity.confidence != .low {
+        } else if cycling || automotive {
             onWheels = true
             onFoot = false
-        } else if activity.stationary {
+        } else if stationary {
             onFoot = false
         }
         // Stationary or unknown: keep the last answer. Sitting at the lights is still driving.
@@ -58,7 +67,7 @@ final class MotionMonitor {
     static let setOffWindow: TimeInterval = 30 * 60
     /// Standing still for longer than this means you hadn't set off yet. Shorter is a
     /// road crossing or the dog having a sniff.
-    static let longestPause: TimeInterval = 60
+    nonisolated static let longestPause: TimeInterval = 60
 
     /// When the on-foot stretch that's still going at `now` began, if there is one.
     nonisolated static func setOff(in stretches: [Stretch], now: Date) -> Date? {

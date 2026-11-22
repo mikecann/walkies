@@ -36,18 +36,32 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored var isStill: () -> Bool = { false }
     @ObservationIgnored var isOnFoot: () -> Bool = { false }
 
-    private let manager = CLLocationManager()
-    @ObservationIgnored private var backgroundSession: CLBackgroundActivitySession?
+    @ObservationIgnored private let manager: any LocationDriver
+    @ObservationIgnored private let makeBackgroundSession: () -> any TrackerSession
+    @ObservationIgnored private let makeAlwaysSession: () -> any TrackerSession
+    @ObservationIgnored private let now: () -> Date
+    @ObservationIgnored private let sleep: (Duration) async throws -> Void
+    @ObservationIgnored private var backgroundSession: (any TrackerSession)?
     /// Tells iOS always on wants Always permission. Without it Core Location treats an app that
     /// uses CLMonitor as "while using", so the fence might not wake it from the pocket once the
     /// background session (and its blue arrow) has gone. It doesn't show the arrow itself.
     /// Apple says to make it again as soon as the app launches in the background.
-    @ObservationIgnored private var alwaysSession: CLServiceSession?
+    @ObservationIgnored private var alwaysSession: (any TrackerSession)?
 
     var isDenied: Bool { authorization == .denied || authorization == .restricted }
 
-    init(geofence: any Geofence = MonitorFence.shared) {
+    init(geofence: any Geofence = MonitorFence.shared,
+         manager: any LocationDriver = CLLocationManager(),
+         makeBackgroundSession: @escaping () -> any TrackerSession = { CLBackgroundActivitySession() },
+         makeAlwaysSession: @escaping () -> any TrackerSession = { CLServiceSession(authorization: .always) },
+         now: @escaping () -> Date = { .now },
+         sleep: @escaping (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.geofence = geofence
+        self.manager = manager
+        self.makeBackgroundSession = makeBackgroundSession
+        self.makeAlwaysSession = makeAlwaysSession
+        self.now = now
+        self.sleep = sleep
         super.init()
         geofence.onOpen = { [weak self] center in
             guard let self else { return }
@@ -75,7 +89,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     func start() {
         stopLight()
         stopIdle()
-        backgroundSession = CLBackgroundActivitySession()
+        backgroundSession = makeBackgroundSession()
         manager.allowsBackgroundLocationUpdates = true
         manager.showsBackgroundLocationIndicator = true
         manager.startUpdatingLocation()
@@ -122,7 +136,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     @ObservationIgnored private var pocketFixes = 0
 
     /// How hard always on works.
-    enum Watch: Equatable {
+    nonisolated enum Watch: Equatable {
         /// Live updates: GPS while you're moving.
         case live
         /// Wi-Fi and cell towers, every 25 m or so: enough to notice you've got out of the car.
@@ -197,8 +211,9 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
             return
         }
         guard walkingTimer == nil, !walkingForAWhile else { return }
+        let sleep = self.sleep
         walkingTimer = Task { [weak self] in
-            try? await Task.sleep(for: Self.walkingCheck)
+            try? await sleep(Self.walkingCheck)
             guard let self, !Task.isCancelled else { return }
             self.walkingTimer = nil
             self.walkingForAWhile = true
@@ -207,7 +222,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     }
 
     private func noteMovement(_ location: CLLocation) {
-        guard stationary, let pausedAt, location.timestamp.timeIntervalSinceNow > -10,
+        guard stationary, let pausedAt, now().timeIntervalSince(location.timestamp) < 10,
               location.horizontalAccuracy >= 0 else { return }
         if pausedAt.distance(to: Coordinate(location.coordinate)) - location.horizontalAccuracy > StationaryFence.settleRadius {
             stationary = false
@@ -268,7 +283,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         } else if backgroundSession == nil, !hasAlwaysPermission || isInForeground() {
             // With Always permission, one made in the background (iOS relaunching the app)
             // wouldn't keep live updates going, and would hide that there's no real one.
-            backgroundSession = CLBackgroundActivitySession()
+            backgroundSession = makeBackgroundSession()
         }
     }
 
@@ -307,11 +322,12 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         startLight()
         manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         settleCheck?.cancel()
+        let sleep = self.sleep
         settleCheck = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(60))
+            try? await sleep(.seconds(60))
             guard let self, !Task.isCancelled else { return }
             if self.lightOn { self.manager.desiredAccuracy = kCLLocationAccuracyHundredMeters }
-            try? await Task.sleep(for: .seconds(240))
+            try? await sleep(.seconds(240))
             guard !Task.isCancelled else { return }
             self.lookToSettle()
         }
@@ -384,7 +400,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         guard !alwaysOnRunning else { return }
         alwaysOnRunning = true
         TrackerTrace.write("always on started")
-        if alwaysSession == nil { alwaysSession = CLServiceSession(authorization: .always) }
+        if alwaysSession == nil { alwaysSession = makeAlwaysSession() }
         // Left on by a manual walk earlier in this launch, it'd show the arrow all day.
         manager.showsBackgroundLocationIndicator = false
         manager.startMonitoringSignificantLocationChanges()
@@ -393,15 +409,6 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         if exitWaiting { exitWaiting = false; leftFence() }
         if stopExitWaiting { stopExitWaiting = false; leftStop() }
     }
-
-    #if DEBUG
-    /// Always on's bookkeeping without Core Location's sessions, for the fence tests.
-    func startAlwaysOnForTesting() {
-        alwaysOnRunning = true
-        if exitWaiting { exitWaiting = false; leftFence() }
-        if stopExitWaiting { stopExitWaiting = false; leftStop() }
-    }
-    #endif
 
     func stopAlwaysOn() {
         alwaysOnRunning = false
@@ -445,7 +452,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
                 for try await update in CLLocationUpdate.liveUpdates(.fitness) {
                     guard let self, !Task.isCancelled else { return }
                     last = update.location ?? last
-                    self.lastLive = update.stationary ? nil : .now
+                    self.lastLive = update.stationary ? nil : self.now()
                     self.stationary = update.stationary
                     if let location = update.location {
                         self.lastLocation = Coordinate(location.coordinate)
@@ -474,7 +481,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     private func noteBackInside(_ location: CLLocation) -> Bool {
         guard outside, let center = fence.center, location.horizontalAccuracy >= 0,
               location.horizontalAccuracy <= StationaryFence.worstAccuracy,
-              location.timestamp.timeIntervalSinceNow > -10,
+              now().timeIntervalSince(location.timestamp) < 10,
               center.distance(to: Coordinate(location.coordinate)) + location.horizontalAccuracy <= StationaryFence.radius
         else { return false }
         outside = false
@@ -488,7 +495,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     /// Moves the stationary fence when this fix means you've settled somewhere new.
     func settle(at location: CLLocation, stationary: Bool) {
         // Not a cached fix from wherever you were when updates started.
-        guard stationary || location.timestamp.timeIntervalSinceNow > -10 else { return }
+        guard stationary || now().timeIntervalSince(location.timestamp) < 10 else { return }
         let point = Coordinate(location.coordinate)
         if noteBackInside(location) { return }
         guard fenceLoaded else { return }
@@ -544,7 +551,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     private func followWithStopFence(_ location: CLLocation) {
         guard alwaysOnRunning, outside, fence.center != nil,
               location.horizontalAccuracy >= 0, location.horizontalAccuracy <= StationaryFence.worstAccuracy,
-              location.timestamp.timeIntervalSinceNow > -10 else { return }
+              now().timeIntervalSince(location.timestamp) < 10 else { return }
         let here = Coordinate(location.coordinate)
         // Back within home's circle: that fence will do, and the fix is about to say you're in.
         if let home = fence.center, home.distance(to: here) <= StationaryFence.radius { return }
@@ -569,7 +576,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         // It only goes up while you're out, so take it you're out, even when home's fence still
         // says you're in (after a relaunch that's just the last event it saw, not where you are).
         // The GPS this turns on settles it: a fix back home puts you inside and takes it down.
-        if fence.center != nil { outside = true }
+        outside = true
         wakeUp()
     }
 
@@ -577,7 +584,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
         stationary = false
         pausedAt = nil
         guard liveTask != nil, backgroundSession != nil else { return refreshWatch() }
-        if let lastLive, Date.now.timeIntervalSince(lastLive) < 10 { return }
+        if let lastLive, now().timeIntervalSince(lastLive) < 10 { return }
         startLiveUpdates()
     }
 
@@ -615,7 +622,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
                     // Not in a car: stopping at the lights isn't settling somewhere.
                     // Fresh fixes only: restarting the watch can hand back a cached one from
                     // home, which would look like you'd settled back there (Codex, 8 Nov).
-                    if lightOn || pocketOn, location.timestamp.timeIntervalSinceNow > -10,
+                    if lightOn || pocketOn, now().timeIntervalSince(location.timestamp) < 10,
                        !noteBackInside(location), !isOnWheels() {
                         settle(at: location, stationary: isStill())
                     }
