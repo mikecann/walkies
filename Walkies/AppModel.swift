@@ -1036,6 +1036,17 @@ final class AppModel {
     /// successor seed until final history and step counting release the predecessor.
     private func recordFinishContinuation(_ point: TrackPoint) {
         guard activeWalk?.pendingFinish?.reason == .rode else { return }
+        if let last = activeWalk?.pendingFinish?.successor?.walk.points.last,
+           point.time - last.time >= Self.autoWalkGap {
+            activeWalk?.pendingFinish?.closeSuccessor(reason: .gap, confirmDistance: Self.autoWalkConfirmDistance)
+            tracer = CoverageTracer()
+            if Self.canAnchor(point) {
+                tracer.restart(from: point)
+                activeWalk?.pendingFinish?.successor = Walk.NextWalk(arrival: point, point: nil)
+            }
+            saveNow(waiting: true)
+            return
+        }
         if Self.isRide(point) { invalidateSuccessorForRide(point); return }
         if let seed = activeWalk?.pendingFinish?.successor, seed.walk.points.count == 1,
            point.time - seed.arrival.time > Self.freshStart, Self.canAnchor(point) {
@@ -1049,7 +1060,7 @@ final class AppModel {
         let step = tracer.add(point)
         if !step.samples.isEmpty, let anchor {
             if let seed = activeWalk?.pendingFinish?.successor, seed.shouldSeparate(at: anchor) {
-                activeWalk?.pendingFinish?.closedSuccessors = (activeWalk?.pendingFinish?.closedSuccessors ?? []) + [seed]
+                activeWalk?.pendingFinish?.closeSuccessor(reason: .rode, confirmDistance: Self.autoWalkConfirmDistance)
                 activeWalk?.pendingFinish?.successor = point.time - anchor.time <= Self.freshStart
                     ? Walk.NextWalk(arrival: anchor, point: point)
                     : Walk.NextWalk(arrival: point, point: nil)

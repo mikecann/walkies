@@ -77,7 +77,7 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
             walk.continuation = .rode
             walk.resumeAnchor = nil
             walk.pendingFinish = PendingFinish(at: walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt,
-                                              reason: .rode, byYou: false, successor: successor,
+                                              reason: first.endReason ?? .rode, byYou: false, successor: successor,
                                               closedSuccessors: rest.isEmpty ? nil : rest)
             return walk
         }
@@ -97,6 +97,18 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
             }
             successor = nil
         }
+
+        mutating func closeSuccessor(reason: EndReason, confirmDistance: Double) {
+            if var seed = successor {
+                let points = seed.walk.points
+                if let first = points.first?.coordinate,
+                   points.contains(where: { first.distance(to: $0.coordinate) >= confirmDistance }) {
+                    seed.endReason = reason
+                    closedSuccessors = (closedSuccessors ?? []) + [seed]
+                }
+            }
+            successor = nil
+        }
     }
 
     /// The first accepted segment after a ride, owned by its next UUID before
@@ -108,6 +120,7 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
         var following: [TrackPoint]?
         var continuation: Continuation?
         var resumeAnchor: TrackPoint?
+        var endReason: EndReason?
 
         mutating func accept(from anchor: TrackPoint?, point next: TrackPoint) {
             continuation = .walking
