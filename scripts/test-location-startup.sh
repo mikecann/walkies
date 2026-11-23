@@ -23,7 +23,7 @@ for name in ['Geo', 'HexGrid', 'Walk']:
     shutil.copy(f'Walkies/Model/{name}.swift', root / 'Sources/Walkies')
 for name in ['AppStartup', 'FirstUnlock', 'LocationDriver', 'LocationTracker', 'MotionMonitor', 'StationaryFence', 'TrackerTrace']:
     shutil.copy(f'Walkies/Services/{name}.swift', root / 'Sources/Walkies')
-for name in ['StationaryFenceTests', 'LocationLaunchTests', 'TrackingTestDriver', 'StartupTests']:
+for name in ['StationaryFenceTests', 'LocationLaunchTests', 'TrackingTestDriver', 'StartupTests', 'FirstUnlockFileTests']:
     shutil.copy(f'WalkiesTests/{name}.swift', root / 'Tests/WalkiesTests')
 PY
 root="$PWD/build/location-startup-tests"
