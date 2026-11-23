@@ -43,6 +43,193 @@ class FinishRelaunchTest {
         visited = emptySet(), roads = emptyList(),
     )
 
+    @Test fun expiredOrDisabledConfirmedSeedsStillRevealTilesAndCreditShortOutings() {
+        for (steps in listOf(4, 8)) for (alwaysOn in listOf(false, true)) {
+            val (store, root) = tempStore()
+            try {
+                val place = place()
+                store.save(listOf(place)); store.flush()
+                val seed = com.mikecann.walkies.model.NextWalk(arrival = point(900.0, 100720.0), point = point(950.0, 100760.0),
+                    following = (2..steps).map { point(900.0 + it * 50, 100720.0 + it * 40) })
+                store.save(seed.walk())
+                val model = AppModel(store, FakeSettings(alwaysOn = alwaysOn), FakeLocation(), clock = { if (alwaysOn) 102000.0 else 101060.0 })
+                val savedCity = Store(root).loadCities().single()
+                assertTrue(savedCity.visited.isNotEmpty())
+                if (steps == 4) {
+                    assertTrue(model.walks.isEmpty())
+                    assertTrue(savedCity.tileCredits!!.single { it.id == seed.id }.hexes.isNotEmpty())
+                } else {
+                    assertEquals(seed.id, model.walks.single().id)
+                    assertTrue(model.walks.single().newTileHexesByPlace!!.values.any { it.isNotEmpty() })
+                }
+            } finally { root.parentFile.deleteRecursively() }
+        }
+    }
+
+    @Test fun legacyResumedVisitedRouteRecoversItsOriginalWalkCredit() {
+        val (store, root) = tempStore()
+        try {
+            val points = (0..8).map { point(it * 50.0, 100000.0 + it * 40) }
+            val original = Walk(startedAt = SwiftDate.epoch(points.first().time), points = points, automatic = true, distance = 400.0)
+            val city = place()
+            val visited = com.mikecann.walkies.model.CoverageTracer.samples(points).map { city.grid.hex(containing = it) }.toSet()
+            store.save(listOf(city.copy(visited = visited))); store.save(original)
+            val model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { 100340.0 })
+            assertTrue(model.activeWalk!!.newTileHexesByPlace!!.values.any { it.isNotEmpty() })
+            assertTrue(model.questTileCounts.getValue(original.id).values.sum() > 0)
+            model.endAutoWalk()
+            assertTrue(store.loadWalks().single().newTileHexesByPlace!!.values.any { it.isNotEmpty() })
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
+    @Test fun firstArrivalAfterAnotherRideSurvivesCompletionOrProcessDeath() {
+        for (relaunch in listOf(false, true)) {
+            val (store, root) = tempStore()
+            var copy: File? = null
+            try {
+                var now = 100000.0
+                var reply: ((Int?) -> Unit)? = null
+                var model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now },
+                    stepQuery = { _, _, done -> reply = done })
+                for (i in 0..8) { now = 100000.0 + i * 40; model.record(point(i * 50.0, now)) }
+                now = 100340.0; model.record(point(450.0, now).copy(wheels = true))
+                now = 100720.0; model.record(point(900.0, now))
+                now = 100760.0; model.record(point(950.0, now))
+                now = 100770.0; model.record(point(1000.0, now).copy(wheels = true))
+                now = 100800.0; model.record(point(2000.0, now))
+                val seed = model.activeWalk!!.pendingFinish!!.successor!!
+                assertEquals(1, seed.walk().points.size)
+                if (relaunch) {
+                    val (reopened, copiedRoot) = snapshot(root); copy = copiedRoot
+                    reply!!(400)
+                    model = AppModel(reopened, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now })
+                } else reply!!(400)
+                now = 100840.0; model.record(point(2050.0, now))
+                now = 100880.0; model.record(point(2100.0, now))
+                assertEquals(seed.id, model.activeWalk!!.id)
+                assertEquals(100800.0, model.activeWalk!!.startedAt.epochSeconds, 0.001)
+                assertEquals(3, model.activeWalk!!.points.size)
+                assertEquals(100.0, model.activeWalk!!.distance, 0.01)
+            } finally { root.parentFile.deleteRecursively(); copy?.parentFile?.deleteRecursively() }
+        }
+    }
+
+    @Test fun aSinglePointSeedRebasesAgainAfterAnotherLongPause() {
+        for (held in listOf(false, true)) {
+            val (store, root) = tempStore()
+            try {
+                var now = 100000.0
+                var reply: ((Int?) -> Unit)? = null
+                val query: ((SwiftDate, SwiftDate, (Int?) -> Unit) -> Unit)? = if (held) { _, _, done -> reply = done } else null
+                val model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now }, stepQuery = query)
+                for (i in 0..8) { now = 100000.0 + i * 40; model.record(point(i * 50.0, now)) }
+                now = 100340.0; model.record(point(450.0, now).copy(wheels = true))
+                now = 100400.0; model.record(point(900.0, now))
+                now = 100700.0; model.record(point(950.0, now))
+                val id = if (held) model.activeWalk!!.pendingFinish!!.successor!!.id else model.activeWalk!!.id
+                now = 100950.0; model.record(point(1000.0, now))
+                now = 100990.0; model.record(point(1050.0, now))
+                if (held) reply!!(400)
+                assertEquals(id, model.activeWalk!!.id)
+                assertEquals(100950.0, model.activeWalk!!.startedAt.epochSeconds, 0.001)
+                assertEquals(2, model.activeWalk!!.points.size)
+                assertEquals(50.0, model.activeWalk!!.distance, 0.01)
+            } finally { root.parentFile.deleteRecursively() }
+        }
+    }
+
+    @Test(timeout = 10000) fun manualEndDuringHeldHistoryFreezesTheRouteAtItsRequestedTime() = runBlocking {
+        val (store, root) = tempStore()
+        try {
+            val queue = ArrayDeque<Runnable>()
+            var held = true
+            val dispatcher = object : CoroutineDispatcher() {
+                override fun dispatch(context: CoroutineContext, block: Runnable) { if (held) queue.add(block) else block.run() }
+            }
+            var now = 100000.0
+            val model = AppModel(store, FakeSettings(alwaysOn = false), FakeLocation(), clock = { now }, historyScope = CoroutineScope(dispatcher))
+            model.startWalk()
+            model.record(point(0.0, now)); now += 40; model.record(point(50.0, now))
+            val original = model.activeWalk!!
+            now = 100060.0; model.endWalk()
+            now = 100080.0; model.record(point(100.0, now))
+            now = 100120.0; model.record(point(150.0, now))
+            assertEquals(original.points, model.activeWalk!!.points)
+            val finished = CompletableDeferred<Unit>()
+            val stop = model.listen { if (model.walks.any { it.id == original.id }) finished.complete(Unit) }
+            held = false
+            while (queue.isNotEmpty()) queue.removeFirst().run()
+            finished.await(); stop()
+            assertEquals(original.points, model.walks.single().points)
+            assertEquals(100060.0, model.walks.single().endedAt!!.epochSeconds, 0.001)
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
+    @Test fun enablingAlwaysOnAfterAManualFinishWriteFailureCanRetryThatManualFinish() {
+        val (store, root) = tempStore()
+        try {
+            var now = 100000.0
+            val model = AppModel(store, FakeSettings(alwaysOn = false), FakeLocation(), clock = { now })
+            model.startWalk(); model.record(point(0.0, now)); now += 40; model.record(point(50.0, now))
+            val original = model.activeWalk!!
+            model.saveNow(waiting = true)
+            val blocked = File(root, "walks/.${original.id.toString().uppercase()}.json.tmp")
+            assertTrue(blocked.mkdir())
+            now = 100060.0; model.alwaysOn = true
+            now = 100080.0; model.record(point(100.0, now))
+            assertEquals(original.points, model.activeWalk!!.points)
+            assertTrue(blocked.delete())
+            now = 100120.0; model.record(point(150.0, now))
+            assertEquals(original.id, model.walks.single().id)
+            assertEquals(original.points, model.walks.single().points)
+            assertEquals(100060.0, model.walks.single().endedAt!!.epochSeconds, 0.001)
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
+    @Test fun predecessorRecapExcludesTheSuccessorsCityProgress() {
+        val (store, root) = tempStore()
+        try {
+            store.save(listOf(place()))
+            var now = 100000.0
+            var reply: ((Int?) -> Unit)? = null
+            val model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now },
+                stepQuery = { _, _, done -> reply = done })
+            for (i in 0..8) { now = 100000.0 + i * 40; model.record(point(i * 50.0, now)) }
+            val beforeSuccessor = model.cities.single().visited
+            val original = model.activeWalk!!
+            now = 100340.0; model.record(point(450.0, now).copy(wheels = true))
+            for (i in 0..6) { now = 100720.0 + i * 40; model.record(point(900.0 + i * 50, now)) }
+            reply!!(400)
+            assertEquals(original.id, model.recap!!.walk.id)
+            assertEquals(beforeSuccessor, model.recap!!.after.single().visited)
+            assertTrue(model.cities.single().visited.size > beforeSuccessor.size)
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
+    @Test fun aFrozenConfirmedShortLegKeepsTileCreditAndDoesNotPolluteTheNextActiveLeg() {
+        val (store, root) = tempStore()
+        try {
+            store.save(listOf(place())); store.flush()
+            val short = com.mikecann.walkies.model.NextWalk(arrival = point(900.0, 100720.0), point = point(950.0, 100760.0),
+                following = (0..2).map { point(1000.0 + it * 50, 100800.0 + it * 40) })
+            val next = com.mikecann.walkies.model.NextWalk(arrival = point(1800.0, 100900.0), point = point(1850.0, 100940.0))
+            val request = com.mikecann.walkies.model.PendingWalkFinish(SwiftDate.epoch(100320.0), WalkEndReason.Rode, false,
+                successor = next, closedSuccessors = listOf(short))
+            val original = Walk(startedAt = SwiftDate.epoch(100000.0), automatic = true, distance = 400.0,
+                points = (0..8).map { point(it * 50.0, 100000.0 + it * 40) }, pendingFinish = request)
+            assertEquals(original, Codec.walk(Codec.walk(original)))
+            store.save(original)
+            val model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { 100970.0 })
+            assertEquals(next.id, model.activeWalk!!.id)
+            assertTrue(model.autoWalkPending)
+            assertTrue(model.freshTiles.isEmpty())
+            assertTrue(model.walks.none { it.id == short.id })
+            val credit = Store(root).loadCities().single().tileCredits!!.single { it.id == short.id }
+            assertTrue(credit.hexes.isNotEmpty())
+            assertTrue(Store(root).loadCities().single().visited.containsAll(credit.hexes))
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
     @Test fun aSecondRideCannotEraseAQualifiedSuccessorWhoseFileWriteIsBlocked() {
         val (store, root) = tempStore()
         var copy: File? = null
@@ -64,6 +251,9 @@ class FinishRelaunchTest {
             for (i in 0..6) { now = 100800.0 + i * 40; model.record(point(1000.0 + i * 50, now)) }
             assertEquals(9, model.activeWalk!!.pendingFinish!!.successor!!.walk().points.size)
             now = 101060.0; model.record(point(1350.0, now).copy(wheels = true, accuracy = 80.0))
+            now = 101080.0; model.record(point(1800.0, now))
+            now = 101120.0; model.record(point(1850.0, now))
+            val nextId = model.activeWalk!!.pendingFinish!!.successor!!.id
             model.saveNow(waiting = true)
             assertTrue(blocked.delete())
             val (reopened, copiedRoot) = snapshot(root)
@@ -76,7 +266,9 @@ class FinishRelaunchTest {
             assertEquals(400.0, saved.distance, 0.01)
             assertEquals(WalkEndReason.Rode, saved.endReason)
             assertEquals(original.points, recovered.walks.single { it.id == original.id }.points)
-            assertNull(recovered.activeWalk)
+            assertEquals(nextId, recovered.activeWalk!!.id)
+            assertEquals(101080.0, recovered.activeWalk!!.startedAt.epochSeconds, 0.001)
+            assertEquals(2, recovered.activeWalk!!.points.size)
         } finally { root.parentFile.deleteRecursively(); copy?.parentFile?.deleteRecursively() }
     }
 
