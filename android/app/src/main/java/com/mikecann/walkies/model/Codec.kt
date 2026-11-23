@@ -282,6 +282,7 @@ object Codec {
         next.following?.let { put("following", JsonArray(it.map(::trackPoint))) }
         next.continuation?.let { put("continuation", it.rawValue) }
         next.resumeAnchor?.let { put("resumeAnchor", trackPoint(it)) }
+        next.endReason?.let { put("endReason", it.rawValue) }
     }
 
     private fun nextWalk(e: JsonElement): NextWalk = e.obj().let { next ->
@@ -290,7 +291,10 @@ object Codec {
             next.opt("continuation")?.let { value ->
                 WalkContinuation.entries.firstOrNull { it.rawValue == (value as JsonPrimitive).content }
                     ?: throw Invalid("Unknown successor continuation $value")
-            }, next.opt("resumeAnchor")?.let(::trackPoint))
+            }, next.opt("resumeAnchor")?.let(::trackPoint), next.opt("endReason")?.let { value ->
+                WalkEndReason.entries.firstOrNull { it.rawValue == (value as JsonPrimitive).content }
+                    ?: throw Invalid("Unknown successor end reason $value")
+            })
     }
 
     private fun hexesByPlace(map: Map<String, Set<Hex>>) = JsonObject(map.mapValues { hexes(it.value) })

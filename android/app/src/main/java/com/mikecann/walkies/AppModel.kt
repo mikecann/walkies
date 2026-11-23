@@ -869,8 +869,14 @@ class AppModel(
     /** History/steps may be slow. Keep the next outing in the durable request meanwhile. */
     private fun recordPendingFinish(point: TrackPoint): Boolean {
         val walk = activeWalk ?: return false
-        val request = walk.pendingFinish ?: return false
+        var request = walk.pendingFinish ?: return false
         if (!walk.isAutomatic) { endWalk(); return true }
+        val last = request.successor?.walk()?.points?.lastOrNull()
+        if (last != null && point.time - last.time >= autoWalkGap) {
+            request = request.expired(AUTO_WALK_CONFIRM_DISTANCE)
+            activeWalk = walk.copy(pendingFinish = request)
+            tracer.restart(from = null)
+        }
         if (riding(point)) {
             activeWalk = walk.transition(WalkContinuation.Event.ObservedRide)
                 .copy(pendingFinish = request.observedRide(AUTO_WALK_CONFIRM_DISTANCE))
@@ -889,7 +895,7 @@ class AppModel(
         var closed = request.closedSuccessors
         val successor = when {
             existing != null && anchor != null && step.samples.isNotEmpty() && existing.shouldSeparate(anchor) -> {
-                closed = closed.orEmpty() + existing
+                closed = closed.orEmpty() + existing.copy(endReason = WalkEndReason.Rode)
                 if (point.time - anchor.time <= FRESH_START) NextWalk(arrival = anchor, point = point, resumeAnchor = point)
                     else NextWalk(arrival = point, resumeAnchor = point)
             }

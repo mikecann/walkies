@@ -49,7 +49,7 @@ enum class WalkEndReason(val rawValue: String) {
 data class NextWalk(
     val id: UUID = UUID.randomUUID(), val arrival: TrackPoint, val point: TrackPoint? = null,
     val following: List<TrackPoint>? = null, val continuation: WalkContinuation? = null,
-    val resumeAnchor: TrackPoint? = null,
+    val resumeAnchor: TrackPoint? = null, val endReason: WalkEndReason? = null,
 ) {
     private val route: List<TrackPoint> get() = (listOf(arrival) + listOfNotNull(point) + following.orEmpty())
         .fold(emptyList<TrackPoint>()) { points, next -> if (points.lastOrNull() == next) points else points + next }
@@ -58,6 +58,7 @@ data class NextWalk(
         distance = CoverageTracer.distance(route), automatic = true,
         continuation = continuation,
         resumeAnchor = resumeAnchor ?: route.last().takeIf { continuation != WalkContinuation.Rode },
+        endReason = endReason,
     )
 
     fun shouldSeparate(anchor: TrackPoint): Boolean {
@@ -73,7 +74,7 @@ data class NextWalk(
         if (points.lastOrNull() != anchor) points = points + anchor
         points = points + point
         return copy(point = points.getOrNull(1), following = points.drop(2).takeIf { it.isNotEmpty() },
-            continuation = null, resumeAnchor = point)
+            continuation = null, resumeAnchor = point, endReason = null)
     }
 }
 
@@ -91,7 +92,7 @@ data class PendingWalkFinish(
         val closed = closedSuccessors?.firstOrNull() ?: return successor?.walk()
         val walk = closed.walk()
         return walk.transition(WalkContinuation.Event.ObservedRide).copy(pendingFinish = PendingWalkFinish(
-            at = SwiftDate.epoch(walk.points.last().time), reason = WalkEndReason.Rode, byYou = false,
+            at = SwiftDate.epoch(walk.points.last().time), reason = closed.endReason ?: WalkEndReason.Rode, byYou = false,
             successor = successor, closedSuccessors = closedSuccessors.orEmpty().drop(1).takeIf { it.isNotEmpty() },
         ))
     }
@@ -102,6 +103,15 @@ data class PendingWalkFinish(
         val origin = points.firstOrNull()?.coordinate
         val confirmed = origin != null && points.any { origin.distance(it.coordinate) >= confirmationDistance }
         return copy(successor = if (confirmed) open!!.copy(continuation = WalkContinuation.Rode, resumeAnchor = null) else null)
+    }
+
+    fun expired(confirmationDistance: Double): PendingWalkFinish {
+        val open = successor ?: return this
+        val points = open.walk().points
+        val origin = points.first().coordinate
+        val confirmed = points.any { origin.distance(it.coordinate) >= confirmationDistance }
+        return copy(successor = null, closedSuccessors = (closedSuccessors.orEmpty() +
+            if (confirmed) listOf(open.copy(endReason = WalkEndReason.Gap)) else emptyList()).takeIf { it.isNotEmpty() })
     }
 }
 
