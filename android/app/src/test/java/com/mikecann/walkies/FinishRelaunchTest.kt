@@ -10,6 +10,12 @@ import com.mikecann.walkies.store.Store
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
+import com.mikecann.walkies.grid.Coordinate
+import com.mikecann.walkies.grid.HexGrid
+import com.mikecann.walkies.place.Boundary
+import com.mikecann.walkies.place.City
+import com.mikecann.walkies.place.GeoPolygon
 import kotlin.coroutines.CoroutineContext
 import org.junit.Assert.*
 import org.junit.Test
@@ -23,6 +29,100 @@ class FinishRelaunchTest {
         val (_, copy) = tempStore()
         root.copyRecursively(copy, overwrite = true)
         return Store(copy) to copy
+    }
+
+    private fun place() = City(
+        name = "Lifecycle", detail = "Tests",
+        boundary = Boundary(listOf(GeoPolygon(listOf(Coordinate(12.32, 45.65), Coordinate(12.37, 45.65),
+            Coordinate(12.37, 45.70), Coordinate(12.32, 45.70)), emptyList()))),
+        tiles = (0..180).map { HexGrid.hex(containing = point(it * 10.0, 0.0).coordinate) }.toSet(),
+        visited = emptySet(), roads = emptyList(),
+    )
+
+    @Test(timeout = 10000) fun heldHistoryNeverMergesOrReanchorsTheSuccessorAsMoreWalkingArrives() = runBlocking {
+        for (xs in listOf(listOf(560.0, 520.0, 480.0), listOf(900.0, 950.0, 1000.0))) {
+            val (store, root) = tempStore()
+            try {
+                val queue = ArrayDeque<Runnable>()
+                var held = true
+                val dispatcher = object : CoroutineDispatcher() {
+                    override fun dispatch(context: CoroutineContext, block: Runnable) {
+                        if (held) queue.add(block) else block.run()
+                    }
+                }
+                val original = Walk(startedAt = SwiftDate.epoch(100000.0), automatic = true,
+                    points = (0..8).map { point(it * 50.0, 100000.0 + it * 40) }, continuation = WalkContinuation.Rode)
+                store.save(original)
+                var now = 100400.0
+                val model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now },
+                    historyScope = CoroutineScope(dispatcher))
+                for ((i, x) in xs.withIndex()) { now = 100720.0 + i * 40; model.record(point(x, now)) }
+                assertEquals(original.points, model.activeWalk!!.points)
+                val seed = model.activeWalk!!.pendingFinish!!.successor!!
+                held = false
+                while (queue.isNotEmpty()) queue.removeFirst().run()
+                model.waitForHistory()
+                while (model.activeWalk?.id == original.id) yield()
+                assertEquals(original.points, model.walks.single().points)
+                assertEquals(100320.0, model.walks.single().endedAt!!.epochSeconds, 0.001)
+                assertEquals(seed.id, model.activeWalk!!.id)
+                assertEquals(100720.0, model.activeWalk!!.startedAt.epochSeconds, 0.001)
+                assertEquals(xs, model.activeWalk!!.points.map { kotlin.math.round((it.lat - 12.345) * 111195) })
+            } finally { root.parentFile.deleteRecursively() }
+        }
+    }
+
+    @Test fun aConfirmedSeedSavedBeforeCityCreditReplaysItsWholeRouteAtLaunch() {
+        val (store, root) = tempStore()
+        try {
+            val place = place()
+            store.save(listOf(place))
+            store.flush()
+            val seed = com.mikecann.walkies.model.NextWalk(arrival = point(900.0, 100720.0), point = point(950.0, 100760.0),
+                following = (0..4).map { point(1000.0 + it * 50, 100800.0 + it * 40) })
+            val original = Walk(startedAt = SwiftDate.epoch(100000.0), automatic = true,
+                points = (0..8).map { point(it * 50.0, 100000.0 + it * 40) }, pendingFinish =
+                    com.mikecann.walkies.model.PendingWalkFinish(SwiftDate.epoch(100320.0), WalkEndReason.Rode, false, seed))
+            store.save(original)
+            store.save(seed.walk())
+            assertNull(seed.walk().newTileHexesByPlace)
+            val model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { 100970.0 })
+            assertEquals(seed.id, model.activeWalk!!.id)
+            assertFalse(model.autoWalkPending)
+            val fresh = model.activeWalk!!.newTileHexesByPlace!!.getValue(place.id.toString().uppercase())
+            assertTrue(fresh.isNotEmpty())
+            assertTrue(Store(root).loadCities().single().visited.containsAll(fresh))
+            assertEquals(fresh.size, model.activeWalk!!.newTiles)
+            val again = AppModel(Store(root), FakeSettings(alwaysOn = true), FakeLocation(), clock = { 100980.0 })
+            assertEquals(fresh.size, again.activeWalk!!.newTiles)
+            assertEquals(fresh, again.activeWalk!!.newTileHexesByPlace!!.getValue(place.id.toString().uppercase()))
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
+    @Test fun walkingDuringTheStepWaitIsSavedAndCreditedWhenItsSuccessorIsAlreadyConfirmed() {
+        val (store, root) = tempStore()
+        try {
+            val place = place()
+            store.save(listOf(place))
+            var now = 100000.0
+            var reply: ((Int?) -> Unit)? = null
+            val model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now },
+                stepQuery = { _, _, done -> reply = done })
+            for (i in 0..8) { now = 100000.0 + i * 40; model.record(point(i * 50.0, now)) }
+            val original = model.activeWalk!!
+            now = 100340.0; model.record(point(450.0, now).copy(wheels = true))
+            for (i in 0..6) { now = 100720.0 + i * 40; model.record(point(900.0 + i * 50, now)) }
+            val seed = model.activeWalk!!.pendingFinish!!.successor!!
+            assertEquals(original.points, model.activeWalk!!.points)
+            reply!!(400)
+            assertEquals(original.points, model.walks.single().points)
+            assertEquals(seed.id, model.activeWalk!!.id)
+            assertEquals(7, model.activeWalk!!.points.size)
+            assertEquals(100720.0, model.activeWalk!!.startedAt.epochSeconds, 0.001)
+            assertFalse(model.autoWalkPending)
+            assertTrue(model.activeWalk!!.newTiles > 0)
+            assertEquals(model.activeWalk!!.newTiles, model.activeWalk!!.newTileHexesByPlace!!.values.sumOf { it.size })
+        } finally { root.parentFile.deleteRecursively() }
     }
 
     @Test fun pendingFinishAndSuccessorRoundTripWithoutARecursiveWalk() {

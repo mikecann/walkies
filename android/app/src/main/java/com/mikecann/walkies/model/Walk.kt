@@ -46,12 +46,13 @@ enum class WalkEndReason(val rawValue: String) {
 }
 
 /** The first confirmed segment after a ride, with an identity before its parent finishes. */
-data class NextWalk(val id: UUID = UUID.randomUUID(), val arrival: TrackPoint, val point: TrackPoint, val following: List<TrackPoint>? = null) {
+data class NextWalk(val id: UUID = UUID.randomUUID(), val arrival: TrackPoint, val point: TrackPoint? = null, val following: List<TrackPoint>? = null) {
+    private val route: List<TrackPoint> get() = (listOf(arrival) + listOfNotNull(point) + following.orEmpty())
+        .fold(emptyList<TrackPoint>()) { points, next -> if (points.lastOrNull() == next) points else points + next }
     fun walk() = Walk(
-        id = id, startedAt = SwiftDate.epoch(arrival.time), points = listOf(arrival, point) + following.orEmpty(),
-        distance = CoverageTracer.distance(listOf(arrival, point) + following.orEmpty()), automatic = true,
-        newTilesByPlace = emptyMap(), newTileHexesByPlace = emptyMap(), addedTilesByPlace = emptyMap(),
-        resumeAnchor = following?.lastOrNull() ?: point,
+        id = id, startedAt = SwiftDate.epoch(arrival.time), points = route,
+        distance = CoverageTracer.distance(route), automatic = true,
+        resumeAnchor = route.last(),
     )
 }
 

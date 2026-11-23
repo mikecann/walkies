@@ -18,11 +18,41 @@ import com.mikecann.walkies.model.uuidString
 import com.mikecann.walkies.store.Store
 import com.mikecann.walkies.tempStore
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
+import com.mikecann.walkies.model.Walk
+import com.mikecann.walkies.model.SwiftDate
 import org.junit.Assert.*
 import org.junit.Test
 
 /** Sensor/service callbacks are fake; model, fence policy, disk and HTTP sync are real. */
 class RestRelaunchSyncTest {
+    @Test(timeout = 10000) fun recoveredWalkWaitsForHistoryAndStepsBeforeReachingTheServer() = runBlocking {
+        val (store, root) = tempStore()
+        try {
+            val points = (0..8).map { TrackPoint(12.345 + it * 50 / 111195.0, 45.678, 100000.0 + it * 40, 5.0, speed = 1.0) }
+            val original = Walk(startedAt = SwiftDate.epoch(points.first().time), points = points, automatic = true)
+            store.save(original)
+            var reply: ((Int?) -> Unit)? = null
+            val model = AppModel(store, FakeSettings(alwaysOn = false), FakeLocation(), clock = { 101000.0 },
+                stepQuery = { _, _, done -> reply = done })
+            val server = FakeServer()
+            val client = ConvexClient(server.backend, http = server)
+            val engine = SyncEngine(model, store, isSignedIn = { true }, makeClient = { client }, scope = this)
+            val job = launch { engine.sync() }
+            while (engine.status != SyncEngine.Status.Syncing) yield()
+            yield()
+            assertFalse(job.isCompleted)
+            assertTrue(server.walks.isEmpty())
+            reply!!(432)
+            job.join()
+            val uploaded = Codec.walk(Codec.parse(server.files.getValue(server.walks.getValue(original.id.uuidString)).decodeToString()))
+            assertEquals(original.points, uploaded.points)
+            assertEquals(432, uploaded.steps)
+            assertEquals(SwiftDate.epoch(points.last().time), uploaded.endedAt)
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
     @Test fun aRestoredStopExitContinuesTheRouteThroughStepsDiskAndSync() = runBlocking {
         val (store, root) = tempStore()
         try {

@@ -236,7 +236,7 @@ object Codec {
                     put("successor", buildJsonObject {
                         put("id", next.id.uuidString)
                         put("arrival", trackPoint(next.arrival))
-                        put("point", trackPoint(next.point))
+                        next.point?.let { put("point", trackPoint(it)) }
                         next.following?.let { put("following", JsonArray(it.map(::trackPoint))) }
                     })
                 }
@@ -275,7 +275,7 @@ object Codec {
                         ?: throw Invalid("Unknown pending finish reason"),
                     byYou = finish.req("byYou").bool(),
                     successor = finish.opt("successor")?.obj()?.let { next ->
-                        NextWalk(next.uuid("id"), trackPoint(next.req("arrival")), trackPoint(next.req("point")),
+                        NextWalk(next.uuid("id"), trackPoint(next.req("arrival")), next.opt("point")?.let(::trackPoint),
                             next.opt("following")?.arr()?.map(::trackPoint))
                     },
                 )

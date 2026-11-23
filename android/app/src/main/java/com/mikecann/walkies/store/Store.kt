@@ -199,7 +199,12 @@ class Store(private val root: File) {
 private class CityFiles private constructor(private val citiesFile: File, private val roadsFile: File) {
     private val queue = Executors.newSingleThreadExecutor { Thread(it, "walkies-cities").apply { isDaemon = true } }
     private val lock = Object()
-    private var waiting: List<City>? = null
+    private sealed interface PendingWrite {
+        data object Idle : PendingWrite
+        data class Queued(val cities: List<City>) : PendingWrite
+        data class Retry(val cities: List<City>) : PendingWrite
+    }
+    private var waiting: PendingWrite = PendingWrite.Idle
     // Only used on the queue.
     private var encoded = HashMap<UUID, Pair<City, String>>()
     private var savedRoads: Map<UUID, List<RoadLine>>? = null
@@ -207,8 +212,8 @@ private class CityFiles private constructor(private val citiesFile: File, privat
     fun save(cities: List<City>) {
         val queued: Boolean
         synchronized(lock) {
-            queued = waiting != null
-            waiting = cities
+            queued = waiting is PendingWrite.Queued
+            waiting = PendingWrite.Queued(cities)
         }
         if (!queued) queue.execute { writeWaiting() }
     }
@@ -221,6 +226,7 @@ private class CityFiles private constructor(private val citiesFile: File, privat
     fun replace(change: () -> Unit) {
         queue.submit {
             writeWaiting()
+            synchronized(lock) { waiting = PendingWrite.Idle }
             encoded = HashMap()
             savedRoads = null
             change()
@@ -233,11 +239,24 @@ private class CityFiles private constructor(private val citiesFile: File, privat
     }
 
     private fun writeWaiting() {
-        val cities = synchronized(lock) { waiting.also { waiting = null } } ?: return
+        val cities = synchronized(lock) {
+            val cities = when (val pending = waiting) {
+                PendingWrite.Idle -> null
+                is PendingWrite.Queued -> pending.cities
+                is PendingWrite.Retry -> pending.cities
+            }
+            waiting = PendingWrite.Idle
+            cities
+        } ?: return
         try {
             writeFiles(cities)
         } catch (e: Exception) {
             Store.log.severe("Couldn't save cities.json: $e")
+            // A newer queued snapshot wins; otherwise retry this one on the next
+            // save/flush without spinning while the disk remains unwritable.
+            synchronized(lock) {
+                if (waiting == PendingWrite.Idle) waiting = PendingWrite.Retry(cities)
+            }
         }
     }
 

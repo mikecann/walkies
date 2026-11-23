@@ -364,7 +364,8 @@ class AppModel(
         activeWalk?.let { active ->
             freshTiles = byPlaceId(active.newTileHexesByPlace)
             addedTiles = byPlaceId(active.addedTilesByPlace)
-            val restored = active.copy(newTilesByPlace = countsByPlace(freshTiles), newTileHexesByPlace = hexesByPlace(freshTiles))
+            val restored = if (active.newTileHexesByPlace == null) active else active.copy(
+                newTilesByPlace = countsByPlace(freshTiles), newTileHexesByPlace = hexesByPlace(freshTiles))
             activeWalk = restored
             store.save(restored)
         }
@@ -446,6 +447,22 @@ class AppModel(
 
     private fun prepareHistory() {
         val generation = dataGeneration
+        val unknown = activeWalk?.takeIf { !autoWalkPending && it.newTileHexesByPlace == null }
+        if (unknown != null) {
+            val scope = historyScope
+            if (scope == null) {
+                restoreActiveCoverage(unknown, CoverageTracer.samples(unknown.points))
+                prepareHistory()
+            } else {
+                scope.launch {
+                    val samples = withContext(Dispatchers.Default) { CoverageTracer.samples(unknown.points) }
+                    if (generation != dataGeneration || activeWalk?.id != unknown.id) return@launch
+                    restoreActiveCoverage(unknown, samples)
+                    prepareHistory()
+                }
+            }
+            return
+        }
         val savedCities = cities
         val resumed = activeWalk?.takeIf { !autoWalkPending }?.let { active ->
             active.copy(endedAt = active.points.lastOrNull()?.let { SwiftDate.epoch(it.time) } ?: now())
@@ -469,6 +486,16 @@ class AppModel(
         } else {
             scope.launch { install(withContext(Dispatchers.Default) { Progression.backfill(routes, savedCities) }) }
         }
+    }
+
+    /** A child seed may reach disk before its route is credited to the cities. */
+    private fun restoreActiveCoverage(snapshot: Walk, samples: List<Coordinate>) {
+        val current = activeWalk?.takeIf { it.id == snapshot.id } ?: return
+        val uncovered = visit(samples, snapshot.points.lastOrNull()?.time ?: snapshot.startedAt.epochSeconds)
+        store.save(cities)
+        store.flush()
+        activeWalk = finishCoverage(current.copy(newTiles = current.newTiles + uncovered))
+        store.save(activeWalk!!)
     }
 
     /** Saves walks whose tile identities were recovered, and keeps the counts for rewards. */
@@ -734,7 +761,9 @@ class AppModel(
         // end a walk.
         val walkEnd = activeWalk?.points?.lastOrNull()
         if (walkEnd != null && anchor != null && rode(walkEnd, anchor)) {
-            finishAutoWalk(reason = WalkEndReason.Rode, successor = NextWalk(arrival = anchor, point = point))
+            val seed = if (point.time - anchor.time <= FRESH_START) NextWalk(arrival = anchor, point = point)
+                else NextWalk(arrival = point)
+            finishAutoWalk(reason = WalkEndReason.Rode, successor = seed)
             return
         }
         if (activeWalk == null) {
@@ -797,10 +826,11 @@ class AppModel(
         var successor = request.successor
         if (anchor != null && step.samples.isNotEmpty()) {
             successor = if (successor == null) {
-                NextWalk(arrival = anchor, point = point)
+                if (point.time - anchor.time <= FRESH_START) NextWalk(arrival = anchor, point = point)
+                    else NextWalk(arrival = point)
             } else {
                 var following = successor.following.orEmpty()
-                if ((following.lastOrNull() ?: successor.point) != anchor) following = following + anchor
+                if ((following.lastOrNull() ?: successor.point ?: successor.arrival) != anchor) following = following + anchor
                 successor.copy(following = following + point)
             }
         }
@@ -901,6 +931,7 @@ class AppModel(
             autoWalkPending = displacement(successor.points) < AUTO_WALK_CONFIRM_DISTANCE
             activePath = if (autoWalkPending) emptyList() else successor.points.map { it.coordinate }
             tracer.restart(from = successor.resumeAnchor)
+            if (!autoWalkPending) restoreActiveCoverage(successor, CoverageTracer.samples(successor.points))
         }
         tilesRevision++
         // Measure again by today's rules, so walks logged by older versions (or GPS

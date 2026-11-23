@@ -382,6 +382,79 @@
         "distance": 100,
         "finishedDistance": 400
       }
+    },
+    {
+      "name": "stale ride arrival uninterrupted",
+      "events": [
+        {
+          "action": "fix",
+          "x": 450,
+          "time": 340,
+          "wheels": true
+        },
+        {
+          "action": "fix",
+          "x": 900,
+          "time": 400
+        },
+        {
+          "action": "fix",
+          "x": 950,
+          "time": 700
+        },
+        {
+          "action": "fix",
+          "x": 1000,
+          "time": 740
+        }
+      ],
+      "expected": {
+        "active": "different",
+        "finished": 1,
+        "points": 2,
+        "endTime": 320,
+        "startTime": 700,
+        "distance": 50,
+        "finishedDistance": 400
+      }
+    },
+    {
+      "name": "stale ride arrival after relaunch",
+      "events": [
+        {
+          "action": "fix",
+          "x": 450,
+          "time": 340,
+          "wheels": true
+        },
+        {
+          "action": "fix",
+          "x": 900,
+          "time": 400
+        },
+        {
+          "action": "relaunch"
+        },
+        {
+          "action": "fix",
+          "x": 950,
+          "time": 700
+        },
+        {
+          "action": "fix",
+          "x": 1000,
+          "time": 740
+        }
+      ],
+      "expected": {
+        "active": "different",
+        "finished": 1,
+        "points": 2,
+        "endTime": 320,
+        "startTime": 700,
+        "distance": 50,
+        "finishedDistance": 400
+      }
     }
   ]
 }
