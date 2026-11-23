@@ -208,6 +208,7 @@ final class AppModel {
     func loadSaved() {
         guard locked else { return }
         setupDone = UserDefaults.standard.bool(forKey: "setupDone")
+        countSteps = UserDefaults.standard.object(forKey: "countSteps") as? Bool ?? true
         load(alwaysOn: nil)
         locked = false
     }
@@ -434,6 +435,15 @@ final class AppModel {
     private func prepareHistory() async {
         guard !worldGridResetPending else { return }
         let generation = dataGeneration
+        // A seed is durable before its predecessor finishes and before city coverage
+        // is saved. Nil coverage distinguishes that crash point from a completed replay.
+        if let seed = activeWalk, seed.isAutomatic, !autoWalkPending, seed.newTileHexesByPlace == nil {
+            let samples = await Task.detached(priority: .utility) { CoverageTracer.samples(for: seed.points) }.value
+            guard generation == dataGeneration, var active = activeWalk, active.id == seed.id else { return }
+            active.newTiles += visit(samples, at: seed.points.last?.time ?? seed.startedAt.timeIntervalSince1970)
+            activeWalk = active
+            store.save(cities)
+        }
         let savedWalks = walks
         let savedCities = cities
         var resumed = activeWalk
@@ -860,7 +870,10 @@ final class AppModel {
         // Only decided once you're walking on from the new spot, so one bad fix can't
         // end a walk.
         if let last = activeWalk?.points.last, let anchor, rode(from: last, to: anchor) {
-            finishAutoWalk(reason: .rode, successor: Walk.NextWalk(arrival: anchor, point: point))
+            let next = point.time - anchor.time <= Self.freshStart
+                ? Walk.NextWalk(arrival: anchor, point: point)
+                : Walk.NextWalk(arrival: point, point: nil)
+            finishAutoWalk(reason: .rode, successor: next)
             return
         }
         if activeWalk?.pendingFinish != nil { return }
@@ -957,7 +970,9 @@ final class AppModel {
             if activeWalk?.pendingFinish?.successor != nil {
                 activeWalk?.pendingFinish?.successor?.accept(from: anchor, point: point)
             } else {
-                activeWalk?.pendingFinish?.successor = Walk.NextWalk(arrival: anchor, point: point)
+                activeWalk?.pendingFinish?.successor = point.time - anchor.time <= Self.freshStart
+                    ? Walk.NextWalk(arrival: anchor, point: point)
+                    : Walk.NextWalk(arrival: point, point: nil)
             }
         }
         if anchor != tracer.anchor { saveNow(waiting: true) }

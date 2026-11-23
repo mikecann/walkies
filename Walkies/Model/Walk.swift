@@ -73,21 +73,24 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
     struct NextWalk: Codable, Sendable {
         var id = UUID()
         var arrival: TrackPoint
-        var point: TrackPoint
+        var point: TrackPoint?
         var following: [TrackPoint]?
 
         mutating func accept(from anchor: TrackPoint?, point next: TrackPoint) {
             var tail = following ?? []
-            if let anchor, (tail.last ?? point) != anchor { tail.append(anchor) }
-            if (tail.last ?? point) != next { tail.append(next) }
+            if let anchor, (tail.last ?? point ?? arrival) != anchor { tail.append(anchor) }
+            if point == nil, tail.isEmpty {
+                point = next
+                return
+            }
+            if (tail.last ?? point ?? arrival) != next { tail.append(next) }
             following = tail.isEmpty ? nil : tail
         }
 
         var walk: Walk {
-            let points = [arrival, point] + (following ?? [])
+            let points = [arrival] + (point.map { [$0] } ?? []) + (following ?? [])
             return Walk(id: id, startedAt: Date(timeIntervalSince1970: arrival.time), points: points,
-                 distance: CoverageTracer.distance(for: points), newTilesByPlace: [:],
-                 newTileHexesByPlace: [:], addedTilesByPlace: [:], automatic: true,
+                 distance: CoverageTracer.distance(for: points), automatic: true,
                  continuation: .walking, resumeAnchor: points.last)
         }
     }

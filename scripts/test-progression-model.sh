@@ -45,7 +45,7 @@ for name in ['Store', 'Sync', 'Convex', 'OSMClient', 'CachedPlaceData', 'CityBui
     shutil.copy(f'Walkies/Services/{name}.swift', root / 'Sources/Walkies')
 shutil.copy('Walkies/AppModel.swift', root / 'Sources/Walkies')
 shutil.copy('scripts/progression-test-support/Platform.swift', root / 'Sources/Walkies')
-for name in ['ModelFixesTests', 'AlwaysOnRideTests', 'RideRelaunchTests', 'WalkLifecycleTests', 'WalkBoundaryTests', 'ExplicitEndTests', 'WalkDiagnosticsTests', 'StartupTests', 'StoreTests', 'StoreFailureTests', 'SyncRecoveryTests', 'StepTests', 'ProgressionTests', 'WalkRecapTests', 'LevelMeterTests', 'ProgressionIntegrationTests', 'TeamTests', 'CloudTests', 'TrailLayoutTests', 'CoverageTests', 'HexGridTests', 'WorldGridResetTests', 'LoreTests', 'SecretsBookTests', 'SyncSafetyTests', 'FixtureExportTests', 'WalkableRuleTests', 'MistTests']:
+for name in ['ModelFixesTests', 'AlwaysOnRideTests', 'RideRelaunchTests', 'WalkLifecycleTests', 'WalkBoundaryTests', 'ExplicitEndTests', 'WalkDiagnosticsTests', 'StartupTests', 'StoreTests', 'StoreFailureTests', 'SyncRecoveryTests', 'WalkFinishRecoveryTests', 'StepTests', 'ProgressionTests', 'WalkRecapTests', 'LevelMeterTests', 'ProgressionIntegrationTests', 'TeamTests', 'CloudTests', 'TrailLayoutTests', 'CoverageTests', 'HexGridTests', 'WorldGridResetTests', 'LoreTests', 'SecretsBookTests', 'SyncSafetyTests', 'FixtureExportTests', 'WalkableRuleTests', 'MistTests']:
     shutil.copy(f'WalkiesTests/{name}.swift', root / 'Tests/WalkiesTests')
 print('macOS model suites: ' + ', '.join(p.stem for p in sorted((root / 'Tests/WalkiesTests').glob('*.swift'))))
 print('Native-only coverage: ModelFixesTests.anAutomaticPauseKeepsTheSameWalkAndResumesCoverage, StationaryFenceTests (run in iOS host)')
