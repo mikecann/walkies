@@ -276,7 +276,18 @@ nonisolated struct Store {
     }
 
     func save(_ walk: Walk) {
-        write(walk, to: file(for: walk))
+        _ = saveWalkCheckpoint(walk)
+    }
+
+    /// A handoff must not erase its predecessor's seed until this write succeeds.
+    func saveWalkCheckpoint(_ walk: Walk) -> Bool {
+        do {
+            try JSONEncoder().encode(walk).write(to: file(for: walk), options: .atomic)
+            return true
+        } catch {
+            Self.log.error("Couldn't save \(file(for: walk).lastPathComponent): \(error)")
+            return false
+        }
     }
 
     func delete(_ walk: Walk) {

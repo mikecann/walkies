@@ -58,6 +58,39 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
     var continuation: Continuation?
     var resumeAnchor: TrackPoint?
     var endReason: EndReason?
+    /// A requested finish stays unfinished for sync until history/steps complete.
+    var pendingFinish: PendingFinish?
+
+    struct PendingFinish: Codable, Sendable {
+        var at: Date
+        var reason: EndReason
+        var byYou: Bool
+        var successor: NextWalk?
+    }
+
+    /// The first accepted segment after a ride, owned by its next UUID before
+    /// the previous walk finishes. Nonrecursive so it remains plain JSON.
+    struct NextWalk: Codable, Sendable {
+        var id = UUID()
+        var arrival: TrackPoint
+        var point: TrackPoint
+        var following: [TrackPoint]?
+
+        mutating func accept(from anchor: TrackPoint?, point next: TrackPoint) {
+            var tail = following ?? []
+            if let anchor, (tail.last ?? point) != anchor { tail.append(anchor) }
+            if (tail.last ?? point) != next { tail.append(next) }
+            following = tail.isEmpty ? nil : tail
+        }
+
+        var walk: Walk {
+            let points = [arrival, point] + (following ?? [])
+            return Walk(id: id, startedAt: Date(timeIntervalSince1970: arrival.time), points: points,
+                 distance: CoverageTracer.distance(for: points), newTilesByPlace: [:],
+                 newTileHexesByPlace: [:], addedTilesByPlace: [:], automatic: true,
+                 continuation: .walking, resumeAnchor: points.last)
+        }
+    }
 
     enum EndReason: String, Codable, Sendable {
         case gap, quiet, rode, you, recovered
