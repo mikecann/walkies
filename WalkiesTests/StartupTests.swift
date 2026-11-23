@@ -48,7 +48,7 @@ struct StartupTests {
         var unlockWhileObserving = false
         var unlockBeforeObserving = false
         lazy var startup = AppStartup(
-            waitForUnlock: waitForUnlock,
+            savedDataReadable: { !self.waitForUnlock || self.available },
             openFence: {
                 self.events.append("fence")
                 if self.unlockBeforeObserving { self.available = true }
@@ -59,7 +59,6 @@ struct StartupTests {
                 if self.unlockWhileObserving { callback() }
                 return { self.events.append("unobserve") }
             },
-            protectedDataAvailable: { self.available },
             loadSaved: { self.events.append(contentsOf: ["account", "model", "sync"]) },
             start: { self.events.append("start") }
         )
@@ -101,6 +100,29 @@ struct StartupTests {
         #expect(launch.startup.state == .running)
     }
 
+    @Test func unlockAndRelockBeforeObservingStillStartsFromTheReadableProbe() {
+        var readable = false
+        var starts = 0
+        var loads = 0
+        var checks = 0
+        let startup = AppStartup(savedDataReadable: {
+            checks += 1
+            return FirstUnlock.happened(protectedDataAvailable: false, readProbe: { readable }, makeProbe: { false })
+        }, openFence: {
+            readable = true
+        }, observeUnlock: { _ in {} }, loadSaved: {
+            loads += 1
+        }, start: {
+            starts += 1
+        })
+        #expect(startup.waitForUnlock)
+        startup.launch()
+        #expect(checks == 2)
+        #expect(starts == 1)
+        #expect(loads == 1)
+        #expect(startup.state == .running)
+    }
+
     @Test func launchAndUnlockCallbacksCanBeRepeatedWithoutStartingTwice() {
         for waiting in [false, true] {
             let launch = Launch(waitForUnlock: waiting)
@@ -121,8 +143,9 @@ struct StartupTests {
         var starts = 0
         var loads = 0
         var startup: AppStartup!
-        startup = AppStartup(waitForUnlock: true, openFence: {}, observeUnlock: { _ in {} },
-                             protectedDataAvailable: { true }, loadSaved: {
+        var checks = 0
+        startup = AppStartup(savedDataReadable: { checks += 1; return checks > 1 },
+                             openFence: {}, observeUnlock: { _ in {} }, loadSaved: {
             loads += 1
             startup.launch()
             startup.unlocked()

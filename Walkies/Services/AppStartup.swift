@@ -14,19 +14,18 @@ final class AppStartup {
     private(set) var state: State = .created
     private let openFence: () -> Void
     private let observeUnlock: (@escaping () -> Void) -> (() -> Void)
-    private let protectedDataAvailable: () -> Bool
+    private let savedDataReadable: () -> Bool
     private let loadSaved: () -> Void
     private let start: () -> Void
     private var removeObserver: (() -> Void)?
 
-    init(waitForUnlock: Bool, openFence: @escaping () -> Void,
+    init(savedDataReadable: @escaping () -> Bool, openFence: @escaping () -> Void,
          observeUnlock: @escaping (@escaping () -> Void) -> (() -> Void),
-         protectedDataAvailable: @escaping () -> Bool,
          loadSaved: @escaping () -> Void, start: @escaping () -> Void) {
-        self.waitForUnlock = waitForUnlock
+        self.waitForUnlock = !savedDataReadable()
         self.openFence = openFence
         self.observeUnlock = observeUnlock
-        self.protectedDataAvailable = protectedDataAvailable
+        self.savedDataReadable = savedDataReadable
         self.loadSaved = loadSaved
         self.start = start
     }
@@ -43,8 +42,9 @@ final class AppStartup {
             // A notification can arrive during observer registration itself.
             if state == .waitingForUnlock { removeObserver = remove }
             else { remove() }
-            // It might also have unlocked just before the observer was registered.
-            if protectedDataAvailable() { unlocked() }
+            // It might have unlocked and locked again before the observer was registered.
+            // Use the same readability probe, not just the screen's current lock state.
+            if savedDataReadable() { unlocked() }
         } else {
             start()
             state = .running

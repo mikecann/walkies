@@ -9,7 +9,7 @@ import UserNotifications
 /// so they wait for it.
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     private lazy var startup = AppStartup(
-        waitForUnlock: !FirstUnlock.happened(),
+        savedDataReadable: { FirstUnlock.happened() },
         openFence: { [weak self] in self?.model.tracker.openFence() },
         observeUnlock: { callback in
             let observer = NotificationCenter.default.addObserver(
@@ -17,7 +17,6 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             ) { _ in MainActor.assumeIsolated { callback() } }
             return { NotificationCenter.default.removeObserver(observer) }
         },
-        protectedDataAvailable: { UIApplication.shared.isProtectedDataAvailable },
         loadSaved: { [weak self] in
             guard let self else { return }
             self.account.loadSession()

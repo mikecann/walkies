@@ -41,10 +41,10 @@ struct LocationLaunchTests {
             fence.onOpen?(home)
             if stop { fence.onStopExit?() } else { fence.onExit?() }
         }
-        let startup = AppStartup(waitForUnlock: true, openFence: { tracker.openFence() }, observeUnlock: {
+        let startup = AppStartup(savedDataReadable: { false }, openFence: { tracker.openFence() }, observeUnlock: {
             unlock = $0
             return {}
-        }, protectedDataAvailable: { false }, loadSaved: {
+        }, loadSaved: {
             order.append("load")
             loaded = true
         }, start: {
