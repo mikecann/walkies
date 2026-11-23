@@ -62,6 +62,7 @@ swift test --disable-sandbox --package-path build/progression-model-tests \
 python3 - <<'PY_CHECK'
 from pathlib import Path
 import sys
-if 'Test run with 0 tests passed' in Path('build/progression-model-tests/test-output.log').read_text():
+output = Path('build/progression-model-tests/test-output.log').read_text()
+if 'Test run with 0 tests passed' in output or 'No matching test cases were run' in output:
     sys.exit('No model tests matched. Check the filter and included suites.')
 PY_CHECK
