@@ -52,6 +52,7 @@ print('Native-only coverage: ModelFixesTests.anAutomaticPauseKeepsTheSameWalkAnd
 # CloudTests builds its suburbs from these.
 shutil.copy('TestSupport/CloudFixtures.swift', root / 'Tests/WalkiesTests')
 PY
+export WALKIES_FIXTURES_IN="${WALKIES_FIXTURES_IN:-$PWD/shared/fixtures/android}"
 export WALKIES_LIFECYCLE_FIXTURES="$PWD/shared/fixtures/walk-lifecycle.json"
 export WALKIES_TEST_ROOT="$PWD/build/progression-test-data"
 export CLANG_MODULE_CACHE_PATH="$PWD/build/module-cache"
