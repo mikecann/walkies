@@ -221,4 +221,73 @@ struct WalkBoundaryTests {
         #expect(store.loadWalks().isEmpty)
     }
 
+
+    @Test(arguments: [false, true])
+    func aRetryDuringLaunchStillHonoursTheGapAndAlwaysOn(restartExpired: Bool) async throws {
+        let root = URL.temporaryDirectory.appending(path: "WalkiesLoadRetry-\(UUID())")
+        let store = Store(root: root)
+        defer { store.wipe() }
+        let points = (0...8).map { point(Double($0) * 50, Double($0) * 40) }
+        let next = Walk.NextWalk(arrival: point(900, 720), point: point(950, 760),
+                                 following: (2...7).map { point(900 + Double($0) * 50, 720 + Double($0) * 40) })
+        var old = Walk(startedAt: Date(timeIntervalSince1970: start), points: points, automatic: true)
+        old.pendingFinish = Walk.PendingFinish(at: Date(timeIntervalSince1970: start + 320), reason: .rode, byYou: false, successor: next)
+        store.save(old)
+        let blocked = root.appending(path: "walks/\(next.id.uuidString).json")
+        try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: false)
+        let time = start + (restartExpired ? 1700 : 1010)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: restartExpired,
+                             now: { Date(timeIntervalSince1970: time) })
+        // Initial materialization failed. Let the history-task retry succeed.
+        try FileManager.default.removeItem(at: blocked)
+        await model.waitForHistory()
+        #expect(model.activeWalk == nil)
+        #expect(Set(model.walks.map(\.id)) == [old.id, next.id])
+        #expect(model.walks.allSatisfy { $0.endedAt != nil })
+    }
+
+    @Test(arguments: [200.0, 350.0])
+    func anExpiredConfirmedSeedKeepsCityCoverageEvenWhenItsRouteIsDropped(distance: Double) async throws {
+        let store = Store(root: URL.temporaryDirectory.appending(path: "WalkiesExpiredCoverage-\(UUID())"))
+        defer { store.wipe() }
+        let place = ModelFixesTests().city(origin: Coordinate(lat: 0, lon: 0))
+        store.save([place])
+        let count = Int(distance / 50)
+        let points = (0...count).map { point(Double($0) * 50, 720 + Double($0) * 40) }
+        let walk = Walk(startedAt: Date(timeIntervalSince1970: start + 720), points: points, automatic: true)
+        store.save(walk)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        #expect(model.activeWalk == nil)
+        #expect(!model.cities[0].visited.isEmpty)
+        #expect(store.loadCities()[0].visited == model.cities[0].visited)
+        #expect(model.freshTiles.isEmpty)
+        if distance < 300 {
+            #expect(model.walks.isEmpty)
+            #expect(model.cities[0].tileCredits?.first?.id == walk.id)
+            #expect(model.cities[0].tileCredits?.first?.hexes.isEmpty == false)
+        } else {
+            #expect(model.walks.first?.id == walk.id)
+            #expect(model.walks.first?.newTileHexesByPlace?[place.id.uuidString]?.isEmpty == false)
+        }
+    }
+
+    @Test func aSinglePointSuccessorRebasesAgainIfTheNextFixIsStale() async throws {
+        let store = Store(root: URL.temporaryDirectory.appending(path: "WalkiesSingleAnchor-\(UUID())"))
+        defer { store.wipe() }
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true,
+                             now: { Date(timeIntervalSince1970: start + 700) })
+        await model.waitForHistory()
+        _ = try seed(model)
+        var wheels = point(450, 340); wheels.wheels = true
+        model.recordAlwaysOnForTesting(wheels)
+        model.recordAlwaysOnForTesting(point(900, 400))
+        model.recordAlwaysOnForTesting(point(950, 700))
+        #expect(model.activeWalk?.points.count == 1)
+        model.recordAlwaysOnForTesting(point(1000, 950))
+        model.recordAlwaysOnForTesting(point(1050, 990))
+        #expect(model.activeWalk?.startedAt == Date(timeIntervalSince1970: start + 950))
+        #expect(model.activeWalk?.points == [point(1000, 950), point(1050, 990)])
+    }
+
 }
