@@ -46,14 +46,27 @@ enum class WalkEndReason(val rawValue: String) {
 }
 
 /** The first confirmed segment after a ride, with an identity before its parent finishes. */
-data class NextWalk(val id: UUID = UUID.randomUUID(), val arrival: TrackPoint, val point: TrackPoint? = null, val following: List<TrackPoint>? = null) {
+data class NextWalk(
+    val id: UUID = UUID.randomUUID(), val arrival: TrackPoint, val point: TrackPoint? = null,
+    val following: List<TrackPoint>? = null, val continuation: WalkContinuation? = null,
+    val resumeAnchor: TrackPoint? = null,
+) {
     private val route: List<TrackPoint> get() = (listOf(arrival) + listOfNotNull(point) + following.orEmpty())
         .fold(emptyList<TrackPoint>()) { points, next -> if (points.lastOrNull() == next) points else points + next }
     fun walk() = Walk(
         id = id, startedAt = SwiftDate.epoch(arrival.time), points = route,
         distance = CoverageTracer.distance(route), automatic = true,
-        resumeAnchor = route.last(),
+        continuation = continuation,
+        resumeAnchor = resumeAnchor ?: route.last().takeIf { continuation != WalkContinuation.Rode },
     )
+
+    fun shouldSeparate(anchor: TrackPoint): Boolean {
+        val last = route.last()
+        val distance = last.coordinate.distance(anchor.coordinate)
+        if (distance <= CoverageTracer.MAX_GAP) return false
+        val elapsed = anchor.time - last.time
+        return continuation == WalkContinuation.Rode || elapsed <= 0 || distance / elapsed > CoverageTracer.MAX_SPEED
+    }
 }
 
 /** A durable finish request; endedAt remains absent until history and steps are attached. */
@@ -80,8 +93,7 @@ data class PendingWalkFinish(
         val points = open?.walk()?.points.orEmpty()
         val origin = points.firstOrNull()?.coordinate
         val confirmed = origin != null && points.any { origin.distance(it.coordinate) >= confirmationDistance }
-        return copy(successor = null, closedSuccessors =
-            (closedSuccessors.orEmpty() + if (confirmed) listOf(open!!) else emptyList()).takeIf { it.isNotEmpty() })
+        return copy(successor = if (confirmed) open!!.copy(continuation = WalkContinuation.Rode, resumeAnchor = null) else null)
     }
 }
 

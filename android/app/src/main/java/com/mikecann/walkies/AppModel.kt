@@ -883,10 +883,16 @@ class AppModel(
         val anchor = tracer.anchor
         val step = tracer.add(point)
         val existing = request.successor
+        var closed = request.closedSuccessors
         val successor = when {
+            existing != null && anchor != null && step.samples.isNotEmpty() && existing.shouldSeparate(anchor) -> {
+                closed = closed.orEmpty() + existing
+                if (point.time - anchor.time <= FRESH_START) NextWalk(arrival = anchor, point = point, resumeAnchor = point)
+                    else NextWalk(arrival = point, resumeAnchor = point)
+            }
             existing != null && existing.walk().points.size == 1 &&
                 point.time - existing.arrival.time > FRESH_START && tracer.anchor == point ->
-                existing.copy(arrival = point, point = null, following = null)
+                existing.copy(arrival = point, point = null, following = null, continuation = null, resumeAnchor = point)
             anchor != null && step.samples.isNotEmpty() -> {
                 if (existing == null) {
                     if (point.time - anchor.time <= FRESH_START) NextWalk(arrival = anchor, point = point)
@@ -894,13 +900,13 @@ class AppModel(
                 } else {
                     var following = existing.following.orEmpty()
                     if ((following.lastOrNull() ?: existing.point ?: existing.arrival) != anchor) following = following + anchor
-                    existing.copy(following = following + point)
+                    existing.copy(following = following + point, continuation = null, resumeAnchor = point)
                 }
             }
             existing == null && tracer.anchor == point -> NextWalk(arrival = point)
-            else -> existing
+            else -> existing?.copy(resumeAnchor = tracer.anchor)
         }
-        activeWalk = walk.copy(pendingFinish = request.copy(successor = successor), resumeAnchor = tracer.anchor)
+        activeWalk = walk.copy(pendingFinish = request.copy(successor = successor, closedSuccessors = closed), resumeAnchor = tracer.anchor)
         checkpointFinish()
         if (historyReady && finishingWalkId == null) finishAutoWalk()
         return true

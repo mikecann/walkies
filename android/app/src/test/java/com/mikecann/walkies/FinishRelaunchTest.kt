@@ -43,6 +43,67 @@ class FinishRelaunchTest {
         visited = emptySet(), roads = emptyList(),
     )
 
+    @Test fun aWildSpeedFixDuringABlockedConfirmedSuccessorKeepsItsIdentity() {
+        val (store, root) = tempStore()
+        try {
+            var now = 100000.0
+            var reply: ((Int?) -> Unit)? = null
+            val model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now },
+                stepQuery = { _, _, done -> reply = done })
+            for (i in 0..8) { now = 100000.0 + i * 40; model.record(point(i * 50.0, now)) }
+            val original = model.activeWalk!!
+            now = 100340.0; model.record(point(450.0, now).copy(wheels = true))
+            now = 100720.0; model.record(point(900.0, now))
+            now = 100760.0; model.record(point(950.0, now))
+            val childId = model.activeWalk!!.pendingFinish!!.successor!!.id
+            val blocked = File(root, "walks/.${childId.toString().uppercase()}.json.tmp")
+            assertTrue(blocked.mkdir())
+            reply!!(400); model.querySteps = null
+            for (i in 0..6) { now = 100800.0 + i * 40; model.record(point(1000.0 + i * 50, now)) }
+            now = 101045.0; model.record(point(1600.0, now).copy(speed = 9.0))
+            now = 101085.0; model.record(point(1350.0, now))
+            now = 101125.0; model.record(point(1400.0, now))
+            val pending = model.activeWalk!!.pendingFinish!!
+            assertEquals(childId, pending.successor!!.id)
+            assertTrue(pending.closedSuccessors.isNullOrEmpty())
+            assertEquals(11, pending.successor!!.walk().points.size)
+            assertTrue(blocked.delete())
+            model.finishStaleAutoWalk()
+            assertEquals(childId, model.activeWalk!!.id)
+            assertEquals(11, model.activeWalk!!.points.size)
+            assertEquals(original.id, model.walks.single().id)
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
+    @Test fun confirmedSuccessorRideCursorSurvivesHandoffAndRelaunchBeforeConfirmation() {
+        val (store, root) = tempStore()
+        var copy: File? = null
+        try {
+            var now = 100000.0
+            var reply: ((Int?) -> Unit)? = null
+            var model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now },
+                stepQuery = { _, _, done -> reply = done })
+            for (i in 0..8) { now = 100000.0 + i * 40; model.record(point(i * 50.0, now)) }
+            now = 100340.0; model.record(point(450.0, now).copy(wheels = true))
+            for (i in 0..8) { now = 100720.0 + i * 40; model.record(point(900.0 + i * 50, now)) }
+            val childId = model.activeWalk!!.pendingFinish!!.successor!!.id
+            now = 101060.0; model.record(point(1350.0, now).copy(wheels = true))
+            now = 101080.0; model.record(point(1800.0, now))
+            val pending = model.activeWalk!!.pendingFinish!!.successor!!
+            assertEquals(WalkContinuation.Rode, pending.continuation)
+            assertEquals(point(1800.0, now), pending.resumeAnchor)
+            reply!!(400)
+            val (reopened, copiedRoot) = snapshot(root); copy = copiedRoot
+            model = AppModel(reopened, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now })
+            now = 101120.0; model.record(point(1850.0, now))
+            val ended = model.walks.single { it.id == childId }
+            assertEquals(101040.0, ended.endedAt!!.epochSeconds, 0.001)
+            assertEquals(9, ended.points.size)
+            assertEquals(101080.0, model.activeWalk!!.startedAt.epochSeconds, 0.001)
+            assertEquals(2, model.activeWalk!!.points.size)
+        } finally { root.parentFile.deleteRecursively(); copy?.parentFile?.deleteRecursively() }
+    }
+
     @Test fun disabledOrExpiredBlockedHandoffsFinishTheirChildInsteadOfResumingIt() {
         for (alwaysOn in listOf(false, true)) {
             val (store, root) = tempStore()
