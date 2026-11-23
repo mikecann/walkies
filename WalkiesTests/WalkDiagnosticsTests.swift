@@ -65,4 +65,22 @@ struct WalkDiagnosticsTests {
         #expect(event.walk.endedAt == Date(timeIntervalSince1970: points.last!.time))
         #expect(store.loadWalks().isEmpty)
     }
+
+    @Test func aDroppedRouteIsActuallyArchivedAsJSON() throws {
+        let dir = ProcessInfo.processInfo.environment["WALKIES_TEST_ROOT"].map { URL(fileURLWithPath: $0).appending(path: "diagnostics") }
+            ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let helper = WalkBoundaryTests()
+        var walk = Walk(startedAt: Date(timeIntervalSince1970: helper.start),
+                        endedAt: Date(timeIntervalSince1970: helper.start + 80),
+                        points: [helper.point(0, 0), helper.point(50, 40), helper.point(100, 80)], automatic: true)
+        walk.endReason = .quiet
+        let archive = dir.appending(path: "dropped-walks/\(walk.id).json")
+        defer { try? FileManager.default.removeItem(at: archive) }
+        TrackerTrace.walkEnded(walk, kept: false, pending: true, reason: "quiet", displacement: 100)
+        let decoded = try JSONDecoder().decode(Walk.self, from: Data(contentsOf: archive))
+        #expect(decoded.id == walk.id)
+        #expect(decoded.points == walk.points)
+        #expect(decoded.endReason == .quiet)
+    }
+
 }

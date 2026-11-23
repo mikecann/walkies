@@ -131,4 +131,94 @@ struct WalkBoundaryTests {
         #expect(!AppModel.countsAsAutoWalk(displacement: 150, distance: 300.0.nextDown))
     }
 
+
+    @Test(arguments: [false, true])
+    func aRideArrivalOlderThanTwoMinutesCannotBackdateTheNextWalk(relaunch: Bool) async throws {
+        let store = Store(root: URL.temporaryDirectory.appending(path: "WalkiesStaleArrival-\(UUID())"))
+        defer { store.wipe() }
+        var time = start + 320
+        var model = AppModel(store: store, servicesEnabled: false, alwaysOn: true, now: { Date(timeIntervalSince1970: time) })
+        await model.waitForHistory()
+        let old = try seed(model)
+        model.saveNow(waiting: true)
+        var wheels = point(450, 340); wheels.wheels = true
+        model.recordAlwaysOnForTesting(wheels)
+        model.recordAlwaysOnForTesting(point(900, 400))
+        time = start + 400
+        if relaunch {
+            model = AppModel(store: store, servicesEnabled: false, alwaysOn: true, now: { Date(timeIntervalSince1970: time) })
+            await model.waitForHistory()
+        }
+        time = start + 700
+        model.recordAlwaysOnForTesting(point(950, 700))
+        model.recordAlwaysOnForTesting(point(1000, 740))
+        #expect(model.walks.first?.id == old.id)
+        #expect(model.walks.first?.endedAt == Date(timeIntervalSince1970: start + 320))
+        #expect(model.activeWalk?.startedAt == Date(timeIntervalSince1970: start + 700))
+        #expect(model.activeWalk?.points.first == point(950, 700))
+        #expect(model.activeWalk?.points.count == 2)
+    }
+
+    @Test func firstUnlockReloadsTheStepPreferenceThatWasUnreadableAtLaunch() async {
+        let prior = UserDefaults.standard.object(forKey: "countSteps")
+        defer {
+            if let prior { UserDefaults.standard.set(prior, forKey: "countSteps") }
+            else { UserDefaults.standard.removeObject(forKey: "countSteps") }
+        }
+        UserDefaults.standard.removeObject(forKey: "countSteps")
+        let store = Store(root: URL.temporaryDirectory.appending(path: "WalkiesUnlockSteps-\(UUID())"))
+        defer { store.wipe() }
+        let model = AppModel(store: store, servicesEnabled: false, waitForUnlock: true)
+        #expect(model.countSteps)
+        UserDefaults.standard.set(false, forKey: "countSteps")
+        model.loadSaved()
+        #expect(!model.countSteps)
+        await model.waitForHistory()
+    }
+
+    @Test func aConfirmedSuccessorSeedReplaysCoverageAfterItsPredecessorHasFinished() async throws {
+        let store = Store(root: URL.temporaryDirectory.appending(path: "WalkiesSeedCoverage-\(UUID())"))
+        defer { store.wipe() }
+        let place = ModelFixesTests().city(origin: Coordinate(lat: 0, lon: 0))
+        store.save([place])
+        let seed = Walk.NextWalk(arrival: point(0, 720), point: point(50, 760),
+                                 following: [point(100, 800), point(150, 840), point(200, 880)])
+        let saved = seed.walk
+        #expect(saved.newTileHexesByPlace == nil)
+        store.save(saved)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true,
+                             now: { Date(timeIntervalSince1970: start + 900) })
+        await model.waitForHistory()
+        #expect(model.activeWalk?.id == saved.id)
+        #expect(!model.autoWalkPending)
+        #expect(!model.cities[0].visited.isEmpty)
+        #expect(model.activeWalk?.newTileHexesByPlace?[place.id.uuidString]?.isEmpty == false)
+        #expect(store.loadCities()[0].visited == model.cities[0].visited)
+    }
+
+    @Test func replayingADropAfterCityCreditButBeforeDeleteCannotAwardTwice() async throws {
+        let store = Store(root: URL.temporaryDirectory.appending(path: "WalkiesCreditCrash-\(UUID())"))
+        defer { store.wipe() }
+        let place = ModelFixesTests().city(origin: Coordinate(lat: 0, lon: 0))
+        store.save([place])
+        let hexes: Set<Hex> = [place.grid.hex(containing: Coordinate(lat: 0, lon: 0))]
+        let checkpoint = Walk(startedAt: Date(timeIntervalSince1970: start),
+                              points: [point(0, 0), point(50, 40), point(100, 80)],
+                              newTileHexesByPlace: [place.id.uuidString: hexes], automatic: true)
+        store.save(checkpoint)
+        let first = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await first.waitForHistory()
+        store.flush()
+        // Replay the durable pair left by a kill between the city write and walk deletion.
+        store.save(checkpoint)
+        let again = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await again.waitForHistory()
+        let date = checkpoint.startedAt
+        let week = Progression.week(containing: date, calendar: Progression.calendar)
+        let inputs = Progression.Inputs(cities: again.cities, walks: again.walks, now: date.addingTimeInterval(1000))
+        #expect(Progression.questProgress(.tiles25, week: week, inputs: inputs) == 1)
+        #expect(again.walks.isEmpty)
+        #expect(store.loadWalks().isEmpty)
+    }
+
 }
