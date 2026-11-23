@@ -215,6 +215,107 @@ extension SyncSafetyTests {
         #expect(relaunched.walks.first { $0.id == first.id }?.points == first.points)
     }
 
+    @Test(arguments: [false, true])
+    func anotherRideKeepsAQualifyingSuccessorWhoseFirstWriteIsBlocked(recreate: Bool) async throws {
+        let originalRoot = root()
+        let original = Store(root: originalRoot)
+        defer { original.wipe() }
+        let clock = FinishRecoveryClock(0)
+        let gate = FinishStepGate()
+        let model = AppModel(store: original, servicesEnabled: false, alwaysOn: true,
+                             stepQuery: gate.count, now: clock.now)
+        let previousCounting = model.countSteps
+        model.countSteps = true
+        defer { model.countSteps = previousCounting; gate.reply(111) }
+        await model.waitForHistory()
+        let first = try seedFinishWalk(model, clock: clock)
+        clock.elapsed = 340
+        model.recordAlwaysOnForTesting(finishFix(450, 340, wheels: true))
+        clock.elapsed = 720
+        model.recordAlwaysOnForTesting(finishFix(900, 720))
+        clock.elapsed = 760
+        model.recordAlwaysOnForTesting(finishFix(950, 760))
+        await gate.waitForRequest()
+        let pending = try #require(original.loadWalks().first { $0.id == first.id })
+        let secondID = try #require(try finishSuccessorID(pending))
+        let blocked = originalRoot.appending(path: "walks/\(secondID.uuidString).json")
+        try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: false)
+        gate.reply(111)
+        await gate.waitForReturn()
+        model.countSteps = false
+        for i in 2...8 {
+            clock.elapsed = 720 + Double(i) * 40
+            model.recordAlwaysOnForTesting(finishFix(900 + Double(i) * 50, clock.elapsed))
+        }
+        let accepted = (0...8).map { finishFix(900 + Double($0) * 50, 720 + Double($0) * 40) }
+        let beforeRide = try #require(original.loadWalks().first { $0.id == first.id })
+        #expect(beforeRide.endedAt == nil)
+        #expect(beforeRide.pendingFinish?.successor?.id == secondID)
+        #expect(beforeRide.pendingFinish?.successor?.walk.points == accepted)
+        #expect(abs((beforeRide.pendingFinish?.successor?.walk.distance ?? 0) - 400) < 0.01)
+        clock.elapsed = 1060
+        model.recordAlwaysOnForTesting(finishFix(1350, 1060, wheels: true))
+        // Invalidating the arrival cursor must freeze these accepted points as a
+        // closed outing. It cannot erase them from the predecessor's checkpoint.
+        let afterRide = try #require(original.loadWalks().first { $0.id == first.id })
+        let closed = try finishMetadata(afterRide)?["closedSuccessors"] as? [[String: Any]] ?? []
+        #expect(closed.contains { $0["id"] as? String == secondID.uuidString })
+        clock.elapsed = 1400
+        let thirdArrival = finishFix(1800, 1400)
+        model.recordAlwaysOnForTesting(thirdArrival)
+        clock.elapsed = 1440
+        model.recordAlwaysOnForTesting(finishFix(1850, 1440))
+        model.saveNow(waiting: true)
+
+        let recovered: AppModel
+        let recoveredStore: Store
+        var cloned: Store?
+        defer { cloned?.wipe() }
+        if recreate {
+            let recreatedRoot = root()
+            let store = try forkWalkFiles(from: originalRoot, into: recreatedRoot)
+            cloned = store
+            try FileManager.default.removeItem(at: recreatedRoot.appending(path: "walks/\(secondID.uuidString).json"))
+            recoveredStore = store
+            recovered = AppModel(store: store, servicesEnabled: false, alwaysOn: true,
+                                 stepQuery: { _, _ in 333 }, now: clock.now)
+            recovered.countSteps = true
+            await recovered.waitForHistory()
+        } else {
+            try FileManager.default.removeItem(at: blocked)
+            recoveredStore = original
+            recovered = model
+            recovered.countSteps = true
+            recovered.resumeAlwaysOn()
+        }
+        await waitForAutomaticFinish(recovered, id: secondID)
+        let second = try #require(recovered.walks.first { $0.id == secondID })
+        #expect(second.points == accepted)
+        #expect(second.startedAt == Date(timeIntervalSince1970: finishBase + 720))
+        #expect(second.endedAt == Date(timeIntervalSince1970: finishBase + 1040))
+        #expect(second.endReason == .rode)
+        #expect(second.steps != nil)
+        #expect(abs(second.distance - 400) < 0.01)
+        #expect(recoveredStore.loadWalks().first { $0.id == secondID }?.points == accepted)
+        #expect(recovered.walks.first { $0.id == first.id }?.points == first.points)
+        let third = try #require(recovered.activeWalk)
+        #expect(third.id != first.id && third.id != secondID)
+        #expect(third.points.first == thirdArrival)
+        #expect(third.points.allSatisfy { $0.time >= finishBase + 1400 })
+        let server = SafetyServer()
+        let client = client(server)
+        let sync = SyncEngine(model: recovered, store: recoveredStore, isSignedIn: { true }, makeClient: { client })
+        await sync.sync()
+        #expect(sync.status == .idle)
+        #expect(await server.walks.count == 2)
+        let uploaded = try #require(try await server.uploadedWalk(secondID))
+        #expect(uploaded.id == secondID)
+        #expect(uploaded.points == accepted)
+        #expect(uploaded.endedAt == Date(timeIntervalSince1970: finishBase + 1040))
+        #expect(recoveredStore.loadSyncState().uploadedWalks == [first.id, secondID])
+        #expect(try await server.uploadedWalk(third.id) == nil)
+    }
+
     @Test func newWheelsDuringHeldHistoryInvalidateTheDeferredSuccessorAcrossRelaunch() async throws {
         let originalRoot = root()
         let original = Store(root: originalRoot)
