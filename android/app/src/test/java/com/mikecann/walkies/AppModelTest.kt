@@ -170,7 +170,7 @@ class AppModelTest {
         assertEquals(old.id, saved.id)
         assertEquals(old.points, saved.points)
         assertEquals(SwiftDate.epoch(last.time), saved.endedAt)
-        assertEquals(saved.endedAt, store.loadWalks().single().endedAt)
+        assertEquals(saved.endedAt, store.loadWalks().single { it.id == saved.id }.endedAt)
         for (i in 2..4) visit(model, place, 2900.0 + i * 50, arrivalTime + i * 40)
         val next = model.activeWalk!!
         assertNotEquals(old.id, next.id)

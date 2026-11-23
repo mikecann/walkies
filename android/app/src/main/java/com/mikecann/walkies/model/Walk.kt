@@ -45,6 +45,24 @@ enum class WalkEndReason(val rawValue: String) {
     Gap("gap"), Quiet("quiet"), Rode("rode"), You("you"), Recovered("recovered"), AlwaysOnOff("always on off")
 }
 
+/** The first confirmed segment after a ride, with an identity before its parent finishes. */
+data class NextWalk(val id: UUID = UUID.randomUUID(), val arrival: TrackPoint, val point: TrackPoint, val following: List<TrackPoint>? = null) {
+    fun walk() = Walk(
+        id = id, startedAt = SwiftDate.epoch(arrival.time), points = listOf(arrival, point) + following.orEmpty(),
+        distance = CoverageTracer.distance(listOf(arrival, point) + following.orEmpty()), automatic = true,
+        newTilesByPlace = emptyMap(), newTileHexesByPlace = emptyMap(), addedTilesByPlace = emptyMap(),
+        resumeAnchor = following?.lastOrNull() ?: point,
+    )
+}
+
+/** A durable finish request; endedAt remains absent until history and steps are attached. */
+data class PendingWalkFinish(
+    val at: SwiftDate,
+    val reason: WalkEndReason,
+    val byYou: Boolean,
+    val successor: NextWalk? = null,
+)
+
 data class Walk(
     val id: UUID = UUID.randomUUID(),
     val startedAt: SwiftDate,
@@ -72,6 +90,7 @@ data class Walk(
     /** The tracer cursor, which may be an arrival fix not yet accepted into the route. */
     val resumeAnchor: TrackPoint? = null,
     val endReason: WalkEndReason? = null,
+    val pendingFinish: PendingWalkFinish? = null,
 ) {
     val isAutomatic get() = automatic == true
 

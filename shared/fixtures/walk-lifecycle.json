@@ -321,6 +321,67 @@
         "points": 11,
         "distance": 450
       }
+    },
+    {
+      "name": "inferred ride uninterrupted",
+      "events": [
+        {
+          "action": "fix",
+          "x": 900,
+          "time": 460
+        },
+        {
+          "action": "fix",
+          "x": 950,
+          "time": 500
+        },
+        {
+          "action": "fix",
+          "x": 1000,
+          "time": 540
+        }
+      ],
+      "expected": {
+        "active": "different",
+        "finished": 1,
+        "points": 3,
+        "endTime": 320,
+        "startTime": 460,
+        "distance": 100,
+        "finishedDistance": 400
+      }
+    },
+    {
+      "name": "inferred ride after relaunch",
+      "events": [
+        {
+          "action": "fix",
+          "x": 900,
+          "time": 460
+        },
+        {
+          "action": "relaunch"
+        },
+        {
+          "action": "fix",
+          "x": 950,
+          "time": 500
+        },
+        {
+          "action": "fix",
+          "x": 1000,
+          "time": 540
+        }
+      ],
+      "expected": {
+        "active": "different",
+        "finished": 1,
+        "points": 3,
+        "endTime": 320,
+        "startTime": 460,
+        "distance": 100,
+        "finishedDistance": 400
+      }
     }
   ]
 }

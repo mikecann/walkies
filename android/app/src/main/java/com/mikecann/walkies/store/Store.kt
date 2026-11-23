@@ -145,6 +145,15 @@ class Store(private val root: File) {
 
     fun save(walk: Walk) = write(Codec.walk(walk), file(walk))
 
+    /** A lifecycle handoff must know the successor reached disk before ending its parent. */
+    fun saveWalkCheckpoint(walk: Walk): Boolean = try {
+        writeAtomically(file(walk), Codec.walk(walk).toString().toByteArray())
+        true
+    } catch (e: Exception) {
+        log.severe("Couldn't checkpoint ${walk.id.uuidString}: $e")
+        false
+    }
+
     fun delete(walk: Walk) {
         file(walk).delete()
     }

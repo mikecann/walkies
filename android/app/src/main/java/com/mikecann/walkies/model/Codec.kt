@@ -227,6 +227,21 @@ object Codec {
         w.continuation?.let { put("continuation", it.rawValue) }
         w.resumeAnchor?.let { put("resumeAnchor", trackPoint(it)) }
         w.endReason?.let { put("endReason", it.rawValue) }
+        w.pendingFinish?.let { finish ->
+            put("pendingFinish", buildJsonObject {
+                put("at", finish.at.sinceReference)
+                put("reason", finish.reason.rawValue)
+                put("byYou", finish.byYou)
+                finish.successor?.let { next ->
+                    put("successor", buildJsonObject {
+                        put("id", next.id.uuidString)
+                        put("arrival", trackPoint(next.arrival))
+                        put("point", trackPoint(next.point))
+                        next.following?.let { put("following", JsonArray(it.map(::trackPoint))) }
+                    })
+                }
+            })
+        }
     }
 
     fun walk(e: JsonElement): Walk {
@@ -252,6 +267,18 @@ object Codec {
             endReason = o.opt("endReason")?.let { value ->
                 WalkEndReason.entries.firstOrNull { it.rawValue == (value as JsonPrimitive).content }
                     ?: throw Invalid("Unknown walk end reason $value")
+            },
+            pendingFinish = o.opt("pendingFinish")?.obj()?.let { finish ->
+                PendingWalkFinish(
+                    at = finish.date("at"),
+                    reason = WalkEndReason.entries.firstOrNull { it.rawValue == finish.string("reason") }
+                        ?: throw Invalid("Unknown pending finish reason"),
+                    byYou = finish.req("byYou").bool(),
+                    successor = finish.opt("successor")?.obj()?.let { next ->
+                        NextWalk(next.uuid("id"), trackPoint(next.req("arrival")), trackPoint(next.req("point")),
+                            next.opt("following")?.arr()?.map(::trackPoint))
+                    },
+                )
             },
         )
     }
