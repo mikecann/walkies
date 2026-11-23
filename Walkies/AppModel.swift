@@ -1048,7 +1048,12 @@ final class AppModel {
         let anchor = tracer.anchor
         let step = tracer.add(point)
         if !step.samples.isEmpty, let anchor {
-            if activeWalk?.pendingFinish?.successor != nil {
+            if let seed = activeWalk?.pendingFinish?.successor, seed.shouldSeparate(at: anchor) {
+                activeWalk?.pendingFinish?.closedSuccessors = (activeWalk?.pendingFinish?.closedSuccessors ?? []) + [seed]
+                activeWalk?.pendingFinish?.successor = point.time - anchor.time <= Self.freshStart
+                    ? Walk.NextWalk(arrival: anchor, point: point)
+                    : Walk.NextWalk(arrival: point, point: nil)
+            } else if activeWalk?.pendingFinish?.successor != nil {
                 activeWalk?.pendingFinish?.successor?.accept(from: anchor, point: point)
             } else {
                 activeWalk?.pendingFinish?.successor = point.time - anchor.time <= Self.freshStart
@@ -1059,6 +1064,7 @@ final class AppModel {
         if activeWalk?.pendingFinish?.successor == nil, let arrival = tracer.anchor, Self.canAnchor(point) {
             activeWalk?.pendingFinish?.successor = Walk.NextWalk(arrival: arrival, point: nil)
         }
+        activeWalk?.pendingFinish?.successor?.resumeAnchor = tracer.anchor
         if anchor != tracer.anchor { saveNow(waiting: true) }
     }
 
@@ -1149,7 +1155,12 @@ final class AppModel {
 
     private func completeAutoWalk(_ finished: Walk, byYou: Bool, reason: Walk.EndReason) {
         var walk = finished
-        let successor = walk.pendingFinish?.handoff
+        var successor = walk.pendingFinish?.handoff
+        if var next = successor, next.pendingFinish == nil, !canResume(next) {
+            next.pendingFinish = Walk.PendingFinish(at: next.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? next.startedAt,
+                                                   reason: .recovered, byYou: false)
+            successor = next
+        }
         // Commit the next UUID before removing its seed from the predecessor file.
         if let successor, !store.saveWalkCheckpoint(successor) { return }
         walk.pendingFinish = nil

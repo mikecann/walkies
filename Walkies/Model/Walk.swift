@@ -83,11 +83,16 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
         }
 
         mutating func observedRide(confirmDistance: Double) {
-            if let successor {
+            if var successor {
                 let points = successor.walk.points
                 if let origin = points.first?.coordinate,
                    points.contains(where: { origin.distance(to: $0.coordinate) >= confirmDistance }) {
-                    closedSuccessors = (closedSuccessors ?? []) + [successor]
+                    // Keep accepted walking until a confirmed, displaced arrival
+                    // distinguishes another outing from one wild speed fix.
+                    successor.continuation = .rode
+                    successor.resumeAnchor = nil
+                    self.successor = successor
+                    return
                 }
             }
             successor = nil
@@ -101,8 +106,12 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
         var arrival: TrackPoint
         var point: TrackPoint?
         var following: [TrackPoint]?
+        var continuation: Continuation?
+        var resumeAnchor: TrackPoint?
 
         mutating func accept(from anchor: TrackPoint?, point next: TrackPoint) {
+            continuation = .walking
+            resumeAnchor = next
             var tail = following ?? []
             if let anchor, (tail.last ?? point ?? arrival) != anchor { tail.append(anchor) }
             if point == nil, tail.isEmpty {
@@ -113,11 +122,20 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
             following = tail.isEmpty ? nil : tail
         }
 
+        func shouldSeparate(at anchor: TrackPoint) -> Bool {
+            let last = following?.last ?? point ?? arrival
+            let distance = last.coordinate.distance(to: anchor.coordinate)
+            guard distance > CoverageTracer.maxGap else { return false }
+            let elapsed = anchor.time - last.time
+            return continuation == .rode || elapsed <= 0 || distance / elapsed > CoverageTracer.maxSpeed
+        }
+
         var walk: Walk {
             let points = [arrival] + (point.map { [$0] } ?? []) + (following ?? [])
             return Walk(id: id, startedAt: Date(timeIntervalSince1970: arrival.time), points: points,
                  distance: CoverageTracer.distance(for: points), automatic: true,
-                 continuation: .walking, resumeAnchor: points.last)
+                 continuation: continuation ?? .walking,
+                 resumeAnchor: resumeAnchor ?? (continuation == .rode ? nil : points.last))
         }
     }
 

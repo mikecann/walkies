@@ -255,11 +255,12 @@ extension SyncSafetyTests {
         #expect(abs((beforeRide.pendingFinish?.successor?.walk.distance ?? 0) - 400) < 0.01)
         clock.elapsed = 1060
         model.recordAlwaysOnForTesting(finishFix(1350, 1060, wheels: true))
-        // Invalidating the arrival cursor must freeze these accepted points as a
-        // closed outing. It cannot erase them from the predecessor's checkpoint.
+        // A ride invalidates the cursor, but accepted walking stays durable while
+        // the next displaced arrival confirms the next outing.
         let afterRide = try #require(original.loadWalks().first { $0.id == first.id })
         let closed = try finishMetadata(afterRide)?["closedSuccessors"] as? [[String: Any]] ?? []
-        #expect(closed.contains { $0["id"] as? String == secondID.uuidString })
+        #expect(afterRide.pendingFinish?.successor?.id == secondID
+                || closed.contains { $0["id"] as? String == secondID.uuidString })
         clock.elapsed = 1400
         let thirdArrival = finishFix(1800, 1400)
         model.recordAlwaysOnForTesting(thirdArrival)
