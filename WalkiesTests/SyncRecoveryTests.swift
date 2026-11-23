@@ -26,9 +26,9 @@ extension SyncSafetyTests {
         var observer: (() -> Void)?
         var available = false
         var ordering: [String] = []
-        let startup = AppStartup(waitForUnlock: !readable, openFence: { ordering.append("fence") },
+        let startup = AppStartup(savedDataReadable: { readable || available }, openFence: { ordering.append("fence") },
                                  observeUnlock: { observer = $0; return { observer = nil } },
-                                 protectedDataAvailable: { available }, loadSaved: {
+                                 loadSaved: {
             ordering.append("load")
             // The real account/model load is synchronous on the main actor. Limit
             // the preference override to that call, so other fixtures cannot see it.
