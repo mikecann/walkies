@@ -397,8 +397,9 @@ final class AppModel {
             let before = city.tiles
             let fresh = city.visit(samples, within: shape(for: city))
             _ = city.noteWalked(samples, at: time, mistDays: Mist.days)
+            let traced = Set(samples.map { city.grid.hex(containing: $0) }).intersection(city.tiles)
             let hexes = walk.newTileHexesByPlace == nil
-                ? Set(samples.map { city.grid.hex(containing: $0) }).intersection(city.tiles).subtracting(priorClaims[city.id.uuidString] ?? [])
+                ? traced.subtracting(priorClaims[city.id.uuidString] ?? [])
                 : (walk.newTileHexesByPlace?[city.id.uuidString] ?? []).union(fresh).subtracting(priorClaims[city.id.uuidString] ?? [])
             if !hexes.isEmpty {
                 covered[city.id.uuidString] = hexes
@@ -406,7 +407,7 @@ final class AppModel {
             }
             city.updatedAt = now()
             cities[i] = city
-            unlockStickers(in: city, on: hexes, notify: false, popUp: false)
+            unlockStickers(in: city, on: traced, notify: false, popUp: false)
         }
         walk.newTileHexesByPlace = covered
         walk.newTilesByPlace = covered.mapValues(\.count)
