@@ -527,7 +527,7 @@ class AppModel(
             val visited = visit.first.noteWalked(samples, time, mistDays).city
             val raw = samples.mapTo(HashSet()) { visited.grid.hex(containing = it) }.intersect(visited.tiles)
             walked[city.id.uuidString] = raw
-            val candidates = walk.newTileHexesByPlace?.get(city.id.uuidString)?.plus(visit.second) ?: raw
+            val candidates = walk.newTileHexesByPlace?.let { it[city.id.uuidString].orEmpty() + visit.second } ?: raw
             val hexes = candidates - prior[city.id.uuidString].orEmpty()
             if (hexes.isNotEmpty()) {
                 covered[city.id.uuidString] = hexes
