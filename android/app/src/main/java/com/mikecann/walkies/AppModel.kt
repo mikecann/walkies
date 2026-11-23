@@ -397,15 +397,19 @@ class AppModel(
         val explicitShort = walk.pendingFinish?.byYou == true && displacement(walk.points) < AUTO_WALK_CONFIRM_DISTANCE
         val unknownConfirmed = walk.newTileHexesByPlace == null && displacement(walk.points) >= AUTO_WALK_CONFIRM_DISTANCE
         if (walk.isAutomatic && (explicitShort || unknownConfirmed)) {
-            fun install(samples: List<Coordinate>) {
+            val history = walks
+            val places = cities
+            fun replay(): Pair<List<Coordinate>, Map<String, Set<Hex>>> =
+                CoverageTracer.samples(walk.points) to priorClaims(walk, history, places)
+            fun install(replay: Pair<List<Coordinate>, Map<String, Set<Hex>>>) {
                 if (generation != dataGeneration) return
-                val credited = restoreRecoveredCoverage(walk, samples)
+                val credited = restoreRecoveredCoverage(walk, replay.first, replay.second)
                 walks = walks.map { if (it.id == walk.id) credited else it }
                 finishRecoveredWalk(credited, recovered, index, generation)
             }
             val scope = historyScope
-            if (scope == null) install(CoverageTracer.samples(walk.points)) else scope.launch {
-                install(withContext(Dispatchers.Default) { CoverageTracer.samples(walk.points) })
+            if (scope == null) install(replay()) else scope.launch {
+                install(withContext(Dispatchers.Default) { replay() })
             }
         } else finishRecoveredWalk(walk, recovered, index, generation)
     }
@@ -513,20 +517,25 @@ class AppModel(
     }
 
     /** Closed queued legs no longer own the active walk's fresh tile maps. */
-    private fun restoreRecoveredCoverage(walk: Walk, samples: List<Coordinate>): Walk {
+    private fun restoreRecoveredCoverage(walk: Walk, samples: List<Coordinate>, prior: Map<String, Set<Hex>>): Walk {
         val covered = LinkedHashMap<String, Set<Hex>>()
+        val walked = LinkedHashMap<String, Set<Hex>>()
         val added = LinkedHashMap<String, Set<Hex>>()
         val time = walk.points.lastOrNull()?.time ?: walk.startedAt.epochSeconds
         cities = cities.map { city ->
-            val visited = city.visit(samples, shape(city)).first.noteWalked(samples, time, mistDays).city
-            val hexes = samples.mapTo(HashSet()) { visited.grid.hex(containing = it) }.intersect(visited.tiles)
+            val visit = city.visit(samples, shape(city))
+            val visited = visit.first.noteWalked(samples, time, mistDays).city
+            val raw = samples.mapTo(HashSet()) { visited.grid.hex(containing = it) }.intersect(visited.tiles)
+            walked[city.id.uuidString] = raw
+            val candidates = walk.newTileHexesByPlace?.get(city.id.uuidString)?.plus(visit.second) ?: raw
+            val hexes = candidates - prior[city.id.uuidString].orEmpty()
             if (hexes.isNotEmpty()) {
                 covered[city.id.uuidString] = hexes
                 added[city.id.uuidString] = hexes - city.tiles
             }
             visited.copy(updatedAt = now())
         }
-        for (city in cities) unlockStickers(city, covered[city.id.uuidString].orEmpty(), notify = false, popUp = false)
+        for (city in cities) unlockStickers(city, walked[city.id.uuidString].orEmpty(), notify = false, popUp = false)
         val credited = walk.copy(newTileHexesByPlace = covered, newTilesByPlace = covered.mapValues { it.value.size },
             addedTilesByPlace = added, newTiles = covered.values.sumOf { it.size })
         rebuildCountingTiles()
@@ -535,6 +544,26 @@ class AppModel(
         store.flush()
         store.save(credited)
         return credited
+    }
+
+    /** Visited city tiles alone do not identify which outing earned them. */
+    private fun priorClaims(walk: Walk, history: List<Walk>, places: List<City>): Map<String, Set<Hex>> {
+        val earlier = history.filter { it.id != walk.id && it.endedAt != null && Progression.walkedFirst.compare(it, walk) < 0 }
+        val priorPlaces = places.map { city ->
+            city.copy(tileCredits = city.tileCredits?.filter { credit ->
+                credit.id != walk.id && Progression.walkedFirst.compare(Walk(id = credit.id, startedAt = credit.at), walk) < 0
+            })
+        }
+        val repaired = Progression.backfill(earlier, priorPlaces)
+        val claimed = LinkedHashMap<String, Set<Hex>>()
+        for (priorWalk in repaired.walks) for ((key, hexes) in priorWalk.newTileHexesByPlace.orEmpty()) {
+            claimed[key] = claimed[key].orEmpty() + hexes
+        }
+        for (city in priorPlaces) for (credit in city.tileCredits.orEmpty()) {
+            val key = city.id.uuidString
+            claimed[key] = claimed[key].orEmpty() + credit.hexes
+        }
+        return claimed
     }
 
     /** Saves walks whose tile identities were recovered, and keeps the counts for rewards. */

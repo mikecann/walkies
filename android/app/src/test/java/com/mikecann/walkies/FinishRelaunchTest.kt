@@ -43,6 +43,36 @@ class FinishRelaunchTest {
         visited = emptySet(), roads = emptyList(),
     )
 
+    @Test fun recoveredRetracesCannotReclaimAnEarlierWalksOrDroppedOutingsTiles() {
+        for (steps in listOf(4, 8)) for (creditOnly in listOf(false, true)) {
+            val (store, root) = tempStore()
+            try {
+                val city = place()
+                val previousPoints = (0..8).map { point(it * 50.0, 100000.0 + it * 40) }
+                val claimed = com.mikecann.walkies.model.CoverageTracer.samples(previousPoints)
+                    .map { city.grid.hex(containing = it) }.toSet().intersect(city.tiles)
+                val previous = Walk(startedAt = SwiftDate.epoch(100000.0), endedAt = SwiftDate.epoch(100320.0),
+                    automatic = true, points = previousPoints, distance = 400.0, newTiles = claimed.size,
+                    newTileHexesByPlace = mapOf(city.id.toString().uppercase() to claimed),
+                    newTilesByPlace = mapOf(city.id.toString().uppercase() to claimed.size))
+                store.save(listOf(city.copy(visited = claimed, tileCredits = if (creditOnly)
+                    listOf(City.TileCredit(previous.id, previous.startedAt, claimed)) else null)))
+                if (!creditOnly) store.save(previous)
+                val current = Walk(startedAt = SwiftDate.epoch(200000.0), automatic = true,
+                    points = (0..steps).map { point(it * 50.0, 200000.0 + it * 40) }, distance = steps * 50.0)
+                store.save(current)
+                val model = AppModel(store, FakeSettings(alwaysOn = false), FakeLocation(), clock = { 201000.0 })
+                if (steps == 4) assertTrue(model.walks.none { it.id == current.id }) else {
+                    val saved = model.walks.single { it.id == current.id }
+                    assertEquals(0, saved.newTiles)
+                    assertTrue(saved.newTileHexesByPlace!!.values.all { it.isEmpty() })
+                    assertEquals(0, model.questTileCounts.getValue(current.id).values.sum())
+                }
+                assertTrue(Store(root).loadCities().single().tileCredits.orEmpty().none { it.id == current.id })
+            } finally { root.parentFile.deleteRecursively() }
+        }
+    }
+
     @Test fun aClosedGapLegContinuesItsOpenLeafWhileItsOwnStepsAreHeld() {
         val (store, root) = tempStore()
         try {
