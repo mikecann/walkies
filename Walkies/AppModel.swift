@@ -299,7 +299,8 @@ final class AppModel {
                     }
                 }
                 if walk.isAutomatic,
-                   (walk.newTileHexesByPlace == nil || request?.byYou == true),
+                   (walk.newTileHexesByPlace == nil || (request?.byYou == true
+                    && Self.displacement(of: walk.points) < Self.autoWalkConfirmDistance)),
                    request?.byYou == true || Self.displacement(of: walk.points) >= Self.autoWalkConfirmDistance {
                     let points = walk.points
                     let samples = await Task.detached(priority: .utility) { CoverageTracer.samples(for: points) }.value
@@ -381,9 +382,11 @@ final class AppModel {
         for i in cities.indices {
             var city = cities[i]
             let before = city.tiles
-            _ = city.visit(samples, within: shape(for: city))
+            let fresh = city.visit(samples, within: shape(for: city))
             _ = city.noteWalked(samples, at: time, mistDays: Mist.days)
-            let hexes = Set(samples.map { city.grid.hex(containing: $0) }).intersection(city.tiles)
+            let hexes = walk.newTileHexesByPlace == nil
+                ? Set(samples.map { city.grid.hex(containing: $0) }).intersection(city.tiles)
+                : (walk.newTileHexesByPlace?[city.id.uuidString] ?? []).union(fresh)
             if !hexes.isEmpty {
                 covered[city.id.uuidString] = hexes
                 added[city.id.uuidString] = hexes.subtracting(before)
