@@ -885,7 +885,7 @@ class AppModel(
             if (historyReady && finishingWalkId == null) finishAutoWalk()
             return true
         }
-        if (request.reason != WalkEndReason.Rode) {
+        if (request.reason != WalkEndReason.Rode && request.successor == null && request.closedSuccessors.isNullOrEmpty()) {
             if (historyReady && finishingWalkId == null) finishAutoWalk()
             return true
         }

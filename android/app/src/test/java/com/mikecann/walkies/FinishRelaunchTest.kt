@@ -43,6 +43,33 @@ class FinishRelaunchTest {
         visited = emptySet(), roads = emptyList(),
     )
 
+    @Test fun aClosedGapLegContinuesItsOpenLeafWhileItsOwnStepsAreHeld() {
+        val (store, root) = tempStore()
+        try {
+            var now = 100000.0
+            val replies = ArrayList<(Int?) -> Unit>()
+            val model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now },
+                stepQuery = { _, _, done -> replies += done })
+            for (i in 0..8) { now = 100000.0 + i * 40; model.record(point(i * 50.0, now)) }
+            now = 100340.0; model.record(point(450.0, now).copy(wheels = true))
+            for (i in 0..8) { now = 100720.0 + i * 40; model.record(point(900.0 + i * 50, now)) }
+            val childId = model.activeWalk!!.pendingFinish!!.successor!!.id
+            now = 101640.0; model.record(point(1350.0, now))
+            now = 101680.0; model.record(point(1390.0, now))
+            val nextId = model.activeWalk!!.pendingFinish!!.successor!!.id
+            replies[0](400)
+            assertEquals(2, replies.size)
+            assertEquals(WalkEndReason.Gap, model.activeWalk!!.pendingFinish!!.reason)
+            now = 101720.0; model.record(point(1430.0, now))
+            assertEquals(3, model.activeWalk!!.pendingFinish!!.successor!!.walk().points.size)
+            replies[1](400)
+            assertEquals(WalkEndReason.Gap, model.walks.single { it.id == childId }.endReason)
+            assertEquals(nextId, model.activeWalk!!.id)
+            assertEquals(101640.0, model.activeWalk!!.startedAt.epochSeconds, 0.001)
+            assertEquals(3, model.activeWalk!!.points.size)
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
     @Test fun aTenMinuteGapInsideAHeldHandoffStartsAnotherIdentityAtTheNewFix() {
         val (store, root) = tempStore()
         try {
