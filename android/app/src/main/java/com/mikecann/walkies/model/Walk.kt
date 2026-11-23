@@ -67,6 +67,14 @@ data class NextWalk(
         val elapsed = anchor.time - last.time
         return continuation == WalkContinuation.Rode || elapsed <= 0 || distance / elapsed > CoverageTracer.MAX_SPEED
     }
+
+    fun accept(anchor: TrackPoint, point: TrackPoint): NextWalk {
+        var points = route
+        if (points.lastOrNull() != anchor) points = points + anchor
+        points = points + point
+        return copy(point = points.getOrNull(1), following = points.drop(2).takeIf { it.isNotEmpty() },
+            continuation = null, resumeAnchor = point)
+    }
 }
 
 /** A durable finish request; endedAt remains absent until history and steps are attached. */

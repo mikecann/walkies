@@ -354,7 +354,7 @@ class AppModel(
             if (walk.endedAt == null) {
                 if (walk.id == resumable?.id) {
                     activeWalk = walk
-                    tracer.restart(from = walk.resumeAnchor ?: walk.points.lastOrNull().takeIf {
+                    tracer.restart(from = walk.pendingFinish?.successor?.walk()?.resumeAnchor ?: walk.resumeAnchor ?: walk.points.lastOrNull().takeIf {
                         walk.continuationState == WalkContinuation.Walking
                     })
                     autoWalkPending = displacement(walk.points) < AUTO_WALK_CONFIRM_DISTANCE
@@ -394,22 +394,24 @@ class AppModel(
         if (generation != dataGeneration) return
         val walk = recovered.getOrNull(index)
         if (walk == null) { prepareHistory(); return }
-        if (walk.isAutomatic && walk.newTileHexesByPlace == null &&
-            (walk.pendingFinish?.byYou == true || displacement(walk.points) >= AUTO_WALK_CONFIRM_DISTANCE)) {
+        val explicitShort = walk.pendingFinish?.byYou == true && displacement(walk.points) < AUTO_WALK_CONFIRM_DISTANCE
+        val unknownConfirmed = walk.newTileHexesByPlace == null && displacement(walk.points) >= AUTO_WALK_CONFIRM_DISTANCE
+        if (walk.isAutomatic && (explicitShort || unknownConfirmed)) {
             fun install(samples: List<Coordinate>) {
                 if (generation != dataGeneration) return
                 val credited = restoreRecoveredCoverage(walk, samples)
                 walks = walks.map { if (it.id == walk.id) credited else it }
-                val updated = recovered.toMutableList().also { it[index] = credited }
-                finishRecovered(updated, index, generation)
+                finishRecoveredWalk(credited, recovered, index, generation)
             }
             val scope = historyScope
             if (scope == null) install(CoverageTracer.samples(walk.points)) else scope.launch {
-                val samples = withContext(Dispatchers.Default) { CoverageTracer.samples(walk.points) }
-                install(samples)
+                install(withContext(Dispatchers.Default) { CoverageTracer.samples(walk.points) })
             }
-            return
-        }
+        } else finishRecoveredWalk(walk, recovered, index, generation)
+    }
+
+    private fun finishRecoveredWalk(walk: Walk, recovered: List<Walk>, index: Int, generation: Int) {
+        if (generation != dataGeneration) return
         // Cut off by the app being stopped (an install, or the system), it gets the same
         // test as a walk that ended by itself. Mike's 13 m and 81 m "walks" on his iPhone
         // on 2-3 Nov came from here.
@@ -524,6 +526,7 @@ class AppModel(
             }
             visited.copy(updatedAt = now())
         }
+        for (city in cities) unlockStickers(city, covered[city.id.uuidString].orEmpty(), notify = false, popUp = false)
         val credited = walk.copy(newTileHexesByPlace = covered, newTilesByPlace = covered.mapValues { it.value.size },
             addedTilesByPlace = added, newTiles = covered.values.sumOf { it.size })
         rebuildCountingTiles()
@@ -898,9 +901,7 @@ class AppModel(
                     if (point.time - anchor.time <= FRESH_START) NextWalk(arrival = anchor, point = point)
                         else NextWalk(arrival = point)
                 } else {
-                    var following = existing.following.orEmpty()
-                    if ((following.lastOrNull() ?: existing.point ?: existing.arrival) != anchor) following = following + anchor
-                    existing.copy(following = following + point, continuation = null, resumeAnchor = point)
+                    existing.accept(anchor, point)
                 }
             }
             existing == null && tracer.anchor == point -> NextWalk(arrival = point)
@@ -1044,7 +1045,7 @@ class AppModel(
             activeWalk = successor
             autoWalkPending = displacement(successor.points) < AUTO_WALK_CONFIRM_DISTANCE
             activePath = if (autoWalkPending) emptyList() else successor.points.map { it.coordinate }
-            tracer.restart(from = successor.resumeAnchor)
+            tracer.restart(from = successor.pendingFinish?.successor?.walk()?.resumeAnchor ?: successor.resumeAnchor)
             if (!autoWalkPending) restoreActiveCoverage(successor, CoverageTracer.samples(successor.points))
         }
         store.save(cities)

@@ -43,6 +43,58 @@ class FinishRelaunchTest {
         visited = emptySet(), roads = emptyList(),
     )
 
+    @Test fun drainingAClosedLegKeepsTheOpenLegsCursorWhileItsStepQueryIsHeld() {
+        val (store, root) = tempStore()
+        var copy: File? = null
+        try {
+            var now = 100000.0
+            val replies = ArrayList<(Int?) -> Unit>()
+            var model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now },
+                stepQuery = { _, _, done -> replies += done })
+            for (i in 0..8) { now = 100000.0 + i * 40; model.record(point(i * 50.0, now)) }
+            now = 100340.0; model.record(point(450.0, now).copy(wheels = true))
+            for (i in 0..8) { now = 100720.0 + i * 40; model.record(point(900.0 + i * 50, now)) }
+            now = 101060.0; model.record(point(1350.0, now).copy(wheels = true))
+            now = 101080.0; model.record(point(1800.0, now))
+            now = 101120.0; model.record(point(1850.0, now))
+            val openId = model.activeWalk!!.pendingFinish!!.successor!!.id
+            replies[0](400)
+            assertEquals(2, replies.size)
+            now = 101160.0; model.record(point(1900.0, now))
+            assertEquals(3, model.activeWalk!!.pendingFinish!!.successor!!.walk().points.size)
+            replies[1](400)
+            assertEquals(openId, model.activeWalk!!.id)
+            assertEquals(3, model.activeWalk!!.points.size)
+            val (reopened, copiedRoot) = snapshot(root); copy = copiedRoot
+            model = AppModel(reopened, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now })
+            assertEquals(openId, model.activeWalk!!.id)
+            assertEquals(3, model.activeWalk!!.points.size)
+            assertEquals(100.0, model.activeWalk!!.distance, 0.01)
+        } finally { root.parentFile.deleteRecursively(); copy?.parentFile?.deleteRecursively() }
+    }
+
+    @Test fun expiredSeedRecoveryUnlocksAndPersistsCrossedStickersWithoutAPopup() {
+        val (store, root) = tempStore()
+        try {
+            val entry = com.mikecann.walkies.lore.LoreLibrary.bundled.first { it.place != null }
+            val origin = entry.place!!.coordinate
+            fun fix(x: Double, time: Double) = TrackPoint(origin.lat + x / 111195, origin.lon, time, 5.0, speed = 1.0)
+            val points = (0..8).map { fix(-200.0 + it * 50, 100000.0 + it * 40) }
+            val city = City(name = entry.suburb ?: "Recovery", detail = "Tests",
+                boundary = Boundary(listOf(GeoPolygon(listOf(Coordinate(origin.lat - 0.01, origin.lon - 0.01),
+                    Coordinate(origin.lat + 0.01, origin.lon - 0.01), Coordinate(origin.lat + 0.01, origin.lon + 0.01),
+                    Coordinate(origin.lat - 0.01, origin.lon + 0.01)), emptyList()))),
+                tiles = (0..40).map { HexGrid.hex(containing = fix(-200.0 + it * 10, 0.0).coordinate) }.toSet(),
+                visited = emptySet(), roads = emptyList(), stickers = mapOf(entry.id to HexGrid.hex(containing = origin)))
+            store.save(listOf(city)); store.flush()
+            store.save(Walk(startedAt = SwiftDate.epoch(points.first().time), automatic = true, points = points, distance = 400.0))
+            val model = AppModel(store, FakeSettings(alwaysOn = false), FakeLocation(), clock = { 101000.0 })
+            assertTrue(entry.id in model.foundStickers)
+            assertTrue(entry.id in Store(root).loadStickers())
+            assertTrue(model.stickerQueue.isEmpty())
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
     @Test fun aWildSpeedFixDuringABlockedConfirmedSuccessorKeepsItsIdentity() {
         val (store, root) = tempStore()
         try {
@@ -553,6 +605,7 @@ class FinishRelaunchTest {
             val (store, root) = tempStore()
             var copy: File? = null
             try {
+                store.save(listOf(place())); store.flush()
                 var now = 100000.0
                 var reply: ((Int?) -> Unit)? = null
                 val model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now },
@@ -575,6 +628,10 @@ class FinishRelaunchTest {
                 assertEquals(original.points, saved.points)
                 assertEquals(requestedEnd, saved.endedAt!!.epochSeconds, 0.001)
                 assertEquals(WalkEndReason.You, saved.endReason)
+                assertTrue(saved.newTiles > 0)
+                assertTrue(saved.newTileHexesByPlace!!.values.any { it.isNotEmpty() })
+                assertTrue(reopened.loadCities().single().visited.isNotEmpty())
+                assertEquals(saved.newTiles, next.questTileCounts.getValue(saved.id).values.sum())
             } finally { root.parentFile.deleteRecursively(); copy?.parentFile?.deleteRecursively() }
         }
     }
