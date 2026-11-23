@@ -301,4 +301,32 @@ struct WalkBoundaryTests {
         #expect(abs(seed.walk.distance - 100) < 0.001)
     }
 
+
+    @Test(arguments: [200.0, 400.0])
+    func aRecoveredRetraceCannotClaimAnEarlierWalksTiles(distance: Double) async throws {
+        let store = Store(root: URL.temporaryDirectory.appending(path: "WalkiesPriorCredit-\(UUID())"))
+        defer { store.wipe() }
+        var place = ModelFixesTests().city(origin: Coordinate(lat: 0, lon: 0))
+        let oldPoints = (0...8).map { point(Double($0) * 50, Double($0) * 40) }
+        let fresh = place.visit(CoverageTracer.samples(for: oldPoints), within: place.shape())
+        store.save([place])
+        let old = Walk(startedAt: Date(timeIntervalSince1970: start), endedAt: Date(timeIntervalSince1970: start + 320),
+                       points: oldPoints, newTiles: fresh.count, newTilesByPlace: [place.id.uuidString: fresh.count],
+                       newTileHexesByPlace: [place.id.uuidString: fresh], automatic: true)
+        store.save(old)
+        let points = (0...Int(distance / 50)).map { point(Double($0) * 50, 1000 + Double($0) * 40) }
+        let retrace = Walk(startedAt: Date(timeIntervalSince1970: start + 1000), points: points, automatic: true)
+        store.save(retrace)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        #expect(model.cities[0].tileCredits?.contains { $0.id == retrace.id } != true)
+        if distance >= 300 {
+            let kept = try #require(model.walks.first { $0.id == retrace.id })
+            #expect(kept.newTiles == 0)
+            #expect(kept.newTileHexesByPlace?.values.allSatisfy(\.isEmpty) != false)
+        } else {
+            #expect(!model.walks.contains { $0.id == retrace.id })
+        }
+    }
+
 }

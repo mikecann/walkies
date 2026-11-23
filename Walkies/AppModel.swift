@@ -274,10 +274,9 @@ final class AppModel {
         let generation = dataGeneration
         historyTask = Task {
             // Unfinished files stay out of sync until their final count is known.
-            var recoveryIndex = 0
-            while recoveryIndex < recoveredWalks.count {
-                var walk = recoveredWalks[recoveryIndex]
-                recoveryIndex += 1
+            var pendingRecovery = recoveredWalks.sorted(by: Progression.walkedFirst)
+            while !pendingRecovery.isEmpty {
+                var walk = pendingRecovery.removeFirst()
                 // Cut off by the app being stopped (an install, or iOS), it gets the same
                 // test as a walk that ended by itself. Mike's 13 m and 81 m "walks" on
                 // 2-3 Nov came from here.
@@ -295,7 +294,8 @@ final class AppModel {
                     if activeWalk == nil, canResume(next) { resume(next) }
                     else {
                         walks.append(next)
-                        recoveredWalks.append(next)
+                        pendingRecovery.append(next)
+                        pendingRecovery.sort(by: Progression.walkedFirst)
                     }
                 }
                 if walk.isAutomatic,
@@ -303,9 +303,22 @@ final class AppModel {
                     && Self.displacement(of: walk.points) < Self.autoWalkConfirmDistance)),
                    request?.byYou == true || Self.displacement(of: walk.points) >= Self.autoWalkConfirmDistance {
                     let points = walk.points
-                    let samples = await Task.detached(priority: .utility) { CoverageTracer.samples(for: points) }.value
+                    let priorWalks = walks.filter { $0.id != walk.id && Progression.walkedFirst($0, walk) }
+                    let priorCities = cities
+                    let replay = await Task.detached(priority: .utility) {
+                        (CoverageTracer.samples(for: points), Progression.backfill(walks: priorWalks, cities: priorCities))
+                    }.value
                     guard generation == dataGeneration else { return }
-                    walk = restoreRecoveredCoverage(walk, samples: samples)
+                    var priorClaims: [String: Set<Hex>] = [:]
+                    for prior in replay.1.walks {
+                        for (key, hexes) in prior.newTileHexesByPlace ?? [:] { priorClaims[key, default: []].formUnion(hexes) }
+                    }
+                    for city in cities {
+                        for credit in city.tileCredits ?? [] where credit.id != walk.id && credit.at <= walk.startedAt {
+                            priorClaims[city.id.uuidString, default: []].formUnion(credit.hexes)
+                        }
+                    }
+                    walk = restoreRecoveredCoverage(walk, samples: replay.0, priorClaims: priorClaims)
                 }
                 if walk.isAutomatic, request?.byYou != true, !Self.countsAsAutoWalk(walk.points) {
                     // Like completeAutoWalk, the tiles it uncovered still count for quests.
@@ -374,7 +387,7 @@ final class AppModel {
 
     /// A closed seed is no longer active, so its coverage must not be attached to
     /// a newer walk's fresh tile maps while recovery awaits sensors.
-    private func restoreRecoveredCoverage(_ snapshot: Walk, samples: [Coordinate]) -> Walk {
+    private func restoreRecoveredCoverage(_ snapshot: Walk, samples: [Coordinate], priorClaims: [String: Set<Hex>]) -> Walk {
         var walk = snapshot
         var covered: [String: Set<Hex>] = [:]
         var added: [String: Set<Hex>] = [:]
@@ -385,8 +398,8 @@ final class AppModel {
             let fresh = city.visit(samples, within: shape(for: city))
             _ = city.noteWalked(samples, at: time, mistDays: Mist.days)
             let hexes = walk.newTileHexesByPlace == nil
-                ? Set(samples.map { city.grid.hex(containing: $0) }).intersection(city.tiles)
-                : (walk.newTileHexesByPlace?[city.id.uuidString] ?? []).union(fresh)
+                ? Set(samples.map { city.grid.hex(containing: $0) }).intersection(city.tiles).subtracting(priorClaims[city.id.uuidString] ?? [])
+                : (walk.newTileHexesByPlace?[city.id.uuidString] ?? []).union(fresh).subtracting(priorClaims[city.id.uuidString] ?? [])
             if !hexes.isEmpty {
                 covered[city.id.uuidString] = hexes
                 added[city.id.uuidString] = hexes.subtracting(before)
