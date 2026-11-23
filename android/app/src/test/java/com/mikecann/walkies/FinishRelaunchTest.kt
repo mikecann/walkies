@@ -259,7 +259,7 @@ class FinishRelaunchTest {
             try {
                 var now = 100000.0
                 var reply: ((Int?) -> Unit)? = null
-                val query: ((SwiftDate, SwiftDate, (Int?) -> Unit) -> Unit)? = if (held) { _, _, done -> reply = done } else null
+                val query: ((SwiftDate, SwiftDate, (Int?) -> Unit) -> Unit)? = if (held) ({ _, _, done -> reply = done }) else null
                 val model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now }, stepQuery = query)
                 for (i in 0..8) { now = 100000.0 + i * 40; model.record(point(i * 50.0, now)) }
                 now = 100340.0; model.record(point(450.0, now).copy(wheels = true))
