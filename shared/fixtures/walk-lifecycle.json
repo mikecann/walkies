@@ -297,6 +297,30 @@
         "finishedDistance": 400,
         "distance": 50
       }
+    },
+    {
+      "name": "walking dropout arrival survives relaunch",
+      "events": [
+        {
+          "action": "fix",
+          "x": 600,
+          "time": 500
+        },
+        {
+          "action": "relaunch"
+        },
+        {
+          "action": "fix",
+          "x": 650,
+          "time": 540
+        }
+      ],
+      "expected": {
+        "active": "same",
+        "finished": 0,
+        "points": 11,
+        "distance": 450
+      }
     }
   ]
 }

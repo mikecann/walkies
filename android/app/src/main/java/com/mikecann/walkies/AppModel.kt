@@ -671,7 +671,7 @@ class AppModel(
         var step = tracer.add(point)
         if (step.samples.isEmpty()) {
             activeWalk?.let { walk ->
-                if (walk.continuationState == WalkContinuation.Rode && walk.resumeAnchor != tracer.anchor) {
+                if (walk.resumeAnchor != tracer.anchor) {
                     val saved = finishCoverage(walk).copy(resumeAnchor = tracer.anchor)
                     activeWalk = saved
                     store.save(saved)
