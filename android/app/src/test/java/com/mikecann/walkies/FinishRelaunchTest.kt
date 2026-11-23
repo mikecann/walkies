@@ -43,6 +43,32 @@ class FinishRelaunchTest {
         visited = emptySet(), roads = emptyList(),
     )
 
+    @Test fun disabledOrExpiredBlockedHandoffsFinishTheirChildInsteadOfResumingIt() {
+        for (alwaysOn in listOf(false, true)) {
+            val (store, root) = tempStore()
+            try {
+                val seed = com.mikecann.walkies.model.NextWalk(arrival = point(900.0, 100720.0), point = point(950.0, 100760.0),
+                    following = (0..6).map { point(1000.0 + it * 50, 100800.0 + it * 40) })
+                val original = Walk(startedAt = SwiftDate.epoch(100000.0), automatic = true, distance = 400.0,
+                    points = (0..8).map { point(it * 50.0, 100000.0 + it * 40) }, pendingFinish =
+                        com.mikecann.walkies.model.PendingWalkFinish(SwiftDate.epoch(100320.0), WalkEndReason.Rode, false, seed))
+                store.save(original)
+                val blocked = File(root, "walks/.${seed.id.toString().uppercase()}.json.tmp")
+                assertTrue(blocked.mkdir())
+                val now = if (alwaysOn) 102000.0 else 101060.0
+                val model = AppModel(store, FakeSettings(alwaysOn = alwaysOn), FakeLocation(), clock = { now })
+                assertEquals(original.id, model.activeWalk!!.id)
+                assertTrue(blocked.delete())
+                if (alwaysOn) model.finishStaleAutoWalk() else model.record(point(1400.0, now))
+                assertNull(model.activeWalk)
+                assertEquals(setOf(original.id, seed.id), model.walks.map { it.id }.toSet())
+                val child = model.walks.single { it.id == seed.id }
+                assertEquals(101040.0, child.endedAt!!.epochSeconds, 0.001)
+                assertEquals(seed.walk().points, child.points)
+            } finally { root.parentFile.deleteRecursively() }
+        }
+    }
+
     @Test fun expiredOrDisabledConfirmedSeedsStillRevealTilesAndCreditShortOutings() {
         for (steps in listOf(4, 8)) for (alwaysOn in listOf(false, true)) {
             val (store, root) = tempStore()

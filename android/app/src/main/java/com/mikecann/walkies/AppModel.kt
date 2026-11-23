@@ -758,7 +758,7 @@ class AppModel(
     /** A walk you started yourself: keep every fix. */
     private fun recordWalk(point: TrackPoint) {
         var walk = activeWalk ?: return
-        if (walk.pendingFinish != null) { endWalk(); return }
+        if (walk.pendingFinish != null) { retryPendingFinish(); return }
         walk = walk.copy(points = walk.points + point)
         walk = apply(tracer.add(point), point, walk)
         activeWalk = walk
@@ -978,7 +978,12 @@ class AppModel(
     }
 
     private fun completeAutoWalk(finished: Walk, byYou: Boolean) {
-        val successor = finished.pendingFinish?.handoff
+        val successor = finished.pendingFinish?.handoff?.let { next ->
+            val last = next.points.lastOrNull()
+            if (next.pendingFinish != null || (alwaysOn && last != null && clock() - last.time < autoWalkGap)) next
+            else next.copy(pendingFinish = PendingWalkFinish(
+                last?.let { SwiftDate.epoch(it.time) } ?: next.startedAt, WalkEndReason.Recovered, byYou = false))
+        }
         if (successor != null && !store.saveWalkCheckpoint(successor)) return
         var walk = finished.transition(WalkContinuation.Event.Finished).copy(pendingFinish = null,
             endReason = finished.pendingFinish?.reason ?: finished.endReason)
