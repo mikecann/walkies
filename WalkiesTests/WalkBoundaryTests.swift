@@ -116,10 +116,19 @@ struct WalkBoundaryTests {
         #expect(AppModel.countsAsAutoWalk(points) == (farthest >= 150))
     }
 
-    @Test(arguments: [299.999, 300.0, 300.001])
+    @Test(arguments: [299.999, 300.001])
     func automaticHistoryNeeds300MetresOfRoute(distance: Double) {
         let points = [0.0, 100, 200, distance].enumerated().map { point($0.element, Double($0.offset) * 100) }
         #expect(AppModel.countsAsAutoWalk(points) == (distance >= 300))
+    }
+
+
+    @Test func exactDistanceCutoffsIncludeTheThresholdItself() {
+        // Threshold policy is tested on exact metre values. Haversine segment sums
+        // can round a synthetic nominal 300 m route to 299.99999999999994 m.
+        #expect(AppModel.countsAsAutoWalk(displacement: 150, distance: 300))
+        #expect(!AppModel.countsAsAutoWalk(displacement: 150.0.nextDown, distance: 300))
+        #expect(!AppModel.countsAsAutoWalk(displacement: 150, distance: 300.0.nextDown))
     }
 
 }

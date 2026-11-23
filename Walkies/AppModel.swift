@@ -892,7 +892,11 @@ final class AppModel {
 
     /// Far enough from where it started, and long enough, to be a walk.
     static func countsAsAutoWalk(_ points: [TrackPoint]) -> Bool {
-        displacement(of: points) >= autoWalkConfirmDistance && CoverageTracer.distance(for: points) >= minimumAutoWalk
+        countsAsAutoWalk(displacement: displacement(of: points), distance: CoverageTracer.distance(for: points))
+    }
+
+    static func countsAsAutoWalk(displacement: Double, distance: Double) -> Bool {
+        displacement >= autoWalkConfirmDistance && distance >= minimumAutoWalk
     }
 
     /// How far the furthest point gets from the first, in metres.
