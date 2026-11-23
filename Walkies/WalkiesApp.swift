@@ -8,7 +8,7 @@ import UserNotifications
 /// first unlock since it started, when saved files and the Keychain can't be read yet,
 /// so they wait for it.
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
-    private lazy var startup = AppStartup(
+    private lazy var startup: AppStartup = AppStartup(
         savedDataReadable: { FirstUnlock.happened() },
         openFence: { [weak self] in self?.model.tracker.openFence() },
         observeUnlock: { callback in
