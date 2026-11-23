@@ -9,6 +9,7 @@ import com.mikecann.walkies.model.WalkEndReason
 import com.mikecann.walkies.store.Store
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -38,7 +39,7 @@ class RestLifecycleTest {
         }
     }
 
-    @Test fun historyAndStepCompletionsCannotAppendPostGapFixesToThePreviousWalk() = runBlocking {
+    @Test(timeout = 10000) fun historyAndStepCompletionsCannotAppendPostGapFixesToThePreviousWalk() = runBlocking {
         val (store, root) = tempStore()
         try {
             val queued = ArrayDeque<Runnable>()
@@ -53,8 +54,9 @@ class RestLifecycleTest {
             store.save(original)
             var now = 100400.0
             var reply: ((Int?) -> Unit)? = null
+            val stepsRequested = CompletableDeferred<Unit>()
             val model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now },
-                historyScope = CoroutineScope(dispatcher), stepQuery = { _, _, done -> reply = done })
+                historyScope = CoroutineScope(dispatcher), stepQuery = { _, _, done -> reply = done; stepsRequested.complete(Unit) })
             assertFalse(model.historyReady)
             now = points.last().time + 600
             model.record(point(450.0, now))
@@ -64,6 +66,7 @@ class RestLifecycleTest {
             holding = false
             while (queued.isNotEmpty()) queued.removeFirst().run()
             model.waitForHistory()
+            stepsRequested.await()
             assertNotNull(reply)
             assertTrue(model.walks.isEmpty())
             assertNull(Store(root).loadWalks().single().endedAt)
