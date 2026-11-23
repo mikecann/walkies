@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
+import kotlinx.coroutines.CompletableDeferred
 import com.mikecann.walkies.grid.Coordinate
 import com.mikecann.walkies.grid.HexGrid
 import com.mikecann.walkies.place.Boundary
@@ -59,10 +60,15 @@ class FinishRelaunchTest {
                 for ((i, x) in xs.withIndex()) { now = 100720.0 + i * 40; model.record(point(x, now)) }
                 assertEquals(original.points, model.activeWalk!!.points)
                 val seed = model.activeWalk!!.pendingFinish!!.successor!!
+                val finished = CompletableDeferred<Unit>()
+                val stop = model.listen {
+                    if (model.walks.any { it.id == original.id } && model.activeWalk?.id == seed.id) finished.complete(Unit)
+                }
                 held = false
                 while (queue.isNotEmpty()) queue.removeFirst().run()
                 model.waitForHistory()
-                while (model.activeWalk?.id == original.id) yield()
+                finished.await()
+                stop()
                 assertEquals(original.points, model.walks.single().points)
                 assertEquals(100320.0, model.walks.single().endedAt!!.epochSeconds, 0.001)
                 assertEquals(seed.id, model.activeWalk!!.id)
