@@ -237,8 +237,11 @@ final class AppModel {
         var savedWalks = store.loadWalks()
         // The predecessor owns this seed until its own completed file is durable.
         // A crash before either file write can replay the handoff with the same UUID.
-        for walk in savedWalks {
-            if let next = walk.pendingFinish?.successor?.walk, !savedWalks.contains(where: { $0.id == next.id }),
+        var nextSaved = 0
+        while nextSaved < savedWalks.count {
+            let walk = savedWalks[nextSaved]
+            nextSaved += 1
+            if let next = walk.pendingFinish?.handoff, !savedWalks.contains(where: { $0.id == next.id }),
                store.saveWalkCheckpoint(next) {
                 savedWalks.append(next)
             }
@@ -278,7 +281,7 @@ final class AppModel {
                 // test as a walk that ended by itself. Mike's 13 m and 81 m "walks" on
                 // 2-3 Nov came from here.
                 let request = walk.pendingFinish
-                if let next = request?.successor?.walk, !savedWalks.contains(where: { $0.id == next.id }) {
+                if let next = request?.handoff, !savedWalks.contains(where: { $0.id == next.id }) {
                     guard store.saveWalkCheckpoint(next) else {
                         // Keep the durable finish request retryable, including the seed.
                         if activeWalk == nil {
@@ -289,6 +292,13 @@ final class AppModel {
                     }
                     savedWalks.append(next)
                     if activeWalk == nil { resume(next) }
+                }
+                if request != nil, walk.isAutomatic, walk.newTileHexesByPlace == nil,
+                   request?.byYou == true || Self.displacement(of: walk.points) >= Self.autoWalkConfirmDistance {
+                    let points = walk.points
+                    let samples = await Task.detached(priority: .utility) { CoverageTracer.samples(for: points) }.value
+                    guard generation == dataGeneration else { return }
+                    walk = restoreRecoveredCoverage(walk, samples: samples)
                 }
                 if walk.isAutomatic, request?.byYou != true, !Self.countsAsAutoWalk(walk.points) {
                     // Like completeAutoWalk, the tiles it uncovered still count for quests.
@@ -344,11 +354,44 @@ final class AppModel {
     private func resume(_ walk: Walk) {
         activeWalk = walk
         tracer = CoverageTracer()
-        if let anchor = walk.resumeAnchor ?? (walk.continuation == .rode ? nil : walk.points.last) {
+        if let anchor = walk.pendingFinish?.successor?.walk.resumeAnchor ?? walk.resumeAnchor
+            ?? (walk.continuation == .rode ? nil : walk.points.last) {
             tracer.restart(from: anchor)
         }
         autoWalkPending = Self.displacement(of: walk.points) < Self.autoWalkConfirmDistance
         activePath = autoWalkPending ? [] : walk.points.map(\.coordinate)
+    }
+
+    /// A closed seed is no longer active, so its coverage must not be attached to
+    /// a newer walk's fresh tile maps while recovery awaits sensors.
+    private func restoreRecoveredCoverage(_ snapshot: Walk, samples: [Coordinate]) -> Walk {
+        var walk = snapshot
+        var covered: [String: Set<Hex>] = [:]
+        var added: [String: Set<Hex>] = [:]
+        let time = walk.points.last?.time ?? walk.startedAt.timeIntervalSince1970
+        for i in cities.indices {
+            var city = cities[i]
+            let before = city.tiles
+            _ = city.visit(samples, within: shape(for: city))
+            _ = city.noteWalked(samples, at: time, mistDays: Mist.days)
+            let hexes = Set(samples.map { city.grid.hex(containing: $0) }).intersection(city.tiles)
+            if !hexes.isEmpty {
+                covered[city.id.uuidString] = hexes
+                added[city.id.uuidString] = hexes.subtracting(before)
+            }
+            city.updatedAt = now()
+            cities[i] = city
+        }
+        walk.newTileHexesByPlace = covered
+        walk.newTilesByPlace = covered.mapValues(\.count)
+        walk.addedTilesByPlace = added
+        walk.newTiles = covered.values.reduce(0) { $0 + $1.count }
+        rebuildCountingTiles()
+        tilesRevision += 1
+        store.save(cities)
+        store.flush()
+        store.save(walk)
+        return walk
     }
 
     /// Sync calls this before uploading anything. If the cache/network is unavailable,
@@ -954,7 +997,7 @@ final class AppModel {
     private func invalidateSuccessorForRide(_ point: TrackPoint) {
         guard activeWalk?.isAutomatic == true, Self.isRide(point) else { return }
         activeWalk?.continueAfter(.observedRide)
-        activeWalk?.pendingFinish?.successor = nil
+        activeWalk?.pendingFinish?.observedRide(confirmDistance: Self.autoWalkConfirmDistance)
         tracer = CoverageTracer()
         saveNow(waiting: true)
     }
@@ -1065,7 +1108,7 @@ final class AppModel {
 
     private func completeAutoWalk(_ finished: Walk, byYou: Bool, reason: Walk.EndReason) {
         var walk = finished
-        let successor = walk.pendingFinish?.successor?.walk
+        let successor = walk.pendingFinish?.handoff
         // Commit the next UUID before removing its seed from the predecessor file.
         if let successor, !store.saveWalkCheckpoint(successor) { return }
         walk.pendingFinish = nil
@@ -1132,6 +1175,7 @@ final class AppModel {
         refreshProgressPicks()
         requestSync?()
         addPlacesYouveBeen()
+        retryPendingFinish()
     }
 
     // MARK: Always on

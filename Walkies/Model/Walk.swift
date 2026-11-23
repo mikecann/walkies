@@ -66,6 +66,32 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
         var reason: EndReason
         var byYou: Bool
         var successor: NextWalk?
+        var closedSuccessors: [NextWalk]?
+
+        /// Drain confirmed outings in order. Each next file owns the remaining queue
+        /// before its predecessor can clear it, even across more than one ride.
+        var handoff: Walk? {
+            guard let first = closedSuccessors?.first else { return successor?.walk }
+            var walk = first.walk
+            let rest = Array((closedSuccessors ?? []).dropFirst())
+            walk.continuation = .rode
+            walk.resumeAnchor = nil
+            walk.pendingFinish = PendingFinish(at: walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt,
+                                              reason: .rode, byYou: false, successor: successor,
+                                              closedSuccessors: rest.isEmpty ? nil : rest)
+            return walk
+        }
+
+        mutating func observedRide(confirmDistance: Double) {
+            if let successor {
+                let points = successor.walk.points
+                if let origin = points.first?.coordinate,
+                   points.contains(where: { origin.distance(to: $0.coordinate) >= confirmDistance }) {
+                    closedSuccessors = (closedSuccessors ?? []) + [successor]
+                }
+            }
+            successor = nil
+        }
     }
 
     /// The first accepted segment after a ride, owned by its next UUID before
