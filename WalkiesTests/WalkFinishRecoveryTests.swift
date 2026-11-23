@@ -221,8 +221,8 @@ extension SyncSafetyTests {
         #expect(relaunched.walks.first { $0.id == first.id }?.points == first.points)
     }
 
-    @Test(arguments: [false, true])
-    func anotherRideKeepsAQualifyingSuccessorWhoseFirstWriteIsBlocked(recreate: Bool) async throws {
+    @Test(arguments: [false, true], ["rode", "gap"])
+    func anotherRideKeepsAQualifyingSuccessorWhoseFirstWriteIsBlocked(recreate: Bool, boundary: String) async throws {
         let originalRoot = root()
         let original = Store(root: originalRoot)
         defer { original.wipe() }
@@ -259,19 +259,23 @@ extension SyncSafetyTests {
         #expect(beforeRide.pendingFinish?.successor?.id == secondID)
         #expect(beforeRide.pendingFinish?.successor?.walk.points == accepted)
         #expect(abs((beforeRide.pendingFinish?.successor?.walk.distance ?? 0) - 400) < 0.01)
-        clock.elapsed = 1060
-        model.recordAlwaysOnForTesting(finishFix(1350, 1060, wheels: true))
+        if boundary == "rode" {
+            clock.elapsed = 1060
+            model.recordAlwaysOnForTesting(finishFix(1350, 1060, wheels: true))
+        }
         // A ride invalidates the cursor, but accepted walking stays durable while
         // the next displaced arrival confirms the next outing.
         let afterRide = try #require(original.loadWalks().first { $0.id == first.id })
         let closed = try finishMetadata(afterRide)?["closedSuccessors"] as? [[String: Any]] ?? []
         #expect(afterRide.pendingFinish?.successor?.id == secondID
                 || closed.contains { $0["id"] as? String == secondID.uuidString })
-        clock.elapsed = 1400
-        let thirdArrival = finishFix(1800, 1400)
+        let arrivalTime = boundary == "gap" ? 1640.0 : 1400.0
+        let arrivalX = boundary == "gap" ? 1350.0 : 1800.0
+        clock.elapsed = arrivalTime
+        let thirdArrival = finishFix(arrivalX, arrivalTime)
         model.recordAlwaysOnForTesting(thirdArrival)
-        clock.elapsed = 1440
-        model.recordAlwaysOnForTesting(finishFix(1850, 1440))
+        clock.elapsed = arrivalTime + 40
+        model.recordAlwaysOnForTesting(finishFix(arrivalX + 50, clock.elapsed))
         model.saveNow(waiting: true)
 
         let recovered: AppModel
@@ -300,7 +304,7 @@ extension SyncSafetyTests {
         #expect(second.points == accepted)
         #expect(second.startedAt == Date(timeIntervalSince1970: finishBase + 720))
         #expect(second.endedAt == Date(timeIntervalSince1970: finishBase + 1040))
-        #expect(second.endReason == .rode)
+        #expect(second.endReason?.rawValue == boundary)
         #expect(second.steps != nil)
         #expect(abs(second.distance - 400) < 0.01)
         #expect(recoveredStore.loadWalks().first { $0.id == secondID }?.points == accepted)
@@ -308,7 +312,7 @@ extension SyncSafetyTests {
         let third = try #require(recovered.activeWalk)
         #expect(third.id != first.id && third.id != secondID)
         #expect(third.points.first == thirdArrival)
-        #expect(third.points.allSatisfy { $0.time >= finishBase + 1400 })
+        #expect(third.points.allSatisfy { $0.time >= finishBase + arrivalTime })
         let server = SafetyServer()
         let client = client(server)
         let sync = SyncEngine(model: recovered, store: recoveredStore, isSignedIn: { true }, makeClient: { client })
