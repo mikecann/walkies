@@ -49,13 +49,13 @@ class FinishRelaunchTest {
             try {
                 val city = place()
                 val previousPoints = (0..8).map { point(it * 50.0, 100000.0 + it * 40) }
-                val claimed = com.mikecann.walkies.model.CoverageTracer.samples(previousPoints)
-                    .map { city.grid.hex(containing = it) }.toSet().intersect(city.tiles)
+                val visited = city.visit(com.mikecann.walkies.model.CoverageTracer.samples(previousPoints), city.shape())
+                val claimed = visited.second
                 val previous = Walk(startedAt = SwiftDate.epoch(100000.0), endedAt = SwiftDate.epoch(100320.0),
                     automatic = true, points = previousPoints, distance = 400.0, newTiles = claimed.size,
                     newTileHexesByPlace = mapOf(city.id.toString().uppercase() to claimed),
                     newTilesByPlace = mapOf(city.id.toString().uppercase() to claimed.size))
-                store.save(listOf(city.copy(visited = claimed, tileCredits = if (creditOnly)
+                store.save(listOf(visited.first.copy(tileCredits = if (creditOnly)
                     listOf(City.TileCredit(previous.id, previous.startedAt, claimed)) else null)))
                 if (!creditOnly) store.save(previous)
                 val current = Walk(startedAt = SwiftDate.epoch(200000.0), automatic = true,
