@@ -3,14 +3,21 @@ import Testing
 @testable import Walkies
 
 extension SyncSafetyTests {
-    @Test(arguments: [120.0, 601.0])
-    func anExplicitShortEndSurvivesDeathWhileItsFinalStepsArePending(relaunchAge: Double) async throws {
+    @Test(arguments: [120.0, 601.0], [0.0, 0.5, 1.0])
+    func anExplicitShortEndSurvivesDeathWhileItsFinalStepsArePending(relaunchAge: Double, previsitedFraction: Double) async throws {
         let originalRoot = root()
         let original = Store(root: originalRoot)
         defer { original.wipe() }
         let clock = FinishRecoveryClock(0)
         let gate = FinishStepGate()
-        let place = ModelFixesTests().city(origin: Coordinate(lat: 0, lon: 0))
+        var place = ModelFixesTests().city(origin: Coordinate(lat: 0, lon: 0))
+        let route = (0...2).map { finishFix(Double($0) * 50, Double($0) * 40) }
+        if previsitedFraction > 0 {
+            let priorPoints = Array(route.prefix(previsitedFraction == 1 ? 3 : 2))
+            _ = place.visit(CoverageTracer.samples(for: priorPoints), within: place.shape())
+        }
+        var expectedPlace = place
+        let expectedFresh = expectedPlace.visit(CoverageTracer.samples(for: route), within: expectedPlace.shape())
         original.save([place])
         let model = AppModel(store: original, servicesEnabled: false, alwaysOn: true,
                              stepQuery: gate.count, now: clock.now)
@@ -55,9 +62,9 @@ extension SyncSafetyTests {
         #expect(finished?.endReason == .you)
         #expect(finished?.points == outing.points)
         #expect(finished?.steps == 222)
-        #expect((finished?.newTiles ?? 0) > 0)
-        #expect(finished?.newTileHexesByPlace?[place.id.uuidString]?.isEmpty == false)
-        #expect(relaunched.questTileCounts[outing.id]?[place.id] == finished?.newTilesByPlace?[place.id.uuidString])
+        #expect(finished?.newTiles == expectedFresh.count)
+        #expect((finished?.newTileHexesByPlace?[place.id.uuidString] ?? []) == expectedFresh)
+        #expect((relaunched.questTileCounts[outing.id]?[place.id] ?? 0) == expectedFresh.count)
         #expect(relaunched.freshTiles.isEmpty)
         #expect(recovered.loadWalks().first { $0.id == outing.id }?.endedAt == requestedEnd)
         if let finished { #expect(try finishMetadata(finished) == nil) }
@@ -69,6 +76,7 @@ extension SyncSafetyTests {
         #expect(sync.status == .idle)
         #expect(try await server.uploadedWalk(outing.id)?.endedAt == requestedEnd)
         #expect(try await server.uploadedWalk(outing.id)?.points == outing.points)
+        #expect(try await server.uploadedWalk(outing.id)?.newTiles == expectedFresh.count)
 
         nextClock.elapsed += 10
         relaunched.recordAlwaysOnForTesting(finishFix(500, nextClock.elapsed))
