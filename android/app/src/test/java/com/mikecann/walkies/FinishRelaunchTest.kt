@@ -17,6 +17,9 @@ import com.mikecann.walkies.grid.HexGrid
 import com.mikecann.walkies.place.Boundary
 import com.mikecann.walkies.place.City
 import com.mikecann.walkies.place.GeoPolygon
+import com.mikecann.walkies.sync.FakeServer
+import com.mikecann.walkies.sync.SyncEngine
+import com.mikecann.walkies.convex.ConvexClient
 import kotlin.coroutines.CoroutineContext
 import org.junit.Assert.*
 import org.junit.Test
@@ -39,6 +42,91 @@ class FinishRelaunchTest {
         tiles = (0..180).map { HexGrid.hex(containing = point(it * 10.0, 0.0).coordinate) }.toSet(),
         visited = emptySet(), roads = emptyList(),
     )
+
+    @Test fun aSecondRideCannotEraseAQualifiedSuccessorWhoseFileWriteIsBlocked() {
+        val (store, root) = tempStore()
+        var copy: File? = null
+        try {
+            var now = 100000.0
+            var reply: ((Int?) -> Unit)? = null
+            val model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now },
+                stepQuery = { _, _, done -> reply = done })
+            for (i in 0..8) { now = 100000.0 + i * 40; model.record(point(i * 50.0, now)) }
+            val original = model.activeWalk!!
+            now = 100340.0; model.record(point(450.0, now).copy(wheels = true))
+            now = 100720.0; model.record(point(900.0, now))
+            now = 100760.0; model.record(point(950.0, now))
+            val successorId = model.activeWalk!!.pendingFinish!!.successor!!.id
+            val blocked = File(root, "walks/.${successorId.toString().uppercase()}.json.tmp")
+            assertTrue(blocked.mkdir())
+            reply!!(400)
+            model.querySteps = null
+            for (i in 0..6) { now = 100800.0 + i * 40; model.record(point(1000.0 + i * 50, now)) }
+            assertEquals(9, model.activeWalk!!.pendingFinish!!.successor!!.walk().points.size)
+            now = 101060.0; model.record(point(1350.0, now).copy(wheels = true, accuracy = 80.0))
+            model.saveNow(waiting = true)
+            assertTrue(blocked.delete())
+            val (reopened, copiedRoot) = snapshot(root)
+            copy = copiedRoot
+            val recovered = AppModel(reopened, FakeSettings(alwaysOn = true), FakeLocation(), clock = { now })
+            val saved = recovered.walks.single { it.id == successorId }
+            assertEquals(9, saved.points.size)
+            assertEquals(100720.0, saved.startedAt.epochSeconds, 0.001)
+            assertEquals(101040.0, saved.endedAt!!.epochSeconds, 0.001)
+            assertEquals(400.0, saved.distance, 0.01)
+            assertEquals(WalkEndReason.Rode, saved.endReason)
+            assertEquals(original.points, recovered.walks.single { it.id == original.id }.points)
+            assertNull(recovered.activeWalk)
+        } finally { root.parentFile.deleteRecursively(); copy?.parentFile?.deleteRecursively() }
+    }
+
+    @Test fun backgroundCheckpointDuringHeldRecoveryKeepsUnknownSuccessorCoverage() {
+        val (store, root) = tempStore()
+        try {
+            val place = place()
+            store.save(listOf(place)); store.flush()
+            val seed = com.mikecann.walkies.model.NextWalk(arrival = point(900.0, 100720.0), point = point(950.0, 100760.0),
+                following = (0..6).map { point(1000.0 + it * 50, 100800.0 + it * 40) })
+            val original = Walk(startedAt = SwiftDate.epoch(100000.0), automatic = true,
+                points = (0..8).map { point(it * 50.0, 100000.0 + it * 40) }, pendingFinish =
+                    com.mikecann.walkies.model.PendingWalkFinish(SwiftDate.epoch(100320.0), WalkEndReason.Rode, false, seed))
+            store.save(original); store.save(seed.walk())
+            var reply: ((Int?) -> Unit)? = null
+            val model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { 101050.0 },
+                stepQuery = { _, _, done -> reply = done })
+            assertFalse(model.historyReady)
+            model.saveNow(waiting = true)
+            assertNull(store.loadWalks().single { it.id == seed.id }.newTileHexesByPlace)
+            reply!!(400)
+            val fresh = model.activeWalk!!.newTileHexesByPlace!!.getValue(place.id.toString().uppercase())
+            assertTrue(fresh.isNotEmpty())
+            assertTrue(Store(root).loadCities().single().visited.containsAll(fresh))
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
+    @Test fun launchBlockedHandoffRetriesAndUploadsWithinTheSameModel() = runBlocking {
+        val (store, root) = tempStore()
+        try {
+            val seed = com.mikecann.walkies.model.NextWalk(arrival = point(900.0, 100720.0), point = point(950.0, 100760.0))
+            val original = Walk(startedAt = SwiftDate.epoch(100000.0), automatic = true,
+                points = (0..8).map { point(it * 50.0, 100000.0 + it * 40) }, pendingFinish =
+                    com.mikecann.walkies.model.PendingWalkFinish(SwiftDate.epoch(100320.0), WalkEndReason.Rode, false, seed))
+            store.save(original)
+            val blocked = File(root, "walks/.${seed.id.toString().uppercase()}.json.tmp")
+            assertTrue(blocked.mkdir())
+            val model = AppModel(store, FakeSettings(alwaysOn = true), FakeLocation(), clock = { 100780.0 })
+            assertEquals(original.id, model.activeWalk?.id)
+            assertTrue(blocked.delete())
+            model.finishStaleAutoWalk()
+            assertEquals(seed.id, model.activeWalk!!.id)
+            assertEquals(original.id, model.walks.single().id)
+            val server = FakeServer()
+            val client = ConvexClient(server.backend, http = server)
+            val engine = SyncEngine(model, store, isSignedIn = { true }, makeClient = { client }, scope = this)
+            engine.sync()
+            assertTrue(original.id.toString().uppercase() in server.walks)
+        } finally { root.parentFile.deleteRecursively() }
+    }
 
     @Test(timeout = 10000) fun heldHistoryNeverMergesOrReanchorsTheSuccessorAsMoreWalkingArrives() = runBlocking {
         for (xs in listOf(listOf(560.0, 520.0, 480.0), listOf(900.0, 950.0, 1000.0))) {

@@ -330,11 +330,16 @@ class AppModel(
         val blockedSeeds = HashSet<UUID>()
         // A seed must own its file before its predecessor can be marked finished.
         // Never replace one that was already written and may have progressed.
-        for (saved in savedById.values.toList()) {
-            val seed = saved.pendingFinish?.successor ?: continue
-            if (seed.id !in savedById) {
-                val successor = seed.walk()
-                if (store.saveWalkCheckpoint(successor)) savedById[successor.id] = successor
+        val handoffs = savedById.keys.toMutableList()
+        var handoffIndex = 0
+        while (handoffIndex < handoffs.size) {
+            val saved = savedById.getValue(handoffs[handoffIndex++])
+            val successor = saved.pendingFinish?.handoff ?: continue
+            if (successor.id !in savedById) {
+                if (store.saveWalkCheckpoint(successor)) {
+                    savedById[successor.id] = successor
+                    handoffs.add(successor.id)
+                }
                 else blockedSeeds.add(saved.id)
             }
         }
@@ -343,6 +348,7 @@ class AppModel(
             walk.endedAt == null && walk.pendingFinish == null && alwaysOn && walk.isAutomatic &&
                 last != null && clock() - last.time < autoWalkGap
         }.maxByOrNull { it.startedAt }
+            ?: savedById.values.filter { it.id in blockedSeeds }.maxByOrNull { it.startedAt }
         for (saved in savedById.values.sortedBy { it.startedAt }) {
             val walk = saved
             if (walk.endedAt == null) {
@@ -388,6 +394,22 @@ class AppModel(
         if (generation != dataGeneration) return
         val walk = recovered.getOrNull(index)
         if (walk == null) { prepareHistory(); return }
+        if (walk.pendingFinish != null && walk.isAutomatic && walk.newTileHexesByPlace == null &&
+            (walk.pendingFinish.byYou || displacement(walk.points) >= AUTO_WALK_CONFIRM_DISTANCE)) {
+            fun install(samples: List<Coordinate>) {
+                if (generation != dataGeneration) return
+                val credited = restoreRecoveredCoverage(walk, samples)
+                walks = walks.map { if (it.id == walk.id) credited else it }
+                val updated = recovered.toMutableList().also { it[index] = credited }
+                finishRecovered(updated, index, generation)
+            }
+            val scope = historyScope
+            if (scope == null) install(CoverageTracer.samples(walk.points)) else scope.launch {
+                val samples = withContext(Dispatchers.Default) { CoverageTracer.samples(walk.points) }
+                install(samples)
+            }
+            return
+        }
         // Cut off by the app being stopped (an install, or the system), it gets the same
         // test as a walk that ended by itself. Mike's 13 m and 81 m "walks" on his iPhone
         // on 2-3 Nov came from here.
@@ -417,17 +439,6 @@ class AppModel(
                 var finished = walk.transition(WalkContinuation.Event.Finished)
                     .copy(endedAt = end, steps = count.takeIf { countSteps && setting == stepSettingRevision },
                         endReason = walk.pendingFinish?.reason ?: WalkEndReason.Recovered, pendingFinish = null)
-                if (walk.isAutomatic && walk.pendingFinish?.byYou == true && displacement(walk.points) < AUTO_WALK_CONFIRM_DISTANCE) {
-                    val activeFresh = freshTiles
-                    val activeAdded = addedTiles
-                    freshTiles = byPlaceId(walk.newTileHexesByPlace)
-                    addedTiles = byPlaceId(walk.addedTilesByPlace)
-                    val uncovered = visit(CoverageTracer.samples(walk.points), end.epochSeconds)
-                    finished = finishCoverage(finished.copy(newTiles = finished.newTiles + uncovered))
-                    freshTiles = activeFresh
-                    addedTiles = activeAdded
-                    store.save(cities)
-                }
                 walks = walks.map { if (it.id == walk.id) finished else it }
                 store.save(finished)
                 finishRecovered(recovered, index + 1, generation)
@@ -494,8 +505,32 @@ class AppModel(
         val uncovered = visit(samples, snapshot.points.lastOrNull()?.time ?: snapshot.startedAt.epochSeconds)
         store.save(cities)
         store.flush()
-        activeWalk = finishCoverage(current.copy(newTiles = current.newTiles + uncovered))
+        activeWalk = attachingCoverage(current.copy(newTiles = current.newTiles + uncovered))
         store.save(activeWalk!!)
+    }
+
+    /** Closed queued legs no longer own the active walk's fresh tile maps. */
+    private fun restoreRecoveredCoverage(walk: Walk, samples: List<Coordinate>): Walk {
+        val covered = LinkedHashMap<String, Set<Hex>>()
+        val added = LinkedHashMap<String, Set<Hex>>()
+        val time = walk.points.lastOrNull()?.time ?: walk.startedAt.epochSeconds
+        cities = cities.map { city ->
+            val visited = city.visit(samples, shape(city)).first.noteWalked(samples, time, mistDays).city
+            val hexes = samples.mapTo(HashSet()) { visited.grid.hex(containing = it) }.intersect(visited.tiles)
+            if (hexes.isNotEmpty()) {
+                covered[city.id.uuidString] = hexes
+                added[city.id.uuidString] = hexes - city.tiles
+            }
+            visited.copy(updatedAt = now())
+        }
+        val credited = walk.copy(newTileHexesByPlace = covered, newTilesByPlace = covered.mapValues { it.value.size },
+            addedTilesByPlace = added, newTiles = covered.values.sumOf { it.size })
+        rebuildCountingTiles()
+        tilesRevision++
+        store.save(cities)
+        store.flush()
+        store.save(credited)
+        return credited
     }
 
     /** Saves walks whose tile identities were recovered, and keeps the counts for rewards. */
@@ -632,7 +667,10 @@ class AppModel(
     /** The End walk button on an always-on walk: ends it now. */
     fun endAutoWalk() = finishAutoWalk(byYou = true, reason = WalkEndReason.You)
 
-    private fun finishCoverage(walk: Walk) = walk.copy(
+    private fun finishCoverage(walk: Walk) =
+        if (!historyReady && walk.newTileHexesByPlace == null) walk else attachingCoverage(walk)
+
+    private fun attachingCoverage(walk: Walk) = walk.copy(
         newTilesByPlace = countsByPlace(freshTiles),
         newTileHexesByPlace = hexesByPlace(freshTiles),
         addedTilesByPlace = hexesByPlace(addedTiles),
@@ -641,7 +679,7 @@ class AppModel(
     /** Saves the walk so far and the places, say when the app goes into the background. */
     fun saveNow(waiting: Boolean = false) {
         activeWalk?.let { walk ->
-            val finished = finishCoverage(walk).copy(resumeAnchor = walk.pendingFinish?.successor?.arrival ?: tracer.anchor)
+            val finished = finishCoverage(walk).copy(resumeAnchor = walk.pendingFinish?.successor?.walk()?.resumeAnchor ?: tracer.anchor)
             activeWalk = finished
             store.save(finished)
         }
@@ -652,7 +690,7 @@ class AppModel(
 
     private fun checkpointFinish(): Boolean {
         val walk = activeWalk ?: return false
-        val saved = finishCoverage(walk).copy(resumeAnchor = walk.pendingFinish?.successor?.arrival ?: tracer.anchor)
+        val saved = finishCoverage(walk).copy(resumeAnchor = walk.pendingFinish?.successor?.walk()?.resumeAnchor ?: tracer.anchor)
         activeWalk = saved
         if (!store.saveWalkCheckpoint(saved)) return false
         store.save(cities)
@@ -811,7 +849,7 @@ class AppModel(
         val request = walk.pendingFinish ?: return false
         if (riding(point)) {
             activeWalk = walk.transition(WalkContinuation.Event.ObservedRide)
-                .copy(pendingFinish = request.copy(successor = null))
+                .copy(pendingFinish = request.observedRide(AUTO_WALK_CONFIRM_DISTANCE))
             tracer.add(point)
             checkpointFinish()
             if (historyReady && finishingWalkId == null) finishAutoWalk()
@@ -907,7 +945,7 @@ class AppModel(
     }
 
     private fun completeAutoWalk(finished: Walk, byYou: Boolean) {
-        val successor = finished.pendingFinish?.successor?.walk()
+        val successor = finished.pendingFinish?.handoff
         if (successor != null && !store.saveWalkCheckpoint(successor)) return
         var walk = finished.transition(WalkContinuation.Event.Finished).copy(pendingFinish = null,
             endReason = finished.pendingFinish?.reason ?: finished.endReason)
@@ -970,6 +1008,7 @@ class AppModel(
         requestSync?.invoke()
         addPlacesYouveBeen()
         onChange()
+        if (activeWalk?.pendingFinish != null) finishAutoWalk()
     }
 
     private fun turnOnAlwaysOn() {

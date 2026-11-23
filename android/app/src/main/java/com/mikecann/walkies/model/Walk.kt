@@ -62,7 +62,28 @@ data class PendingWalkFinish(
     val reason: WalkEndReason,
     val byYou: Boolean,
     val successor: NextWalk? = null,
-)
+    /** Confirmed legs frozen by another ride while the first handoff was still waiting. */
+    val closedSuccessors: List<NextWalk>? = null,
+) {
+    /** Each file owns the remaining queue before its predecessor can finish. */
+    val handoff: Walk? get() {
+        val closed = closedSuccessors?.firstOrNull() ?: return successor?.walk()
+        val walk = closed.walk()
+        return walk.transition(WalkContinuation.Event.ObservedRide).copy(pendingFinish = PendingWalkFinish(
+            at = SwiftDate.epoch(walk.points.last().time), reason = WalkEndReason.Rode, byYou = false,
+            successor = successor, closedSuccessors = closedSuccessors.orEmpty().drop(1).takeIf { it.isNotEmpty() },
+        ))
+    }
+
+    fun observedRide(confirmationDistance: Double): PendingWalkFinish {
+        val open = successor
+        val points = open?.walk()?.points.orEmpty()
+        val origin = points.firstOrNull()?.coordinate
+        val confirmed = origin != null && points.any { origin.distance(it.coordinate) >= confirmationDistance }
+        return copy(successor = null, closedSuccessors =
+            (closedSuccessors.orEmpty() + if (confirmed) listOf(open!!) else emptyList()).takeIf { it.isNotEmpty() })
+    }
+}
 
 data class Walk(
     val id: UUID = UUID.randomUUID(),

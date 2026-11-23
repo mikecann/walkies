@@ -232,14 +232,8 @@ object Codec {
                 put("at", finish.at.sinceReference)
                 put("reason", finish.reason.rawValue)
                 put("byYou", finish.byYou)
-                finish.successor?.let { next ->
-                    put("successor", buildJsonObject {
-                        put("id", next.id.uuidString)
-                        put("arrival", trackPoint(next.arrival))
-                        next.point?.let { put("point", trackPoint(it)) }
-                        next.following?.let { put("following", JsonArray(it.map(::trackPoint))) }
-                    })
-                }
+                finish.successor?.let { put("successor", nextWalk(it)) }
+                finish.closedSuccessors?.let { put("closedSuccessors", JsonArray(it.map(::nextWalk))) }
             })
         }
     }
@@ -274,13 +268,23 @@ object Codec {
                     reason = WalkEndReason.entries.firstOrNull { it.rawValue == finish.string("reason") }
                         ?: throw Invalid("Unknown pending finish reason"),
                     byYou = finish.req("byYou").bool(),
-                    successor = finish.opt("successor")?.obj()?.let { next ->
-                        NextWalk(next.uuid("id"), trackPoint(next.req("arrival")), next.opt("point")?.let(::trackPoint),
-                            next.opt("following")?.arr()?.map(::trackPoint))
-                    },
+                    successor = finish.opt("successor")?.let(::nextWalk),
+                    closedSuccessors = finish.opt("closedSuccessors")?.arr()?.map(::nextWalk),
                 )
             },
         )
+    }
+
+    private fun nextWalk(next: NextWalk) = buildJsonObject {
+        put("id", next.id.uuidString)
+        put("arrival", trackPoint(next.arrival))
+        next.point?.let { put("point", trackPoint(it)) }
+        next.following?.let { put("following", JsonArray(it.map(::trackPoint))) }
+    }
+
+    private fun nextWalk(e: JsonElement): NextWalk = e.obj().let { next ->
+        NextWalk(next.uuid("id"), trackPoint(next.req("arrival")), next.opt("point")?.let(::trackPoint),
+            next.opt("following")?.arr()?.map(::trackPoint))
     }
 
     private fun hexesByPlace(map: Map<String, Set<Hex>>) = JsonObject(map.mapValues { hexes(it.value) })
