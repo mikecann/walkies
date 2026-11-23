@@ -60,6 +60,7 @@ struct AlwaysOnRideTests {
         let store = Store(root: URL.temporaryDirectory.appending(path: "WalkiesRide-\(UUID())"))
         defer { store.wipe() }
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true, stepQuery: { _, _ in 100 })
+        model.countSteps = true
         await model.waitForHistory()
         let old = try startWalk(model, at: Date.now.timeIntervalSince1970)
         let last = try #require(old.points.last)

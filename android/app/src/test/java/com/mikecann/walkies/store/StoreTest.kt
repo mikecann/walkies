@@ -33,6 +33,48 @@ class StoreTest {
 
     private val street = listOf(RoadLine(RoadLine.Kind.Road, listOf(Coordinate(-33.63, 115.38), Coordinate(-33.631, 115.381))))
 
+    @Test fun aFailedCityFlushRetriesWithoutAnotherLocationFix() {
+        val (store, root) = tempStore()
+        try {
+            val original = city("Original", street)
+            val latest = original.copy(name = "Latest", visited = original.tiles)
+            store.save(listOf(original))
+            store.flush()
+            val blocked = File(root, ".cities.json.tmp")
+            assertTrue(blocked.mkdir())
+            store.save(listOf(latest))
+            store.flush()
+            assertTrue(blocked.delete())
+            store.flush()
+            assertEquals(listOf(latest), Store(root).loadCities())
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
+    @Test fun aNewerSaveReplacesAFailedSnapshotAndWipeDiscardsRetries() {
+        val (store, root) = tempStore()
+        try {
+            val original = city("Original", street)
+            store.save(listOf(original))
+            store.flush()
+            val blocked = File(root, ".cities.json.tmp")
+            assertTrue(blocked.mkdir())
+            store.save(listOf(original.copy(name = "Failed")))
+            store.flush()
+            val latest = original.copy(name = "Newest")
+            store.save(listOf(latest))
+            store.flush()
+            assertTrue(blocked.delete())
+            store.flush()
+            assertEquals(listOf(latest), Store(root).loadCities())
+            assertTrue(blocked.mkdir())
+            store.save(listOf(original.copy(name = "Discarded by wipe")))
+            store.flush()
+            store.wipe()
+            store.flush()
+            assertTrue(Store(root).loadCities().isEmpty())
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
     @Test
     fun streetsGoInTheirOwnFileAndComeBack() {
         val (store, root) = tempStore()

@@ -160,6 +160,7 @@ class SyncEngine(
                 return
             }
             try {
+                model.waitForHistory()
                 check(revision)
                 push(client, revision)
                 pull(client, revision)

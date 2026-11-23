@@ -122,6 +122,7 @@ struct WalkStepFinishTests {
             #expect(to >= Date(timeIntervalSince1970: points.last!.time))
             return 450
         })
+        model.countSteps = true
         await model.waitForHistory()
         model.endAutoWalk()
         for _ in 0..<100 where model.activeWalk != nil { await Task.yield() }
@@ -143,6 +144,7 @@ struct WalkStepFinishTests {
             #expect(to == last)
             return 400
         })
+        model.countSteps = true
         await model.waitForHistory()
         #expect(model.walks.first?.steps == 400)
         #expect(model.walks.first?.endedAt == last)

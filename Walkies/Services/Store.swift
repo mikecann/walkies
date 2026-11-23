@@ -6,6 +6,26 @@ import os
 nonisolated struct Store {
     fileprivate static let log = Logger(subsystem: "com.mikecann.walkies", category: "store")
 
+    #if DEBUG
+    /// Pauses a real city-file write in regression tests. Callbacks run on its writer queue.
+    final class CityWriteObserver: @unchecked Sendable {
+        private let lock = NSLock()
+        private var callback: (@Sendable (URL) -> Void)?
+        func set(_ callback: (@Sendable (URL) -> Void)?) {
+            lock.lock()
+            self.callback = callback
+            lock.unlock()
+        }
+        func record(_ url: URL) {
+            lock.lock()
+            let callback = callback
+            lock.unlock()
+            callback?(url)
+        }
+    }
+    static let cityWriteObserver = CityWriteObserver()
+    #endif
+
     private let root: URL
     private let cityFiles: CityFiles
     private var citiesURL: URL { root.appending(path: "cities.json") }
@@ -256,7 +276,18 @@ nonisolated struct Store {
     }
 
     func save(_ walk: Walk) {
-        write(walk, to: file(for: walk))
+        _ = saveWalkCheckpoint(walk)
+    }
+
+    /// A handoff must not erase its predecessor's seed until this write succeeds.
+    func saveWalkCheckpoint(_ walk: Walk) -> Bool {
+        do {
+            try JSONEncoder().encode(walk).write(to: file(for: walk), options: .atomic)
+            return true
+        } catch {
+            Self.log.error("Couldn't save \(file(for: walk).lastPathComponent): \(error)")
+            return false
+        }
     }
 
     func delete(_ walk: Walk) {
@@ -308,7 +339,21 @@ private nonisolated final class CityFiles: @unchecked Sendable {
     private let roadsURL: URL
     private let queue = DispatchQueue(label: "com.mikecann.walkies.cities", qos: .utility)
     private let lock = NSLock()
-    private var waiting: [City]?
+    /// A failed write waits for the next save or flush, rather than spinning on a
+    /// full disk or dropping the newest city snapshot after the error is logged.
+    private enum PendingWrite {
+        case idle
+        case queued([City])
+        case retry([City])
+
+        var cities: [City]? {
+            switch self {
+            case .idle: nil
+            case let .queued(cities), let .retry(cities): cities
+            }
+        }
+    }
+    private var waiting = PendingWrite.idle
     // Only used on the queue.
     private var encoded: [UUID: (city: City, data: Data)] = [:]
     private var savedRoads: [UUID: [RoadLine]]?
@@ -320,8 +365,9 @@ private nonisolated final class CityFiles: @unchecked Sendable {
 
     func save(_ cities: [City]) {
         lock.lock()
-        let queued = waiting != nil
-        waiting = cities
+        let queued: Bool
+        if case .queued = waiting { queued = true } else { queued = false }
+        waiting = .queued(cities)
         lock.unlock()
         if !queued { queue.async { self.writeWaiting() } }
     }
@@ -334,7 +380,7 @@ private nonisolated final class CityFiles: @unchecked Sendable {
     func write(_ cities: [City]) throws {
         try queue.sync {
             lock.lock()
-            waiting = nil
+            waiting = .idle
             lock.unlock()
             try writeFiles(cities)
         }
@@ -345,6 +391,11 @@ private nonisolated final class CityFiles: @unchecked Sendable {
     func replace(_ change: () throws -> Void) rethrows {
         try queue.sync {
             writeWaiting()
+            // Wipes and grid resets replace the files. A retry from before that
+            // boundary must never put the old data back on the next flush.
+            lock.lock()
+            waiting = .idle
+            lock.unlock()
             encoded = [:]
             savedRoads = nil
             try change()
@@ -358,14 +409,19 @@ private nonisolated final class CityFiles: @unchecked Sendable {
 
     private func writeWaiting() {
         lock.lock()
-        let cities = waiting
-        waiting = nil
+        let cities = waiting.cities
+        waiting = .idle
         lock.unlock()
         guard let cities else { return }
         do {
             try writeFiles(cities)
         } catch {
             Store.log.error("Couldn't save cities.json: \(error)")
+            lock.lock()
+            // A newer save can arrive while this write is in flight. Keep that
+            // snapshot rather than replacing it with the one that just failed.
+            if case .idle = waiting { waiting = .retry(cities) }
+            lock.unlock()
         }
     }
 
@@ -375,6 +431,9 @@ private nonisolated final class CityFiles: @unchecked Sendable {
 
     /// On the queue. Streets first, so cities.json never points at streets that aren't saved.
     private func writeFiles(_ cities: [City]) throws {
+        #if DEBUG
+        Store.cityWriteObserver.record(citiesURL)
+        #endif
         let roads = Self.roads(of: cities)
         var inline = false
         if roads != savedRoads {

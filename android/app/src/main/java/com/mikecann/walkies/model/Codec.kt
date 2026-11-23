@@ -224,6 +224,18 @@ object Codec {
         w.newTileHexesByPlace?.let { put("newTileHexesByPlace", hexesByPlace(it)) }
         w.addedTilesByPlace?.let { put("addedTilesByPlace", hexesByPlace(it)) }
         w.automatic?.let { put("automatic", it) }
+        w.continuation?.let { put("continuation", it.rawValue) }
+        w.resumeAnchor?.let { put("resumeAnchor", trackPoint(it)) }
+        w.endReason?.let { put("endReason", it.rawValue) }
+        w.pendingFinish?.let { finish ->
+            put("pendingFinish", buildJsonObject {
+                put("at", finish.at.sinceReference)
+                put("reason", finish.reason.rawValue)
+                put("byYou", finish.byYou)
+                finish.successor?.let { put("successor", nextWalk(it)) }
+                finish.closedSuccessors?.let { put("closedSuccessors", JsonArray(it.map(::nextWalk))) }
+            })
+        }
     }
 
     fun walk(e: JsonElement): Walk {
@@ -241,7 +253,48 @@ object Codec {
             newTileHexesByPlace = o.opt("newTileHexesByPlace")?.let(::hexesByPlace),
             addedTilesByPlace = o.opt("addedTilesByPlace")?.let(::hexesByPlace),
             automatic = o.opt("automatic")?.bool(),
+            continuation = o.opt("continuation")?.let { value ->
+                WalkContinuation.entries.firstOrNull { it.rawValue == (value as JsonPrimitive).content }
+                    ?: throw Invalid("Unknown walk continuation $value")
+            },
+            resumeAnchor = o.opt("resumeAnchor")?.let(::trackPoint),
+            endReason = o.opt("endReason")?.let { value ->
+                WalkEndReason.entries.firstOrNull { it.rawValue == (value as JsonPrimitive).content }
+                    ?: throw Invalid("Unknown walk end reason $value")
+            },
+            pendingFinish = o.opt("pendingFinish")?.obj()?.let { finish ->
+                PendingWalkFinish(
+                    at = finish.date("at"),
+                    reason = WalkEndReason.entries.firstOrNull { it.rawValue == finish.string("reason") }
+                        ?: throw Invalid("Unknown pending finish reason"),
+                    byYou = finish.req("byYou").bool(),
+                    successor = finish.opt("successor")?.let(::nextWalk),
+                    closedSuccessors = finish.opt("closedSuccessors")?.arr()?.map(::nextWalk),
+                )
+            },
         )
+    }
+
+    private fun nextWalk(next: NextWalk) = buildJsonObject {
+        put("id", next.id.uuidString)
+        put("arrival", trackPoint(next.arrival))
+        next.point?.let { put("point", trackPoint(it)) }
+        next.following?.let { put("following", JsonArray(it.map(::trackPoint))) }
+        next.continuation?.let { put("continuation", it.rawValue) }
+        next.resumeAnchor?.let { put("resumeAnchor", trackPoint(it)) }
+        next.endReason?.let { put("endReason", it.rawValue) }
+    }
+
+    private fun nextWalk(e: JsonElement): NextWalk = e.obj().let { next ->
+        NextWalk(next.uuid("id"), trackPoint(next.req("arrival")), next.opt("point")?.let(::trackPoint),
+            next.opt("following")?.arr()?.map(::trackPoint),
+            next.opt("continuation")?.let { value ->
+                WalkContinuation.entries.firstOrNull { it.rawValue == (value as JsonPrimitive).content }
+                    ?: throw Invalid("Unknown successor continuation $value")
+            }, next.opt("resumeAnchor")?.let(::trackPoint), next.opt("endReason")?.let { value ->
+                WalkEndReason.entries.firstOrNull { it.rawValue == (value as JsonPrimitive).content }
+                    ?: throw Invalid("Unknown successor end reason $value")
+            })
     }
 
     private fun hexesByPlace(map: Map<String, Set<Hex>>) = JsonObject(map.mapValues { hexes(it.value) })

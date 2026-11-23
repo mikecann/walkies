@@ -54,11 +54,12 @@ struct ProgressionIntegrationTests {
         defer { store.wipe() }
         let city = city()
         store.save([city])
-        for n in 0..<200 { store.save(legacyWalk(n, in: city)) }
+        let fixtures = (0..<200).map { legacyWalk($0, in: city) }
+        for walk in fixtures { store.save(walk) }
+        let fixtureStarts = Set(fixtures.compactMap { $0.points.first })
         let log = ReplayLog()
-        let cutoff = Date.now.addingTimeInterval(-3600).timeIntervalSince1970
         CoverageTracer.replayObserver.set { points in
-            if let first = points.first, abs(first.lat - 12.345) < 0.001, first.time < cutoff {
+            if let first = points.first, fixtureStarts.contains(first) {
                 log.record(onMain: Thread.isMainThread)
             }
         }

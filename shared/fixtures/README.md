@@ -12,3 +12,10 @@ Test data used by both the iPhone and Android apps.
   - Sets (tiles, hexes) come out in any order on the iPhone, so regenerating `ios/` shuffles them. That's fine: the tests compare meaning, not bytes.
 
 The fixture tests also round-trip the saved walks with optional `steps` added. The golden files without steps stay valid for older app versions.
+
+`walk-lifecycle.json` is a synthetic event stream replayed by Swift `WalkLifecycleTests`
+and Kotlin `WalkLifecycleTest`. Both start a confirmed 400 m walk, checkpoint it, then
+feed the same motion-tagged GPS, clock, checkpoint, relaunch, End and quiet-check events.
+A relaunch does not implicitly save: rejected riding fixes and arrival anchors must be
+durable themselves. Expected UUID relationships, accepted point counts and end times
+protect rest/resume, ride separation and the ten-minute cutoff across both clients.
