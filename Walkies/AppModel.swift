@@ -1035,7 +1035,8 @@ final class AppModel {
     /// The predecessor's route is frozen. New accepted steps belong to its saved
     /// successor seed until final history and step counting release the predecessor.
     private func recordFinishContinuation(_ point: TrackPoint) {
-        guard activeWalk?.pendingFinish?.reason == .rode else { return }
+        guard let request = activeWalk?.pendingFinish,
+              request.reason == .rode || request.successor != nil || request.closedSuccessors?.isEmpty == false else { return }
         if let last = activeWalk?.pendingFinish?.successor?.walk.points.last,
            point.time - last.time >= Self.autoWalkGap {
             activeWalk?.pendingFinish?.closeSuccessor(reason: .gap, confirmDistance: Self.autoWalkConfirmDistance)
