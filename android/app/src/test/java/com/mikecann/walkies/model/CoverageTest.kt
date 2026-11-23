@@ -20,6 +20,15 @@ import kotlin.random.Random
 
 /** CoverageTests.swift, case for case. */
 class CoverageTest {
+    @Test fun motionRideClearsTheCursorEvenWhenGPSAccuracyIsInvalid() {
+        for (accuracy in listOf(-1.0, 80.0)) {
+            val tracer = CoverageTracer()
+            tracer.add(TrackPoint(12.345, 45.678, 100.0, 5.0, speed = 1.0))
+            tracer.add(TrackPoint(12.346, 45.678, 120.0, accuracy, wheels = true))
+            assertEquals(null, tracer.anchor)
+        }
+    }
+
     private val start = Coordinate(-33.638, 115.386)
 
     /** A fix [metres] east of the start, [seconds] after it. */

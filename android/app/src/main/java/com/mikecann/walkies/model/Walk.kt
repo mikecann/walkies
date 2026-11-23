@@ -27,6 +27,24 @@ data class TrackPoint(
     val coordinate get() = Coordinate(lat, lon)
 }
 
+/** How the next accepted walking segment may continue this saved outing. */
+enum class WalkContinuation(val rawValue: String) {
+    Walking("walking"),
+    Rode("rode");
+
+    enum class Event { ObservedRide, AcceptedWalkingStep, Finished }
+
+    /** A ride persists until walking is accepted again or this outing finishes. */
+    fun after(event: Event): WalkContinuation = when (event) {
+        Event.ObservedRide -> Rode
+        Event.AcceptedWalkingStep, Event.Finished -> Walking
+    }
+}
+
+enum class WalkEndReason(val rawValue: String) {
+    Gap("gap"), Quiet("quiet"), Rode("rode"), You("you"), Recovered("recovered"), AlwaysOnOff("always on off")
+}
+
 data class Walk(
     val id: UUID = UUID.randomUUID(),
     val startedAt: SwiftDate,
@@ -49,8 +67,20 @@ data class Walk(
     val addedTilesByPlace: Map<String, Set<Hex>>? = null,
     /** Recorded by always-on mode rather than started with the button. */
     val automatic: Boolean? = null,
+    /** Missing on older files, which had no saved ride classification. */
+    val continuation: WalkContinuation? = null,
+    /** The tracer cursor, which may be an arrival fix not yet accepted into the route. */
+    val resumeAnchor: TrackPoint? = null,
+    val endReason: WalkEndReason? = null,
 ) {
     val isAutomatic get() = automatic == true
+
+    val continuationState get() = continuation ?: WalkContinuation.Walking
+
+    fun transition(event: WalkContinuation.Event): Walk = copy(
+        continuation = continuationState.after(event).takeIf { it != WalkContinuation.Walking },
+        resumeAnchor = null,
+    )
 
     /** Seconds, up to now for a walk still going. */
     fun duration(now: SwiftDate = SwiftDate.now()) = (endedAt ?: now).sinceReference - startedAt.sinceReference
@@ -94,9 +124,15 @@ class CoverageTracer {
     fun restart(from: TrackPoint?) { anchor = from }
 
     fun add(point: TrackPoint): Step {
+        // Motion is independent of GPS accuracy: even a vague riding fix invalidates
+        // the last walking/arrival cursor.
+        if (point.wheels == true) {
+            anchor = null
+            return Step.none
+        }
         if (point.accuracy < 0 || point.accuracy > MAX_ACCURACY) return Step.none
         // On a bike or in a car: start again from scratch once you're back on foot.
-        if (point.wheels == true || (point.speed ?: 0.0) > MAX_SPEED) {
+        if ((point.speed ?: 0.0) > MAX_SPEED) {
             anchor = null
             return Step.none
         }

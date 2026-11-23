@@ -224,6 +224,9 @@ object Codec {
         w.newTileHexesByPlace?.let { put("newTileHexesByPlace", hexesByPlace(it)) }
         w.addedTilesByPlace?.let { put("addedTilesByPlace", hexesByPlace(it)) }
         w.automatic?.let { put("automatic", it) }
+        w.continuation?.let { put("continuation", it.rawValue) }
+        w.resumeAnchor?.let { put("resumeAnchor", trackPoint(it)) }
+        w.endReason?.let { put("endReason", it.rawValue) }
     }
 
     fun walk(e: JsonElement): Walk {
@@ -241,6 +244,15 @@ object Codec {
             newTileHexesByPlace = o.opt("newTileHexesByPlace")?.let(::hexesByPlace),
             addedTilesByPlace = o.opt("addedTilesByPlace")?.let(::hexesByPlace),
             automatic = o.opt("automatic")?.bool(),
+            continuation = o.opt("continuation")?.let { value ->
+                WalkContinuation.entries.firstOrNull { it.rawValue == (value as JsonPrimitive).content }
+                    ?: throw Invalid("Unknown walk continuation $value")
+            },
+            resumeAnchor = o.opt("resumeAnchor")?.let(::trackPoint),
+            endReason = o.opt("endReason")?.let { value ->
+                WalkEndReason.entries.firstOrNull { it.rawValue == (value as JsonPrimitive).content }
+                    ?: throw Invalid("Unknown walk end reason $value")
+            },
         )
     }
 
