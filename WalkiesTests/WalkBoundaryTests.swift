@@ -290,4 +290,15 @@ struct WalkBoundaryTests {
         #expect(model.activeWalk?.points == [point(1000, 950), point(1050, 990)])
     }
 
+
+    @Test func anAcceptedSeedWithAGapIsNoLongerASingleAnchor() {
+        var seed = Walk.NextWalk(arrival: point(2000, 800), point: nil)
+        seed.accept(from: point(2200, 840), point: point(2250, 880))
+        #expect(seed.point != nil)
+        #expect(seed.walk.points == [point(2000, 800), point(2200, 840), point(2250, 880)])
+        seed.accept(from: point(2250, 880), point: point(2300, 960))
+        #expect(seed.walk.points.count == 4)
+        #expect(abs(seed.walk.distance - 100) < 0.001)
+    }
+
 }

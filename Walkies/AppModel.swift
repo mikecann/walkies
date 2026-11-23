@@ -1037,7 +1037,7 @@ final class AppModel {
     private func recordFinishContinuation(_ point: TrackPoint) {
         guard activeWalk?.pendingFinish?.reason == .rode else { return }
         if Self.isRide(point) { invalidateSuccessorForRide(point); return }
-        if let seed = activeWalk?.pendingFinish?.successor, seed.point == nil,
+        if let seed = activeWalk?.pendingFinish?.successor, seed.walk.points.count == 1,
            point.time - seed.arrival.time > Self.freshStart, Self.canAnchor(point) {
             activeWalk?.pendingFinish?.successor = Walk.NextWalk(id: seed.id, arrival: point, point: nil)
             tracer = CoverageTracer()

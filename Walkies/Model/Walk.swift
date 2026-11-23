@@ -112,12 +112,17 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
         mutating func accept(from anchor: TrackPoint?, point next: TrackPoint) {
             continuation = .walking
             resumeAnchor = next
-            var tail = following ?? []
-            if let anchor, (tail.last ?? point ?? arrival) != anchor { tail.append(anchor) }
-            if point == nil, tail.isEmpty {
-                point = next
+            if point == nil {
+                if let anchor, anchor != arrival {
+                    point = anchor
+                    following = [next]
+                } else {
+                    point = next
+                }
                 return
             }
+            var tail = following ?? []
+            if let anchor, (tail.last ?? point ?? arrival) != anchor { tail.append(anchor) }
             if (tail.last ?? point ?? arrival) != next { tail.append(next) }
             following = tail.isEmpty ? nil : tail
         }
