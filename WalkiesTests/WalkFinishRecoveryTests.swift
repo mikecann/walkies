@@ -10,6 +10,8 @@ extension SyncSafetyTests {
         defer { original.wipe() }
         let clock = FinishRecoveryClock(0)
         let gate = FinishStepGate()
+        let place = ModelFixesTests().city(origin: Coordinate(lat: 0, lon: 0))
+        original.save([place])
         let model = AppModel(store: original, servicesEnabled: false, alwaysOn: true,
                              stepQuery: gate.count, now: clock.now)
         let previousCounting = model.countSteps
@@ -53,6 +55,10 @@ extension SyncSafetyTests {
         #expect(finished?.endReason == .you)
         #expect(finished?.points == outing.points)
         #expect(finished?.steps == 222)
+        #expect((finished?.newTiles ?? 0) > 0)
+        #expect(finished?.newTileHexesByPlace?[place.id.uuidString]?.isEmpty == false)
+        #expect(relaunched.questTileCounts[outing.id]?[place.id] == finished?.newTilesByPlace?[place.id.uuidString])
+        #expect(relaunched.freshTiles.isEmpty)
         #expect(recovered.loadWalks().first { $0.id == outing.id }?.endedAt == requestedEnd)
         if let finished { #expect(try finishMetadata(finished) == nil) }
 
@@ -315,6 +321,57 @@ extension SyncSafetyTests {
         #expect(uploaded.endedAt == Date(timeIntervalSince1970: finishBase + 1040))
         #expect(recoveredStore.loadSyncState().uploadedWalks == [first.id, secondID])
         #expect(try await server.uploadedWalk(third.id) == nil)
+    }
+
+    @Test func oneWildSpeedFixCannotEndAnAlreadyAcceptedQueuedWalk() async throws {
+        let directory = root()
+        let store = Store(root: directory)
+        defer { store.wipe() }
+        let clock = FinishRecoveryClock(0)
+        let gate = FinishStepGate()
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true,
+                             stepQuery: gate.count, now: clock.now)
+        let previous = model.countSteps
+        model.countSteps = true
+        defer { model.countSteps = previous; gate.reply(111) }
+        await model.waitForHistory()
+        let first = try seedFinishWalk(model, clock: clock)
+        clock.elapsed = 340
+        model.recordAlwaysOnForTesting(finishFix(450, 340, wheels: true))
+        clock.elapsed = 720
+        model.recordAlwaysOnForTesting(finishFix(900, 720))
+        clock.elapsed = 760
+        model.recordAlwaysOnForTesting(finishFix(950, 760))
+        await gate.waitForRequest()
+        let pending = try #require(store.loadWalks().first { $0.id == first.id })
+        let secondID = try #require(try finishSuccessorID(pending))
+        let blocked = directory.appending(path: "walks/\(secondID.uuidString).json")
+        try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: false)
+        gate.reply(111)
+        await gate.waitForReturn()
+        model.countSteps = false
+        for i in 2...8 {
+            clock.elapsed = 720 + Double(i) * 40
+            model.recordAlwaysOnForTesting(finishFix(900 + Double(i) * 50, clock.elapsed))
+        }
+        var wild = finishFix(1600, 1045)
+        wild.speed = 9
+        model.recordAlwaysOnForTesting(wild)
+        clock.elapsed = 1085
+        model.recordAlwaysOnForTesting(finishFix(1350, 1085))
+        clock.elapsed = 1125
+        model.recordAlwaysOnForTesting(finishFix(1400, 1125))
+        let saved = try #require(store.loadWalks().first { $0.id == first.id })
+        #expect(saved.pendingFinish?.closedSuccessors?.isEmpty != false)
+        #expect(saved.pendingFinish?.successor?.id == secondID)
+        #expect(saved.pendingFinish?.successor?.walk.points.count == 11)
+        try FileManager.default.removeItem(at: blocked)
+        model.resumeAlwaysOn()
+        await waitForAutomaticFinish(model, id: first.id)
+        #expect(model.walks.count == 1)
+        #expect(model.activeWalk?.id == secondID)
+        #expect(model.activeWalk?.points.count == 11)
+        #expect(abs((model.activeWalk?.distance ?? 0) - 500) < 0.01)
     }
 
     @Test func newWheelsDuringHeldHistoryInvalidateTheDeferredSuccessorAcrossRelaunch() async throws {
