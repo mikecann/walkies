@@ -3,6 +3,12 @@
 # Run the full suite on Tinker Desk through heavy; --tests selects a narrow test.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Tinker Desk has no system JDK; its JDK 21 and Gradle cache live on the external SSD.
+tinker_jdk=/Volumes/TinkerSSD/fdroid-jdk21
+if [ -z "${JAVA_HOME:-}" ] && ! /usr/libexec/java_home >/dev/null 2>&1 && [ -x "$tinker_jdk/jdk/Contents/Home/bin/java" ]; then
+    export JAVA_HOME="$tinker_jdk/jdk/Contents/Home"
+    export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$tinker_jdk/gradle}"
+fi
 python3 - <<'PY'
 from pathlib import Path
 root = Path('build/android-model-tests')
