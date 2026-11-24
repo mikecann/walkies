@@ -304,6 +304,8 @@ class SyncEngine(
                 put("endedAt", Codec.number(endedAt.ms))
                 put("distance", Codec.number(walk.distance))
                 put("newTiles", Codec.number(walk.newTiles.toDouble()))
+                // Left out when there's no count yet (or with step counting off).
+                walk.steps?.let { put("steps", Codec.number(it.toDouble())) }
                 put("file", file)
             })
             check(revision)
@@ -408,6 +410,11 @@ class SyncEngine(
             batch.cities.add(city)
             if (batch.count >= BATCH_SIZE) flush()
         }
+        // Steps that came in on the phone that recorded a walk after this one downloaded it.
+        // The walk itself isn't downloaded again: only its count is needed.
+        model.fillInSteps(snapshot.walkSteps.mapNotNull { (id, steps) ->
+            runCatching { UUID.fromString(id) }.getOrNull()?.let { it to steps.toInt() }
+        }.toMap())
         // Links only for the walks this phone hasn't got, so a sync doesn't sign one per walk.
         val have = model.walks.mapTo(HashSet()) { it.id }
         val missing = snapshot.walks.filter { uuid(it)?.let { id -> id !in have } ?: false }
@@ -499,6 +506,8 @@ class SyncEngine(
     /** What the server sent back for `sync:snapshot`. Walks come without links (`walkUrls: false`). */
     private class Snapshot(
         val walks: List<String>,
+        /** Step counts the account has on each walk's row, for walks this phone already has. */
+        val walkSteps: Map<String, Double>,
         val places: List<Place>,
         val secrets: List<Pair<String, Double>>,
         val progress: String?,
@@ -512,6 +521,11 @@ class SyncEngine(
                 fun list(key: String) = o[key] as? JsonArray ?: throw ConvexException.Server("Bad snapshot")
                 return Snapshot(
                     walks = list("walks").map { remote(it).clientId },
+                    walkSteps = list("walks").mapNotNull {
+                        val w = it as? JsonObject ?: return@mapNotNull null
+                        val steps = (w["steps"] as? JsonPrimitive)?.doubleOrNull ?: return@mapNotNull null
+                        string(w["clientId"]) to steps
+                    }.toMap(),
                     places = list("places").map {
                         val p = it as? JsonObject ?: throw ConvexException.Server("Bad snapshot")
                         Place(string(p["clientId"]), (p["updatedAt"] as? JsonPrimitive)?.doubleOrNull ?: throw ConvexException.Server("Bad snapshot"), optString(p["url"]))

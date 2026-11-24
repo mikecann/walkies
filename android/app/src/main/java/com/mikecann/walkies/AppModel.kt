@@ -1842,6 +1842,25 @@ class AppModel(
     }
 
     /** Sync has pulled every place in the account, so a suburb that adds itself now won't be one the account already had. */
+    /**
+     * Step counts the account has for walks here without one: the phone that recorded them
+     * got the count after this phone had downloaded the walk. The walk's copy in the account
+     * already has them, so nothing goes up again.
+     */
+    fun fillInSteps(counts: Map<UUID, Int>) {
+        if (counts.isEmpty()) return
+        var changed = false
+        walks = walks.map { walk ->
+            val count = counts[walk.id]
+            if (walk.steps != null || walk.stepsPending == true || count == null) walk
+            else walk.copy(steps = count).also { store.save(it); changed = true }
+        }
+        if (changed) {
+            historyRevision++
+            onChange()
+        }
+    }
+
     fun pulledAccount() {
         accountPulled = true
         addPlacesYouveBeen()

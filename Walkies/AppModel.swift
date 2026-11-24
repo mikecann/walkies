@@ -1878,6 +1878,21 @@ final class AppModel {
 
     /// The sync engine has pulled every place in the account, so a suburb that adds
     /// itself now won't be one the account already had.
+    /// Step counts the account has for walks here without one: the phone that recorded
+    /// them got the count after this phone had downloaded the walk. The walk's copy in the
+    /// account already has them, so nothing goes up again.
+    func fillInSteps(_ counts: [UUID: Int]) {
+        guard !counts.isEmpty else { return }
+        var changed = false
+        for i in walks.indices where walks[i].steps == nil && walks[i].stepsPending != true {
+            guard let count = counts[walks[i].id] else { continue }
+            walks[i].steps = count
+            store.save(walks[i])
+            changed = true
+        }
+        if changed { historyRevision += 1 }
+    }
+
     func pulledAccount() {
         accountPulled = true
         addPlacesYouveBeen()

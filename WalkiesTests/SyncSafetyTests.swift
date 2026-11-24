@@ -327,6 +327,9 @@ actor SafetyServer {
     private(set) var calls: [String] = []
     private(set) var places: [String: (updatedAt: Double, file: String)] = [:]
     private(set) var walks: [String: String] = [:]
+    /// The step count on each walk's row, as the real server keeps it.
+    private(set) var walkSteps: [String: Double] = [:]
+    func setSteps(_ id: UUID, _ steps: Double) { walkSteps[id.uuidString] = steps }
     private(set) var deleted: [String] = []
     private var files: [String: Data] = [:]
     enum PushFault: String, CaseIterable, Sendable { case upload, save, acknowledgement }
@@ -401,6 +404,7 @@ actor SafetyServer {
         case "sync:savePlace": places[args["clientId"] as! String] = (args["updatedAt"] as! Double, args["file"] as! String)
         case "sync:saveWalk":
             walks[args["clientId"] as! String] = args["file"] as? String
+            walkSteps[args["clientId"] as! String] = args["steps"] as? Double
             if pushFault == .acknowledgement { pushFault = nil; return (503, Data()) }
             if let hook = duringSaveWalk {
                 duringSaveWalk = nil
@@ -413,7 +417,11 @@ actor SafetyServer {
         case "sync:snapshot":
             value = [
                 "places": places.map { ["clientId": $0.key, "updatedAt": $0.value.updatedAt, "url": "https://files.walkies.test/\($0.value.file)"] },
-                "walks": walks.map { ["clientId": $0.key, "url": args["walkUrls"] as? Bool == false ? NSNull() : "https://files.walkies.test/\($0.value)"] as [String: Any] },
+                "walks": walks.map { walk in
+                    var row: [String: Any] = ["clientId": walk.key, "url": args["walkUrls"] as? Bool == false ? NSNull() : "https://files.walkies.test/\(walk.value)"]
+                    if let steps = walkSteps[walk.key] { row["steps"] = steps }
+                    return row
+                },
                 "secrets": [] as [String],
             ] as [String: Any]
         case "sync:walkUrls":

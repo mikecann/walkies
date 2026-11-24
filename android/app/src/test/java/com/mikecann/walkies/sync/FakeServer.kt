@@ -37,6 +37,8 @@ class FakeServer : Http {
     val calls = ArrayList<Call>()
     val places = LinkedHashMap<String, Pair<Double, String>>()
     val walks = LinkedHashMap<String, String>()
+    /** The step count on each walk's row, as the real server keeps it. */
+    val walkSteps = HashMap<String, Double>()
     val deleted = ArrayList<String>()
     val files = HashMap<String, ByteArray>()
     /** What a function returns, standing in for the usual answer. */
@@ -121,7 +123,10 @@ class FakeServer : Http {
         } else when (path) {
             "sync:generateUploadUrl" -> value = JsonPrimitive("https://sync.walkies.test/upload")
             "sync:savePlace" -> places[string("clientId")] = args.getValue("updatedAt").jsonPrimitive.doubleOrNull!! to string("file")
-            "sync:saveWalk" -> walks[string("clientId")] = string("file")
+            "sync:saveWalk" -> {
+                walks[string("clientId")] = string("file")
+                args["steps"]?.jsonPrimitive?.doubleOrNull.let { if (it == null) walkSteps.remove(string("clientId")) else walkSteps[string("clientId")] = it }
+            }
             "sync:saveProgress" -> {
                 val incoming = Codec.ledger(Codec.parse(string("ledger")))
                 ledger = ledger?.merged(incoming) ?: incoming
@@ -144,6 +149,7 @@ class FakeServer : Http {
                         for ((id, file) in walks) add(buildJsonObject {
                             put("clientId", id)
                             put("url", if (withUrls) JsonPrimitive("https://files.walkies.test/$file") else JsonNull)
+                            walkSteps[id]?.let { put("steps", it) }
                         })
                     })
                     put("secrets", JsonArray(emptyList()))
