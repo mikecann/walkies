@@ -188,34 +188,34 @@ extension SyncSafetyTests {
         #expect(again.waiting == 0)
     }
 
-    @Test func recoveredWalkWaitsForHistoryAndStepsBeforeReachingTheServer() async throws {
+    @Test func aRecoveredWalkGoesUpStraightAwayAndAgainOnceItsStepsArrive() async throws {
         let store = Store(root: root())
         defer { store.wipe() }
         var interrupted = walk(0, in: city())
         interrupted.endedAt = nil
         interrupted.steps = nil
         store.save(interrupted)
+        let previous = UserDefaults.standard.object(forKey: "countSteps")
+        UserDefaults.standard.set(true, forKey: "countSteps")
+        defer { UserDefaults.standard.set(previous, forKey: "countSteps") }
         let reply = StepReply()
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false, stepQuery: reply.count)
-        let previous = model.countSteps
-        model.countSteps = true
-        defer { model.countSteps = previous }
         let server = SafetyServer()
         let client = client(server)
         let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, makeClient: { client })
-        let syncing = Task { await engine.sync() }
         await reply.waitForRequest()
-        #expect(await server.walks.isEmpty)
-        #expect(store.loadWalks().first?.endedAt == nil)
-        #expect(store.loadSyncState().uploadedWalks.isEmpty)
-        reply.finish(432)
-        await syncing.value
         let end = Date(timeIntervalSince1970: interrupted.points.last!.time)
-        let uploaded = try #require(try await server.uploadedWalk(interrupted.id))
-        #expect(uploaded.startedAt == interrupted.startedAt)
-        #expect(uploaded.endedAt == end)
-        #expect(uploaded.steps == 432)
-        #expect(uploaded.points == interrupted.points)
+        #expect(store.loadWalks().first?.endedAt == end)
+        await engine.sync()
+        let first = try #require(try await server.uploadedWalk(interrupted.id))
+        #expect(first.endedAt == end && first.steps == nil && first.points == interrupted.points)
+        #expect(store.loadSyncState().uploadedWalks == [interrupted.id])
+        reply.finish(432)
+        for _ in 0..<1000 where store.loadWalks().first?.steps == nil { await Task.yield() }
+        #expect(store.loadSyncState().uploadedWalks.isEmpty)
+        await engine.sync()
+        let again = try #require(try await server.uploadedWalk(interrupted.id))
+        #expect(again.steps == 432)
         #expect(store.loadWalks().first?.steps == 432)
         #expect(store.loadSyncState().uploadedWalks == [interrupted.id])
     }

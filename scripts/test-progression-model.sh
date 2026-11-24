@@ -19,7 +19,7 @@ let package = Package(name: "WalkiesModelTests", platforms: [.macOS(.v15)], targ
     .testTarget(name: "WalkiesTests", dependencies: ["Walkies"])
 ])
 ''')
-for name in ['Progression', 'Geo', 'HexGrid', 'City', 'Walk', 'Boundary', 'Lore', 'WalkRecap', 'LevelMeter', 'Team', 'SecretsBook', 'Mist', 'ServerLore', 'AutoPlaces', 'AroundYou']:
+for name in ['Progression', 'Geo', 'HexGrid', 'City', 'Walk', 'WalkStage', 'Boundary', 'Lore', 'WalkRecap', 'LevelMeter', 'Team', 'SecretsBook', 'Mist', 'ServerLore', 'AutoPlaces', 'AroundYou']:
     shutil.copy(f'Walkies/Model/{name}.swift', root / 'Sources/Walkies')
 shutil.copytree('Walkies/Lore', root / 'Sources/Walkies/Lore', dirs_exist_ok=True)
 # SwiftPM keeps resources in its own bundle rather than the iOS app bundle.
@@ -45,7 +45,7 @@ for name in ['Store', 'Sync', 'Convex', 'OSMClient', 'CachedPlaceData', 'CityBui
     shutil.copy(f'Walkies/Services/{name}.swift', root / 'Sources/Walkies')
 shutil.copy('Walkies/AppModel.swift', root / 'Sources/Walkies')
 shutil.copy('scripts/progression-test-support/Platform.swift', root / 'Sources/Walkies')
-for name in ['ModelFixesTests', 'AlwaysOnRideTests', 'RideRelaunchTests', 'WalkLifecycleTests', 'WalkBoundaryTests', 'ExplicitEndTests', 'WalkDiagnosticsTests', 'StartupTests', 'StoreTests', 'StoreFailureTests', 'SyncRecoveryTests', 'WalkFinishRecoveryTests', 'StepTests', 'ProgressionTests', 'WalkRecapTests', 'LevelMeterTests', 'ProgressionIntegrationTests', 'TeamTests', 'CloudTests', 'TrailLayoutTests', 'CoverageTests', 'HexGridTests', 'WorldGridResetTests', 'LoreTests', 'SecretsBookTests', 'SyncSafetyTests', 'FixtureExportTests', 'WalkableRuleTests', 'MistTests']:
+for name in ['ModelFixesTests', 'AlwaysOnRideTests', 'RideRelaunchTests', 'WalkLifecycleTests', 'WalkBoundaryTests', 'ExplicitEndTests', 'WalkDiagnosticsTests', 'StartupTests', 'StoreTests', 'StoreFailureTests', 'SyncRecoveryTests', 'SealedWalkTests', 'StepTests', 'ProgressionTests', 'WalkRecapTests', 'LevelMeterTests', 'ProgressionIntegrationTests', 'TeamTests', 'CloudTests', 'TrailLayoutTests', 'CoverageTests', 'HexGridTests', 'WorldGridResetTests', 'LoreTests', 'SecretsBookTests', 'SyncSafetyTests', 'FixtureExportTests', 'WalkableRuleTests', 'MistTests']:
     shutil.copy(f'WalkiesTests/{name}.swift', root / 'Tests/WalkiesTests')
 print('macOS model suites: ' + ', '.join(p.stem for p in sorted((root / 'Tests/WalkiesTests').glob('*.swift'))))
 print('Native-only coverage: ModelFixesTests.anAutomaticPauseKeepsTheSameWalkAndResumesCoverage, StationaryFenceTests (run in iOS host)')
@@ -54,6 +54,7 @@ shutil.copy('TestSupport/CloudFixtures.swift', root / 'Tests/WalkiesTests')
 PY
 export WALKIES_FIXTURES_IN="${WALKIES_FIXTURES_IN:-$PWD/shared/fixtures/android}"
 export WALKIES_LIFECYCLE_FIXTURES="$PWD/shared/fixtures/walk-lifecycle.json"
+export WALKIES_STAGE_TABLE="$PWD/shared/fixtures/walk-stages.json"
 export WALKIES_TEST_ROOT="$PWD/build/progression-test-data"
 export CLANG_MODULE_CACHE_PATH="$PWD/build/module-cache"
 swift test --disable-sandbox --package-path build/progression-model-tests \

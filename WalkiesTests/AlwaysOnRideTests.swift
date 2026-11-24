@@ -56,7 +56,7 @@ struct AlwaysOnRideTests {
         #expect(zip(next.points, next.points.dropFirst()).allSatisfy { $0.time < $1.time })
     }
 
-    @Test func whileTheStepCountComesInTheNextWalkStillStartsWhereYouArrived() async throws {
+    @Test func theNextWalkStartsWhereYouArrivedWhileTheStepCountComesIn() async throws {
         let store = Store(root: URL.temporaryDirectory.appending(path: "WalkiesRide-\(UUID())"))
         defer { store.wipe() }
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true, stepQuery: { _, _ in 100 })
@@ -67,9 +67,10 @@ struct AlwaysOnRideTests {
         let arrival = fix(east: 2900, at: last.time + 519, speed: 1.2)
         model.recordAlwaysOnForTesting(arrival)
         model.recordAlwaysOnForTesting(fix(east: 2950, at: arrival.time + 40))
-        #expect(model.walks.isEmpty)
-        for _ in 0..<100 where model.activeWalk != nil { await Task.yield() }
-        #expect(model.walks.first?.id == old.id)
+        // Closed straight away, and the next outing is already recording.
+        #expect(model.walks.map(\.id) == [old.id])
+        #expect(model.activeWalk?.id != old.id)
+        for _ in 0..<100 where model.walks.first?.steps == nil { await Task.yield() }
         #expect(model.walks.first?.steps == 100)
         model.recordAlwaysOnForTesting(fix(east: 3000, at: arrival.time + 80))
         let next = try #require(model.activeWalk)

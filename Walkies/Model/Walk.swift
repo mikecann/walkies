@@ -53,107 +53,45 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
     /// walks saved before always-on existed still load.
     var automatic: Bool?
 
-    /// Local continuation metadata, kept separately from accepted walking points.
-    /// Missing in older files, where continuation defaults to walking.
-    var continuation: Continuation?
+    /// Where it is in its life (WalkStage.swift). Nil on files from older versions:
+    /// see `currentStage`.
+    var stage: WalkStage?
+    /// The phone saw a car or bike since the last walking fix. Saved, so after a
+    /// relaunch the next fix still knows whether you could have walked from the last spot.
+    var rideSeen: Bool?
+    /// Where the tracer had got to, so a relaunch carries on the same route.
     var resumeAnchor: TrackPoint?
     var endReason: EndReason?
-    /// A requested finish stays unfinished for sync until history/steps complete.
-    var pendingFinish: PendingFinish?
+    /// Closed without counting as a walk. Its tiles stay as a TileCredit on each
+    /// place, and its file goes once they're saved.
+    var short: Bool?
+    /// Steps were asked for and haven't come back yet. Asked again at launch.
+    var stepsPending: Bool?
+    /// Only read when opening files from older versions, which waited for steps
+    /// before closing a walk and carried the next outing inside this one.
+    var pendingFinish: LegacyFinish?
 
-    struct PendingFinish: Codable, Sendable {
+    struct LegacyFinish: Codable, Sendable {
         var at: Date
         var reason: EndReason
         var byYou: Bool
-        var successor: NextWalk?
-        var closedSuccessors: [NextWalk]?
+        var successor: LegacyNextWalk?
+        var closedSuccessors: [LegacyNextWalk]?
 
-        /// Drain confirmed outings in order. Each next file owns the remaining queue
-        /// before its predecessor can clear it, even across more than one ride.
-        var handoff: Walk? {
-            guard let first = closedSuccessors?.first else { return successor?.walk }
-            var walk = first.walk
-            let rest = Array((closedSuccessors ?? []).dropFirst())
-            walk.continuation = .rode
-            walk.resumeAnchor = nil
-            walk.pendingFinish = PendingFinish(at: walk.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? walk.startedAt,
-                                              reason: first.endReason ?? .rode, byYou: false, successor: successor,
-                                              closedSuccessors: rest.isEmpty ? nil : rest)
-            return walk
-        }
-
-        mutating func observedRide(confirmDistance: Double) {
-            if var successor {
-                let points = successor.walk.points
-                if let origin = points.first?.coordinate,
-                   points.contains(where: { origin.distance(to: $0.coordinate) >= confirmDistance }) {
-                    // Keep accepted walking until a confirmed, displaced arrival
-                    // distinguishes another outing from one wild speed fix.
-                    successor.continuation = .rode
-                    successor.resumeAnchor = nil
-                    self.successor = successor
-                    return
-                }
-            }
-            successor = nil
-        }
-
-        mutating func closeSuccessor(reason: EndReason, confirmDistance: Double) {
-            if var seed = successor {
-                let points = seed.walk.points
-                if let first = points.first?.coordinate,
-                   points.contains(where: { first.distance(to: $0.coordinate) >= confirmDistance }) {
-                    seed.endReason = reason
-                    closedSuccessors = (closedSuccessors ?? []) + [seed]
-                }
-            }
-            successor = nil
-        }
+        /// Every outing it was carrying, oldest first.
+        var carried: [Walk] { ((closedSuccessors ?? []) + (successor.map { [$0] } ?? [])).map(\.walk) }
     }
 
-    /// The first accepted segment after a ride, owned by its next UUID before
-    /// the previous walk finishes. Nonrecursive so it remains plain JSON.
-    struct NextWalk: Codable, Sendable {
+    struct LegacyNextWalk: Codable, Sendable {
         var id = UUID()
         var arrival: TrackPoint
         var point: TrackPoint?
         var following: [TrackPoint]?
-        var continuation: Continuation?
-        var resumeAnchor: TrackPoint?
-        var endReason: EndReason?
-
-        mutating func accept(from anchor: TrackPoint?, point next: TrackPoint) {
-            continuation = .walking
-            resumeAnchor = next
-            if point == nil {
-                if let anchor, anchor != arrival {
-                    point = anchor
-                    following = [next]
-                } else {
-                    point = next
-                }
-                return
-            }
-            var tail = following ?? []
-            if let anchor, (tail.last ?? point ?? arrival) != anchor { tail.append(anchor) }
-            if (tail.last ?? point ?? arrival) != next { tail.append(next) }
-            following = tail.isEmpty ? nil : tail
-        }
-
-        func shouldSeparate(at anchor: TrackPoint) -> Bool {
-            let last = following?.last ?? point ?? arrival
-            let distance = last.coordinate.distance(to: anchor.coordinate)
-            guard distance > CoverageTracer.maxGap else { return false }
-            let elapsed = anchor.time - last.time
-            return continuation == .rode || elapsed <= 0 || distance / elapsed > CoverageTracer.maxSpeed
-        }
 
         var walk: Walk {
             let points = [arrival] + (point.map { [$0] } ?? []) + (following ?? [])
             return Walk(id: id, startedAt: Date(timeIntervalSince1970: arrival.time), points: points,
-                 distance: CoverageTracer.distance(for: points), automatic: true,
-                 continuation: continuation ?? .walking,
-                 resumeAnchor: resumeAnchor ?? (continuation == .rode ? nil : points.last))
+                        distance: CoverageTracer.distance(for: points), automatic: true)
         }
     }
 
@@ -162,22 +100,21 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
         case alwaysOnOff = "always on off"
     }
 
-    enum Continuation: String, Codable, Sendable {
-        case walking, rode
+    /// The stage, including files saved before stages existed: those are done once
+    /// they have an end, and still recording (by the old rules) otherwise.
+    var currentStage: WalkStage { stage ?? (endedAt != nil ? .done : .walking) }
 
-        enum Event { case observedRide, acceptedWalkingStep, finished }
+    /// Saved by an older version and never finished there. Its tiles are already in
+    /// the saved places, because older versions saved them as you walked.
+    var isLegacyOpen: Bool { stage == nil && endedAt == nil }
 
-        /// A rejected riding fix must survive until a walking step settles the arrival.
-        func moving(_ event: Event) -> Self {
-            switch (self, event) {
-            case (_, .observedRide): .rode
-            case (_, .acceptedWalkingStep), (_, .finished): .walking
-            }
-        }
-    }
-
-    mutating func continueAfter(_ event: Continuation.Event) {
-        continuation = (continuation ?? .walking).moving(event)
+    /// Moves to the stage after `event`. Returns false, changing nothing, when
+    /// that move isn't allowed from here.
+    @discardableResult
+    mutating func move(_ event: WalkStage.Event) -> Bool {
+        guard let next = currentStage.after(event) else { return false }
+        stage = next
+        return true
     }
 
     /// Old server files may still contain local-grid hexes. Keep only their GPS.

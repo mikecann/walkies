@@ -1,0 +1,12 @@
+{
+  "comment": "Every allowed move between walk stages. Walkies/Model/WalkStage.swift and android/.../model/WalkStage.kt must allow exactly these. \"to\": null means the walk is dropped (its file is deleted). docs/walk-lifecycle.md explains them.",
+  "stages": ["tentative", "walking", "sealed", "done"],
+  "events": ["confirmed", "ended", "dropped", "committed"],
+  "moves": [
+    { "from": "tentative", "event": "confirmed", "to": "walking" },
+    { "from": "tentative", "event": "ended", "to": "sealed" },
+    { "from": "tentative", "event": "dropped", "to": null },
+    { "from": "walking", "event": "ended", "to": "sealed" },
+    { "from": "sealed", "event": "committed", "to": "done" }
+  ]
+}

@@ -19,7 +19,7 @@ let package = Package(name: "WalkiesLocationTests", platforms: [.iOS(.v18)], pro
     .testTarget(name: "WalkiesTests", dependencies: ["Walkies"], swiftSettings: [.defaultIsolation(MainActor.self), .swiftLanguageMode(.v5)])
 ])
 ''')
-for name in ['Geo', 'HexGrid', 'Walk']:
+for name in ['Geo', 'HexGrid', 'Walk', 'WalkStage']:
     shutil.copy(f'Walkies/Model/{name}.swift', root / 'Sources/Walkies')
 for name in ['AppStartup', 'FirstUnlock', 'LocationDriver', 'LocationTracker', 'MotionMonitor', 'StationaryFence', 'TrackerTrace']:
     shutil.copy(f'Walkies/Services/{name}.swift', root / 'Sources/Walkies')

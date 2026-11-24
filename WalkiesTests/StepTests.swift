@@ -57,18 +57,22 @@ struct WalkStepFinishTests {
         let id = try #require(model.activeWalk?.id)
         model.endWalk()
         model.endWalk()
+        // The walk is closed straight away; its count fills in when it arrives.
+        #expect(model.activeWalk == nil)
+        #expect(model.walks.map(\.id) == [id])
         model.startWalk()
-        await Task.yield()
-        #expect(model.activeWalk?.id == id)
-        #expect(model.walks.isEmpty)
+        let next = try #require(model.activeWalk?.id)
+        #expect(next != id)
+        for _ in 0..<100 where source.ranges.isEmpty { await Task.yield() }
         #expect(source.ranges.count == 1)
         source.reply(1234)
-        for _ in 0..<20 where model.activeWalk != nil { await Task.yield() }
-        #expect(model.walks.last?.id == id)
+        for _ in 0..<100 where model.walks.last?.steps == nil { await Task.yield() }
+        #expect(model.walks.map(\.id) == [id])
         #expect(model.walks.last?.steps == 1234)
         #expect(model.recap?.walk.steps == 1234)
         #expect(syncedSteps == 1234)
-        #expect(store.loadWalks().first?.steps == 1234)
+        #expect(store.loadWalks().first { $0.id == id }?.steps == 1234)
+        #expect(model.activeWalk?.id == next && model.activeWalk?.steps == nil)
     }
 
     @Test func turningCountingOffDiscardsAnInFlightReply() async {
@@ -125,15 +129,18 @@ struct WalkStepFinishTests {
         model.countSteps = true
         await model.waitForHistory()
         model.endAutoWalk()
-        for _ in 0..<100 where model.activeWalk != nil { await Task.yield() }
+        for _ in 0..<100 where model.walks.first?.steps == nil { await Task.yield() }
         #expect(model.walks.first?.steps == 450)
         #expect(model.recap?.walk.steps == 450)
         #expect(store.loadWalks().first?.steps == 450)
     }
 
-    @Test func recoveredWalkGetsItsCountBeforeBecomingFinished() async throws {
+    @Test func aRecoveredWalkClosesAndItsCountFillsIn() async throws {
         let store = store()
         defer { store.wipe() }
+        let previous = UserDefaults.standard.object(forKey: "countSteps")
+        UserDefaults.standard.set(true, forKey: "countSteps")
+        defer { UserDefaults.standard.set(previous, forKey: "countSteps") }
         let start = Date.now.addingTimeInterval(-600)
         // A whole second, so it comes back the same from the point's timeIntervalSince1970.
         // Any old time can be a rounding error out, which made this fail now and then.
@@ -144,8 +151,8 @@ struct WalkStepFinishTests {
             #expect(to == last)
             return 400
         })
-        model.countSteps = true
         await model.waitForHistory()
+        for _ in 0..<100 where model.walks.first?.steps == nil { await Task.yield() }
         #expect(model.walks.first?.steps == 400)
         #expect(model.walks.first?.endedAt == last)
         #expect(store.loadWalks().first?.steps == 400)
