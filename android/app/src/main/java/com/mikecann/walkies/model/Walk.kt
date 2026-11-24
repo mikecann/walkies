@@ -50,12 +50,15 @@ data class LegacyFinish(
 data class LegacyNextWalk(
     val id: UUID = UUID.randomUUID(), val arrival: TrackPoint, val point: TrackPoint? = null,
     val following: List<TrackPoint>? = null,
+    val continuation: String? = null,
+    val resumeAnchor: TrackPoint? = null,
 ) {
     fun walk(): Walk {
         val route = (listOf(arrival) + listOfNotNull(point) + following.orEmpty())
             .fold(emptyList<TrackPoint>()) { points, next -> if (points.lastOrNull() == next) points else points + next }
         return Walk(id = id, startedAt = SwiftDate.epoch(arrival.time), points = route,
-            distance = CoverageTracer.distance(route), automatic = true)
+            distance = CoverageTracer.distance(route), automatic = true, continuation = continuation,
+            resumeAnchor = resumeAnchor)
     }
 }
 

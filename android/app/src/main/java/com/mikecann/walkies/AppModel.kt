@@ -526,25 +526,34 @@ class AppModel(
      * that's on disk.
      */
     private fun commit(sealed: Walk) {
-        if (sealed.stage != WalkStage.Sealed) return
-        if (sealed.short == true) {
+        // The latest copy, so steps that came in meanwhile aren't written over.
+        val walk = walks.firstOrNull { it.id == sealed.id } ?: sealed
+        if (walk.stage != WalkStage.Sealed) {
+            uncommitted.remove(walk.id)
+            return
+        }
+        if (walk.short == true) {
             cities = cities.map { city ->
-                val hexes = sealed.newTileHexesByPlace?.get(city.id.uuidString)
-                if (hexes.isNullOrEmpty() || city.tileCredits.orEmpty().any { it.id == sealed.id }) city
+                val hexes = walk.newTileHexesByPlace?.get(city.id.uuidString)
+                if (hexes.isNullOrEmpty() || city.tileCredits.orEmpty().any { it.id == walk.id }) city
                 else city.copy(
-                    tileCredits = city.tileCredits.orEmpty() + City.TileCredit(sealed.id, sealed.startedAt, hexes),
+                    tileCredits = city.tileCredits.orEmpty() + City.TileCredit(walk.id, walk.startedAt, hexes),
                     updatedAt = now(),
                 )
             }
         }
+        // Its tiles go up with each place it reached, so they count as a change to sync.
+        val credit = walk.newTileHexesByPlace
+        val reached = credit.orEmpty().filterValues { it.isNotEmpty() }.keys
+        cities = cities.map { city -> if (credit == null || city.id.uuidString in reached) city.copy(updatedAt = now()) else city }
         // Until the places are on disk, the sealed file is the only record of this walk's
         // credit. If they can't be written, it stays sealed and is tried again.
         if (!store.writeCities(committedCities)) {
-            uncommitted[sealed.id] = sealed
+            uncommitted[walk.id] = walk
             return
         }
-        uncommitted.remove(sealed.id)
-        val done = sealed.moved(WalkStage.Event.Committed) ?: return
+        uncommitted.remove(walk.id)
+        val done = walk.moved(WalkStage.Event.Committed) ?: return
         if (done.short == true) {
             store.delete(done)
         } else {
@@ -562,6 +571,17 @@ class AppModel(
      * the saved places. Adding it again changes nothing if it did.
      */
     private fun commitAfterRelaunch(walk: Walk) {
+        val last = walk.points.lastOrNull()
+        if (walk.newTileHexesByPlace == null && last != null) {
+            // Unknown credit, so the route itself is what puts its tiles in the places.
+            val samples = CoverageTracer.samples(walk.points)
+            cities = cities.map { city ->
+                val (visited, traced) = city.visit(samples, shape(city))
+                val walked = visited.noteWalked(samples, last.time, mistDays).city
+                if (traced.isEmpty()) walked
+                else walked.copy(updatedAt = now()).also { unlockStickers(it, traced, notify = false, popUp = false) }
+            }
+        }
         cities = cities.map { city ->
             val key = city.id.uuidString
             val hexes = walk.newTileHexesByPlace?.get(key)
@@ -615,7 +635,8 @@ class AppModel(
         // or a save just after launch), so it's traced again like any open walk, and its
         // credit left unknown for history to work out. With saved credit, the walk carries on
         // if it was still recording and recent enough, its credit back on the map.
-        if (outing.newTileHexesByPlace == null || (first && request == null && canResume(reopened))) {
+        // One whose finish was already asked for (End, say) is closed as it was asked.
+        if ((outing.newTileHexesByPlace == null && (!first || request == null)) || (first && request == null && canResume(reopened))) {
             return if (store.saveWalkCheckpoint(reopened)) Migrated(reopened) else null
         }
         val ended = outing.copy(
@@ -1682,7 +1703,8 @@ class AppModel(
                 placesRevision++
                 tilesRevision++
                 rebuildCountingTiles()
-                saveCities()
+                // The open walk's file too, so a relaunch doesn't claim the street tiles back.
+                saveNow()
                 requestSync?.invoke()
                 onChange()
             }
@@ -2129,6 +2151,7 @@ class AppModel(
                 val city = merged[i]
                 // Tiles already walked on another phone aren't the open walk's to claim.
                 disown(remote.visited, remote.id)
+                addedTiles[remote.id]?.let { addedTiles = addedTiles + (remote.id to (it - remote.tiles)) }
                 val (streets, hadMore) = city.merged(remote)
                 merged[i] = streets.copy(updatedAt = if (hadMore) now() else maxOf(city.lastChanged, remote.lastChanged))
             } else {
@@ -2196,7 +2219,8 @@ class AppModel(
         rebuildCountingTiles()
         placeStickers()
         for (city in cities) unlockStickers(city, city.visited, notify = false, popUp = false)
-        saveCities()
+        // The open walk's file too, so a relaunch doesn't claim what it gave up.
+        saveNow()
         refreshNeighbours()
         fillInLastWalked()
     }
@@ -2237,10 +2261,12 @@ class AppModel(
 
     /** Forgets everything on this phone, for signing out. It's all in the account. */
     fun wipeLocalData() {
-        askingSteps.clear()
         dataGeneration++
-        // Dropped rather than finished, so turning always-on off below can't save it.
+        // Before always on goes off, so turning it off doesn't close a walk into the next
+        // account's files, and no retry writes this account's walks back.
         activeWalk = null
+        uncommitted.clear()
+        askingSteps.clear()
         alwaysOn = false
         settings.setupDone = false
         activePath = emptyList()
@@ -2262,7 +2288,6 @@ class AppModel(
         countingTilesByPlace = emptyMap()
         lastWalkedPending.clear()
         afterHistory.clear()
-        uncommitted.clear()
         historyRevision++
         nearby = emptyList()
         warmedNeighbourIds = null

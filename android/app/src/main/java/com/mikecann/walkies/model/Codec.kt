@@ -290,12 +290,15 @@ object Codec {
         put("arrival", trackPoint(next.arrival))
         next.point?.let { put("point", trackPoint(it)) }
         next.following?.let { put("following", JsonArray(it.map(::trackPoint))) }
+        next.continuation?.let { put("continuation", it) }
+        next.resumeAnchor?.let { put("resumeAnchor", trackPoint(it)) }
     }
 
-    /** Older versions also saved a continuation, cursor and end reason here, which are no longer read. */
+    /** Older versions also saved an end reason here, which is no longer read. */
     private fun nextWalk(e: JsonElement): LegacyNextWalk = e.obj().let { next ->
         LegacyNextWalk(next.uuid("id"), trackPoint(next.req("arrival")), next.opt("point")?.let(::trackPoint),
-            next.opt("following")?.arr()?.map(::trackPoint))
+            next.opt("following")?.arr()?.map(::trackPoint),
+            next.opt("continuation")?.let { (it as JsonPrimitive).content }, next.opt("resumeAnchor")?.let(::trackPoint))
     }
 
     private fun hexesByPlace(map: Map<String, Set<Hex>>) = JsonObject(map.mapValues { hexes(it.value) })

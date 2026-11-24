@@ -415,4 +415,80 @@ class SealedWalkLifecycleTest {
             assertEquals(0, model.walks.single { it.id == open }.newTiles)
         } finally { root.parentFile.deleteRecursively() }
     }
+
+    @Test fun aSealedWalkWithUnknownCreditStillPutsItsTilesInThePlacesAfterARelaunch() {
+        val (store, root) = tempStore()
+        try {
+            store.save(listOf(place())); store.flush()
+            val points = (0..8).map { point(it * 50.0, it * 40.0) }
+            val sealed = Walk(startedAt = SwiftDate.epoch(start), endedAt = SwiftDate.epoch(start + 320), points = points,
+                distance = CoverageTracer.distance(points), automatic = true, stage = WalkStage.Sealed)
+            store.save(sealed)
+            val model = appModel(store, alwaysOn = false)
+            assertTrue(Store(root).loadCities()[0].visited.isNotEmpty())
+            assertEquals(WalkStage.Done, model.walks.single().stage)
+            assertTrue(model.walks.single().newTiles > 0)
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
+    @Test fun closingAWalkMarksItsPlacesChangedSoTheyGoUpAgain() {
+        val (store, root) = tempStore()
+        try {
+            store.save(listOf(place()))
+            val model = appModel(store, alwaysOn = true)
+            walk(model, (0..10).map { it * 50.0 }, from = 0.0)
+            val before = model.committedCities[0].lastChanged
+            now += 5
+            model.endAutoWalk()
+            assertTrue(model.committedCities[0].lastChanged > before)
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
+    @Test fun aRetriedCommitKeepsStepsThatArrivedMeanwhile() {
+        val (store, root) = tempStore()
+        try {
+            store.save(listOf(place())); store.flush()
+            var reply: ((Int?) -> Unit)? = null
+            val model = appModel(store, alwaysOn = false) { _, _, done -> reply = done }
+            val blocked = File(root, ".cities.json.tmp")
+            assertTrue(blocked.mkdir())
+            model.startWalk()
+            val id = model.activeWalk!!.id
+            model.endWalk()
+            assertEquals(WalkStage.Sealed, Store(root).loadWalks().single { it.id == id }.stage)
+            reply!!(321)
+            assertEquals(321, model.walks.single().steps)
+            assertTrue(blocked.delete())
+            model.saveNow(waiting = true)
+            val saved = Store(root).loadWalks().single { it.id == id }
+            assertEquals(WalkStage.Done, saved.stage)
+            assertEquals(321, saved.steps)
+            assertNull(saved.stepsPending)
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
+    @Test fun signingOutForgetsCommitsStillWaitingToBeWritten() {
+        val (store, root) = tempStore()
+        try {
+            store.save(listOf(place())); store.flush()
+            val model = appModel(store, alwaysOn = false)
+            val blocked = File(root, ".cities.json.tmp")
+            assertTrue(blocked.mkdir())
+            model.startWalk()
+            model.endWalk()
+            model.wipeLocalData()
+            blocked.deleteRecursively()
+            model.saveNow(waiting = true)
+            assertTrue(Store(root).loadWalks().isEmpty())
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
+    @Test fun carriedOutingsKeepTheRideAndCursorAnOlderVersionSaved() {
+        val next = Codec.walk(Codec.parse("""{"id":"A1A1A1A1-B2B2-4C3C-8D4D-E5E5E5E5E5E5","startedAt":0,"points":[],"distance":0,"newTiles":0,
+            "pendingFinish":{"at":320,"reason":"rode","byYou":false,"successor":{"id":"B1A1A1A1-B2B2-4C3C-8D4D-E5E5E5E5E5E5",
+            "arrival":{"lat":1,"lon":2,"time":720,"accuracy":5},"continuation":"rode","resumeAnchor":{"lat":1,"lon":2.1,"time":760,"accuracy":5}}}}"""))
+            .pendingFinish!!.carried.single()
+        assertEquals("rode", next.continuation)
+        assertEquals(760.0, next.resumeAnchor!!.time, 0.001)
+    }
 }
