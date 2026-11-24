@@ -67,6 +67,8 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
     var short: Bool?
     /// Steps were asked for and haven't come back yet. Asked again at launch.
     var stepsPending: Bool?
+    /// Only read from files saved by older versions: "rode" there means a ride was seen.
+    var continuation: String?
     /// Only read when opening files from older versions, which waited for steps
     /// before closing a walk and carried the next outing inside this one.
     var pendingFinish: LegacyFinish?

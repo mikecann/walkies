@@ -137,6 +137,18 @@ nonisolated struct Store {
         cityFiles.flush()
     }
 
+    /// Writes the cities now, and says whether they reached the disk. Closing a walk
+    /// waits on this before it marks the walk done or deletes a short outing's file.
+    func writeCities(_ cities: [City]) -> Bool {
+        do {
+            try cityFiles.write(cities)
+            return true
+        } catch {
+            Self.log.error("Couldn't save cities.json: \(error)")
+            return false
+        }
+    }
+
     private var teamsURL: URL { root.appending(path: "teams.json") }
     func loadTeams() -> [Team] {
         read([Team].self, from: teamsURL) ?? []

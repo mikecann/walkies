@@ -185,7 +185,8 @@ struct WalkBoundaryTests {
         let place = ModelFixesTests().city(origin: Coordinate(lat: 0, lon: 0))
         store.save([place])
         let points = (0...4).map { point(Double($0) * 50, 720 + Double($0) * 40) }
-        var open = Walk(startedAt: Date(timeIntervalSince1970: start + 720), points: points, automatic: true, stage: .walking)
+        var open = Walk(startedAt: Date(timeIntervalSince1970: start + 720), points: points, newTilesByPlace: [:],
+                        newTileHexesByPlace: [:], addedTilesByPlace: [:], automatic: true, stage: .walking)
         open.resumeAnchor = points.last
         store.save(open)
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true,

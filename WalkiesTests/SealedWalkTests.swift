@@ -234,4 +234,102 @@ struct SealedWalkTests {
         #expect(relaunched.walks.map(\.id) == [id])
         #expect(relaunched.walks.first?.stage == .done && relaunched.walks.first?.endReason == .recovered)
     }
+
+    @Test func aShortOutingWhosePlacesCantBeWrittenStaysSealedUntilTheyCan() async throws {
+        let (store, root) = store("SealedBlocked")
+        defer { store.wipe() }
+        store.save([ModelFixesTests().city(origin: Coordinate(lat: 0, lon: 0))])
+        store.flush()
+        let clock = Clock(start)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true, now: clock.now)
+        await model.waitForHistory()
+        // 200 m out: far enough to count, but too short to be a walk.
+        walk(model, clock: clock, (0...4).map { Double($0) * 50 }, from: 0)
+        let id = try #require(model.activeWalk?.id)
+        #expect(!model.autoWalkPending)
+        let cities = root.appending(path: "cities.json")
+        try FileManager.default.removeItem(at: cities)
+        try FileManager.default.createDirectory(at: cities, withIntermediateDirectories: false)
+        clock.time += 700
+        model.finishStaleAutoWalk()
+        #expect(model.activeWalk == nil)
+        let kept = try #require(store.loadWalks().first { $0.id == id })
+        #expect(kept.stage == .sealed && kept.short == true)
+        try FileManager.default.removeItem(at: cities)
+        model.saveNow(waiting: true)
+        #expect(!store.loadWalks().contains { $0.id == id })
+        #expect(store.loadCities()[0].tileCredits?.filter { $0.id == id }.count == 1)
+    }
+
+    @Test func aCarriedOutingIsWrittenBeforeItsParentLetsGoOfIt() async throws {
+        let (store, root) = store("SealedCarried")
+        defer { store.wipe() }
+        let points = (0...8).map { point(Double($0) * 50, Double($0) * 40) }
+        let next = Walk.LegacyNextWalk(arrival: point(900, 720), point: point(950, 760),
+                                       following: (2...7).map { point(900 + Double($0) * 50, 720 + Double($0) * 40) })
+        var parent = Walk(startedAt: Date(timeIntervalSince1970: start), points: points, newTileHexesByPlace: [:], automatic: true)
+        parent.pendingFinish = Walk.LegacyFinish(at: Date(timeIntervalSince1970: start + 320), reason: .rode, byYou: false, successor: next)
+        store.save(parent)
+        let blocked = root.appending(path: "walks/\(next.id.uuidString).json")
+        try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: false)
+        let first = AppModel(store: store, servicesEnabled: false, alwaysOn: false, now: { Date(timeIntervalSince1970: start + 2000) })
+        await first.waitForHistory()
+        // The only copy of the next outing is still inside its parent.
+        #expect(store.loadWalks().first { $0.id == parent.id }?.pendingFinish?.successor?.id == next.id)
+        try FileManager.default.removeItem(at: blocked)
+        let again = AppModel(store: Store(root: root), servicesEnabled: false, alwaysOn: false, now: { Date(timeIntervalSince1970: start + 2000) })
+        await again.waitForHistory()
+        #expect(Set(again.walks.map(\.id)) == [parent.id, next.id])
+        #expect(Store(root: root).loadWalks().allSatisfy { $0.stage == .done && $0.pendingFinish == nil })
+    }
+
+    @Test func aRideAnOlderVersionSawStillSplitsTheOutingAfterTheUpdate() async throws {
+        let (store, _) = store("SealedLegacyRide")
+        defer { store.wipe() }
+        let place = ModelFixesTests().city(origin: Coordinate(lat: 0, lon: 0))
+        store.save([place])
+        let points = (0...8).map { point(Double($0) * 50, Double($0) * 40) }
+        var legacy = Walk(startedAt: Date(timeIntervalSince1970: start), points: points,
+                          newTileHexesByPlace: [place.id.uuidString: []], automatic: true)
+        legacy.continuation = "rode"
+        store.save(legacy)
+        let clock = Clock(start + 330)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true, now: clock.now)
+        await model.waitForHistory()
+        #expect(model.activeWalk?.id == legacy.id && model.activeWalk?.rideSeen == true)
+        // 500 m on in 400 s is walking pace, but the ride says it wasn't walked.
+        for (x, t) in [(900.0, 720.0), (950.0, 760.0), (1000.0, 800.0)] {
+            clock.time = start + t
+            model.recordAlwaysOnForTesting(point(x, t))
+        }
+        #expect(model.walks.map(\.id) == [legacy.id])
+        #expect(model.activeWalk?.id != legacy.id)
+        #expect(model.activeWalk?.points.first == point(900, 720))
+    }
+
+    @Test func aWalkPulledFromAnotherPhoneOwnsTheTilesItCoveredBeforeTheOpenWalkCloses() async throws {
+        let (store, _) = store("SealedRemote")
+        defer { store.wipe() }
+        let place = ModelFixesTests().city(origin: Coordinate(lat: 0, lon: 0))
+        store.save([place])
+        let clock = Clock(start + 5000)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true, now: clock.now)
+        await model.waitForHistory()
+        walk(model, clock: clock, (0...10).map { Double($0) * 50 }, from: 5000)
+        let open = try #require(model.activeWalk?.id)
+        let fresh = try #require(model.freshTiles[place.id])
+        // The same route, walked earlier on another phone, whose steps it was still waiting on.
+        let route = (0...10).map { point(Double($0) * 50, Double($0) * 40) }
+        var remote = Walk(startedAt: Date(timeIntervalSince1970: start), endedAt: Date(timeIntervalSince1970: start + 400),
+                          points: route, distance: CoverageTracer.distance(for: route), automatic: true, stage: .done)
+        remote.stepsPending = true
+        await model.addRemote(cities: [], walks: [remote], progress: nil, secrets: [:])
+        #expect(model.walks.first { $0.id == remote.id }?.stepsPending == nil)
+        #expect((model.freshTiles[place.id] ?? []).isDisjoint(with: fresh))
+        model.saveNow(waiting: true)
+        #expect(store.loadCities()[0].visited.isSuperset(of: fresh))
+        clock.time += 700
+        model.finishStaleAutoWalk()
+        #expect(model.walks.first { $0.id == open }?.newTiles == 0)
+    }
 }
