@@ -216,4 +216,22 @@ struct SealedWalkTests {
         #expect(credit[second] == 0)
         #expect(store.loadCities()[0].visited == model.walks.first { $0.id == first }?.newTileHexesByPlace?.values.first)
     }
+
+    @Test func aWalkYouStartedIsCarriedOnOrClosedAfterARelaunch() async throws {
+        let (store, root) = store("SealedManual")
+        defer { store.wipe() }
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        model.startWalk()
+        let id = try #require(model.activeWalk?.id)
+        #expect(model.activeWalk?.stage == .walking)
+        model.saveNow(waiting: true)
+        #expect(store.loadWalks().first { $0.id == id }?.stage == .walking)
+        let relaunched = AppModel(store: Store(root: root), servicesEnabled: false, alwaysOn: false)
+        await relaunched.waitForHistory()
+        // Not always on, so it can't carry on by itself: it's closed and kept.
+        #expect(relaunched.activeWalk == nil)
+        #expect(relaunched.walks.map(\.id) == [id])
+        #expect(relaunched.walks.first?.stage == .done && relaunched.walks.first?.endReason == .recovered)
+    }
 }

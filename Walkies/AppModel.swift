@@ -769,7 +769,7 @@ final class AppModel {
                 break
             }
         }
-        activeWalk = Walk(startedAt: .now, newTilesByPlace: [:], newTileHexesByPlace: [:], addedTilesByPlace: [:])
+        activeWalk = Walk(startedAt: .now, newTilesByPlace: [:], newTileHexesByPlace: [:], addedTilesByPlace: [:], stage: .walking)
         activePath = []
         freshTiles = [:]
         addedTiles = [:]
