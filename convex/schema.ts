@@ -59,6 +59,11 @@ export default defineSchema({
     endedAt: v.number(),
     distance: v.number(),
     newTiles: v.number(),
+    /**
+     * The step count, which can arrive after the walk was first uploaded. Here as well as
+     * in the file so other phones, which never download a walk twice, can pick it up.
+     */
+    steps: v.optional(v.number()),
     /** The walk exactly as the app saves it, GPS points and all. */
     file: v.id("_storage"),
   }).index("by_user_client", ["userId", "clientId"])

@@ -111,6 +111,41 @@ class SyncSafetyTest {
     }
 
     @Test
+    fun stepsTheOtherPhoneGotLaterFillInWithoutDownloadingTheWalkAgain() = runBlocking {
+        val (store, _) = tempStore()
+        val place = city()
+        store.save(listOf(place))
+        val walk = walk(0, place)
+        store.save(walk)
+        val server = FakeServer()
+        server.seed(walk)
+        val model = model(store)
+        val engine = engine(model, store, server)
+        engine.sync()
+        assertEquals(null, model.walks.single().steps)
+        // The phone that recorded it got its count later, and sent it up again.
+        server.walkSteps[walk.id.uuidString] = 4321.0
+        engine.sync()
+        assertEquals(4321, model.walks.single().steps)
+        assertEquals(4321, store.loadWalks().single().steps)
+        assertFalse("sync:walkUrls" in server.paths)
+        assertTrue(server.paths.count { it == "sync:saveWalk" } <= 1)
+    }
+
+    @Test
+    fun aWalkGoesUpWithItsStepsOnItsRow() = runBlocking {
+        val (store, _) = tempStore()
+        val place = city()
+        store.save(listOf(place))
+        val walk = walk(0, place).copy(steps = 987)
+        store.save(walk)
+        val server = FakeServer()
+        val model = model(store)
+        engine(model, store, server).sync()
+        assertEquals(987.0, server.walkSteps[walk.id.uuidString])
+    }
+
+    @Test
     fun aWalkCreditedWhileItsGoingUpIsSentAgain() = runBlocking {
         val (store, _) = tempStore()
         val place = city()

@@ -48,6 +48,8 @@ export const saveWalk = mutation({
     endedAt: v.number(),
     distance: v.number(),
     newTiles: v.number(),
+    /** Left out by older phones, and while the motion chip hasn't answered yet. */
+    steps: v.optional(v.number()),
     file: v.id("_storage"),
   },
   returns: v.null(),
@@ -167,7 +169,12 @@ export const saveProgress = mutation({
 export const snapshot = query({
   args: { walkUrls: v.optional(v.boolean()) },
   returns: v.object({
-    walks: v.array(v.object({ clientId: v.string(), url: v.union(v.string(), v.null()) })),
+    walks: v.array(v.object({
+      clientId: v.string(),
+      url: v.union(v.string(), v.null()),
+      /** So a phone that already has the walk can fill in steps that came later. */
+      steps: v.optional(v.number()),
+    })),
     places: v.array(
       v.object({ clientId: v.string(), updatedAt: v.number(), url: v.union(v.string(), v.null()) }),
     ),
@@ -185,6 +192,7 @@ export const snapshot = query({
     return {
       walks: await Promise.all(walks.map(async (w) => ({
         clientId: w.clientId, url: walkUrls === false ? null : await ctx.storage.getUrl(w.file),
+        ...(w.steps === undefined ? {} : { steps: w.steps }),
       }))),
       places: await Promise.all(
         places.map(async (p) => ({ clientId: p.clientId, updatedAt: p.updatedAt, url: await ctx.storage.getUrl(p.file) })),

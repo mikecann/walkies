@@ -330,6 +330,8 @@ class SealedWalkLifecycleTest {
             walk(model, (0..4).map { it * 50.0 }, from = 0.0)
             val id = model.activeWalk!!.id
             assertFalse(model.autoWalkPending)
+            // A city save still on its way could be holding the temporary file.
+            store.flush()
             val blocked = File(root, ".cities.json.tmp")
             assertTrue(blocked.mkdir())
             now += 700

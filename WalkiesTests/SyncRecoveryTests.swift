@@ -220,6 +220,44 @@ extension SyncSafetyTests {
         #expect(store.loadSyncState().uploadedWalks == [interrupted.id])
     }
 
+    @Test func stepsTheOtherPhoneGotLaterFillInWithoutDownloadingTheWalkAgain() async throws {
+        let store = Store(root: root())
+        defer { store.wipe() }
+        var walk = walk(0, in: city())
+        walk.steps = nil
+        store.save(walk)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        let server = SafetyServer()
+        await server.seed(walk)
+        let client = client(server)
+        let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, makeClient: { client })
+        await engine.sync()
+        #expect(model.walks.first?.steps == nil)
+        // The phone that recorded it got its count later, and sent it up again.
+        await server.setSteps(walk.id, 4321)
+        await engine.sync()
+        #expect(model.walks.first?.steps == 4321)
+        #expect(store.loadWalks().first?.steps == 4321)
+        #expect(await server.calls.filter { $0 == "sync:walkUrls" }.isEmpty)
+        #expect(await server.calls.filter { $0 == "sync:saveWalk" }.count <= 1)
+    }
+
+    @Test func aWalkGoesUpWithItsStepsOnItsRow() async throws {
+        let store = Store(root: root())
+        defer { store.wipe() }
+        var walk = walk(0, in: city())
+        walk.steps = 987
+        store.save(walk)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        let server = SafetyServer()
+        let client = client(server)
+        let engine = SyncEngine(model: model, store: store, isSignedIn: { true }, makeClient: { client })
+        await engine.sync()
+        #expect(await server.walkSteps[walk.id.uuidString] == 987)
+    }
+
     @Test func aBackgroundFailureRetriesWhenTheNextForegroundRequestHasASession() async throws {
         let store = Store(root: root())
         defer { store.wipe() }

@@ -291,7 +291,7 @@ final class SyncEngine {
             try check(revision)
             let _: Nothing = try await client.mutation("sync:saveWalk", WalkArgs(
                 clientId: walk.id.uuidString, startedAt: walk.startedAt.ms, endedAt: endedAt.ms,
-                distance: walk.distance, newTiles: Double(walk.newTiles), file: file
+                distance: walk.distance, newTiles: Double(walk.newTiles), steps: walk.steps.map(Double.init), file: file
             ))
             try check(revision)
             // Credited again while this copy was on its way up: the next push sends the new one.
@@ -369,6 +369,12 @@ final class SyncEngine {
             batch.cities.append(city)
             if batch.count >= Self.batchSize { try await flush() }
         }
+        // Steps that came in on the phone that recorded a walk after this one downloaded it.
+        // The walk itself isn't downloaded again: only its count is needed.
+        let lateSteps = Dictionary(snapshot.walks.compactMap { remote in
+            remote.steps.flatMap { steps in UUID(uuidString: remote.clientId).map { ($0, Int(steps)) } }
+        }, uniquingKeysWith: { first, _ in first })
+        model.fillInSteps(lateSteps)
         // Links only for the walks this phone hasn't got, so a sync doesn't sign one per walk.
         let have = Set(model.walks.map(\.id))
         let missing = snapshot.walks.map(\.clientId).filter { UUID(uuidString: $0).map { !have.contains($0) } ?? false }
@@ -488,6 +494,8 @@ private nonisolated struct WalkArgs: Encodable {
     var endedAt: Double
     var distance: Double
     var newTiles: Double
+    /// Left out when there's no count yet (or with step counting off).
+    var steps: Double?
     var file: String
 }
 
@@ -512,7 +520,7 @@ private nonisolated struct SecretArgs: Encodable {
 }
 
 private nonisolated struct Snapshot: Decodable {
-    struct RemoteWalk: Decodable { var clientId: String; var url: String? }
+    struct RemoteWalk: Decodable { var clientId: String; var url: String?; var steps: Double? }
     struct RemotePlace: Decodable { var clientId: String; var updatedAt: Double; var url: String? }
     struct RemoteSecret: Decodable { var secretId: String; var foundAt: Double }
 

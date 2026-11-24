@@ -247,6 +247,8 @@ struct SealedWalkTests {
         walk(model, clock: clock, (0...4).map { Double($0) * 50 }, from: 0)
         let id = try #require(model.activeWalk?.id)
         #expect(!model.autoWalkPending)
+        // A city save still on its way could put the file back.
+        store.flush()
         let cities = root.appending(path: "cities.json")
         try FileManager.default.removeItem(at: cities)
         try FileManager.default.createDirectory(at: cities, withIntermediateDirectories: false)
@@ -374,6 +376,8 @@ struct SealedWalkTests {
         defer { UserDefaults.standard.set(previous, forKey: "countSteps") }
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false, stepQuery: steps.count)
         await model.waitForHistory()
+        // A city save still on its way could put the file back.
+        store.flush()
         let cities = root.appending(path: "cities.json")
         try FileManager.default.removeItem(at: cities)
         try FileManager.default.createDirectory(at: cities, withIntermediateDirectories: false)
@@ -397,6 +401,8 @@ struct SealedWalkTests {
         store.flush()
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
         await model.waitForHistory()
+        // A city save still on its way could put the file back.
+        store.flush()
         let cities = root.appending(path: "cities.json")
         try FileManager.default.removeItem(at: cities)
         try FileManager.default.createDirectory(at: cities, withIntermediateDirectories: false)

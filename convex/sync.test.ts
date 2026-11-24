@@ -100,3 +100,15 @@ test("a save can't take over a file something else uses, so it can't be deleted"
   expect(await t.run((ctx) => ctx.storage.getUrl(streets))).not.toBeNull();
   expect(await t.run((ctx) => ctx.storage.getUrl(theirs))).not.toBeNull();
 });
+
+test("steps that arrive after a walk went up reach the snapshot for other phones", async () => {
+  const t = convexTest(schema, modules);
+  const userId = await t.run((ctx) => ctx.db.insert("users", { name: "Mike" }));
+  const client = t.withIdentity({ subject: userId });
+  const upload = () => t.run((ctx) => ctx.storage.store(new Blob(["raw GPS"])));
+  const walk = { gridVersion: 2 as const, clientId: "walk", startedAt: 1, endedAt: 2, distance: 10, newTiles: 1 };
+  await client.mutation(api.sync.saveWalk, { ...walk, file: await upload() });
+  expect((await client.query(api.sync.snapshot, { walkUrls: false })).walks).toEqual([{ clientId: "walk", url: null }]);
+  await client.mutation(api.sync.saveWalk, { ...walk, steps: 1234, file: await upload() });
+  expect((await client.query(api.sync.snapshot, { walkUrls: false })).walks).toEqual([{ clientId: "walk", url: null, steps: 1234 }]);
+});
