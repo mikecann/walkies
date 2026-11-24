@@ -27,7 +27,7 @@ import org.junit.Test
 
 /** Sensor/service callbacks are fake; model, fence policy, disk and HTTP sync are real. */
 class RestRelaunchSyncTest {
-    @Test(timeout = 10000) fun recoveredWalkWaitsForHistoryAndStepsBeforeReachingTheServer() = runBlocking {
+    @Test(timeout = 10000) fun aRecoveredWalkGoesUpStraightAwayAndAgainOnceItsStepsArrive() = runBlocking {
         val (store, root) = tempStore()
         try {
             val points = (0..8).map { TrackPoint(12.345 + it * 50 / 111195.0, 45.678, 100000.0 + it * 40, 5.0, speed = 1.0) }
@@ -39,17 +39,22 @@ class RestRelaunchSyncTest {
             val server = FakeServer()
             val client = ConvexClient(server.backend, http = server)
             val engine = SyncEngine(model, store, isSignedIn = { true }, makeClient = { client }, scope = this)
-            val job = launch { engine.sync() }
-            while (engine.status != SyncEngine.Status.Syncing) yield()
-            yield()
-            assertFalse(job.isCompleted)
-            assertTrue(server.walks.isEmpty())
+            assertNotNull(reply)
+            val end = SwiftDate.epoch(points.last().time)
+            assertEquals(end, store.loadWalks().single().endedAt)
+            engine.sync()
+            fun uploaded() = Codec.walk(Codec.parse(server.files.getValue(server.walks.getValue(original.id.uuidString)).decodeToString()))
+            val first = uploaded()
+            assertEquals(original.points, first.points)
+            assertEquals(end, first.endedAt)
+            assertNull(first.steps)
+            assertEquals(setOf(original.id), store.loadSyncState().uploadedWalks.toSet())
             reply!!(432)
-            job.join()
-            val uploaded = Codec.walk(Codec.parse(server.files.getValue(server.walks.getValue(original.id.uuidString)).decodeToString()))
-            assertEquals(original.points, uploaded.points)
-            assertEquals(432, uploaded.steps)
-            assertEquals(SwiftDate.epoch(points.last().time), uploaded.endedAt)
+            assertTrue(store.loadSyncState().uploadedWalks.isEmpty())
+            engine.sync()
+            assertEquals(432, uploaded().steps)
+            assertEquals(432, store.loadWalks().single().steps)
+            assertEquals(setOf(original.id), store.loadSyncState().uploadedWalks.toSet())
         } finally { root.parentFile.deleteRecursively() }
     }
 
@@ -103,13 +108,13 @@ class RestRelaunchSyncTest {
             val server = FakeServer()
             val client = ConvexClient(server.backend, http = server)
             var engine = SyncEngine(model, Store(root), isSignedIn = { true }, makeClient = { client }, scope = this)
-            engine.sync()
-            assertTrue(server.walks.isEmpty())
-            assertNull(Store(root).loadWalks().single().endedAt)
-            reply!!(800)
+            // Closed at its last fix straight away, so it goes up without its steps first.
             val finished = Store(root).loadWalks().single()
             assertEquals(original.id, finished.id)
             assertEquals(route.last().time, finished.endedAt!!.epochSeconds, 0.001)
+            engine.sync()
+            assertTrue(original.id.uuidString in server.walks)
+            reply!!(800)
             server.offline = true
             engine.sync()
             assertTrue(engine.status is SyncEngine.Status.Failed)

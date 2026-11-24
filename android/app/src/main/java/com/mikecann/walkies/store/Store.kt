@@ -145,7 +145,7 @@ class Store(private val root: File) {
 
     fun save(walk: Walk) = write(Codec.walk(walk), file(walk))
 
-    /** A lifecycle handoff must know the successor reached disk before ending its parent. */
+    /** Closing a walk must know its file reached disk before its credit goes into the saved places. */
     fun saveWalkCheckpoint(walk: Walk): Boolean = try {
         writeAtomically(file(walk), Codec.walk(walk).toString().toByteArray())
         true

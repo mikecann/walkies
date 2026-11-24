@@ -32,7 +32,7 @@ class StepTest {
         } finally { java.util.Locale.setDefault(locale) }
     }
 
-    @Test fun finishedWalkIsNotPublishedBeforeStepsAndRepeatedEndIsIgnored() {
+    @Test fun aWalkClosesAtOnceAndItsStepsFillInOnceWhileTheNextOneRecords() {
         val (store, root) = tempStore()
         try {
             var reply: ((Int?) -> Unit)? = null
@@ -44,17 +44,22 @@ class StepTest {
             val id = model.activeWalk!!.id
             model.endWalk()
             model.endWalk()
+            // The walk is closed straight away; its count fills in when it arrives.
+            assertNull(model.activeWalk)
+            assertEquals(listOf(id), model.walks.map { it.id })
             model.startWalk()
-            assertEquals(id, model.activeWalk?.id)
-            assertTrue(model.walks.isEmpty())
+            val next = model.activeWalk!!.id
+            assertNotEquals(id, next)
             assertEquals(1, requests)
             reply!!(1234)
             reply!!(9999)
-            assertEquals(1, model.walks.size)
+            assertEquals(listOf(id), model.walks.map { it.id })
             assertEquals(1234, model.walks.single().steps)
             assertEquals(1234, model.recap?.walk?.steps)
             assertEquals(1234, synced)
-            assertEquals(1234, store.loadWalks().single().steps)
+            assertEquals(1234, store.loadWalks().single { it.id == id }.steps)
+            assertEquals(next, model.activeWalk?.id)
+            assertNull(model.activeWalk?.steps)
         } finally { root.parentFile.deleteRecursively() }
     }
 
@@ -119,14 +124,15 @@ class StepTest {
             })
             now = 1100.0
             model.finishStaleAutoWalk()
-            assertTrue(model.walks.isEmpty())
+            assertEquals(walk.id, model.walks.single().id)
+            assertNull(model.walks.single().steps)
             reply!!(450)
             assertEquals(450, model.walks.single().steps)
             assertEquals(SwiftDate.epoch(400.0), model.walks.single().endedAt)
         } finally { root.parentFile.deleteRecursively() }
     }
 
-    @Test fun recoveredWalkUsesLastFixAndWaitsForSteps() {
+    @Test fun aRecoveredWalkClosesAtItsLastFixAndItsCountFillsIn() {
         val (store, root) = tempStore()
         try {
             val walk = Walk(startedAt = SwiftDate.epoch(100.0), points = listOf(TrackPoint(1.0, 1.0, 400.0, 5.0)))
@@ -137,11 +143,12 @@ class StepTest {
                 assertEquals(SwiftDate.epoch(400.0), to)
                 reply = done
             })
-            assertNull(model.walks.single().endedAt)
-            assertFalse(model.historyReady)
+            assertEquals(SwiftDate.epoch(400.0), model.walks.single().endedAt)
+            assertEquals(true, model.walks.single().stepsPending)
+            assertNull(model.walks.single().steps)
             reply!!(400)
-            assertTrue(model.historyReady)
             assertEquals(400, model.walks.single().steps)
+            assertNull(model.walks.single().stepsPending)
             assertEquals(SwiftDate.epoch(400.0), store.loadWalks().single().endedAt)
         } finally { root.parentFile.deleteRecursively() }
     }
