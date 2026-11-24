@@ -450,8 +450,9 @@ final class AppModel {
     /// A short outing keeps its tiles as a TileCredit on each place, and its file
     /// goes only once that's on disk.
     private func commit(_ sealed: Walk) {
-        guard sealed.stage == .sealed else { return }
-        var walk = sealed
+        // The latest copy, so steps that came in meanwhile aren't written over.
+        var walk = walks.first { $0.id == sealed.id } ?? sealed
+        guard walk.stage == .sealed else { return }
         if walk.short == true {
             for i in cities.indices {
                 guard let hexes = walk.newTileHexesByPlace?[cities[i].id.uuidString], !hexes.isEmpty,
@@ -459,6 +460,11 @@ final class AppModel {
                 cities[i].tileCredits = (cities[i].tileCredits ?? []) + [City.TileCredit(id: walk.id, at: walk.startedAt, hexes: hexes)]
                 cities[i].updatedAt = .now
             }
+        }
+        // Its tiles go up with each place it reached, so they count as a change to sync.
+        let reached = Set((walk.newTileHexesByPlace ?? [:]).filter { !$0.value.isEmpty }.keys)
+        for i in cities.indices where reached.contains(cities[i].id.uuidString) || walk.newTileHexesByPlace == nil {
+            cities[i].updatedAt = .now
         }
         // Until the places are on disk, the sealed file is the only record of this walk's
         // credit. If they can't be written, it stays sealed and is tried again.
@@ -486,6 +492,18 @@ final class AppModel {
     /// A walk that closed just before the app stopped, whose credit may not have
     /// reached the saved places. Adding it again changes nothing if it did.
     private func commitAfterRelaunch(_ walk: Walk) {
+        if walk.newTileHexesByPlace == nil, let last = walk.points.last {
+            // Unknown credit, so the route itself is what puts its tiles in the places.
+            let samples = CoverageTracer.samples(for: walk.points)
+            for i in cities.indices {
+                let traced = cities[i].visit(samples, within: shape(for: cities[i]))
+                _ = cities[i].noteWalked(samples, at: last.time, mistDays: Mist.days)
+                if !traced.isEmpty {
+                    cities[i].updatedAt = .now
+                    _ = unlockStickers(in: cities[i], on: traced, notify: false, popUp: false)
+                }
+            }
+        }
         for i in cities.indices {
             let key = cities[i].id.uuidString
             guard let hexes = walk.newTileHexesByPlace?[key], !hexes.isEmpty else { continue }
@@ -534,7 +552,9 @@ final class AppModel {
         // or a save just after launch), so it's traced again like any open walk, and its
         // credit left unknown for history to work out. With saved credit, the walk carries on
         // if it was still recording and recent enough, its credit back on the map.
-        if outing.newTileHexesByPlace == nil || (first && request == nil && canResume(reopened)) {
+        // One whose finish was already asked for (End, say) is closed as it was asked.
+        if (outing.newTileHexesByPlace == nil && (!first || request == nil))
+            || (first && request == nil && canResume(reopened)) {
             return store.saveWalkCheckpoint(reopened) ? .some(reopened) : nil
         }
         outing.endedAt = request?.at ?? outing.points.last.map { Date(timeIntervalSince1970: $0.time) } ?? outing.startedAt
@@ -736,7 +756,7 @@ final class AppModel {
             placesRevision += 1
             tilesRevision += 1
             rebuildCountingTiles()
-            saveCities()
+            saveNow()
             requestSync?()
         }
     }
@@ -2156,6 +2176,7 @@ final class AppModel {
                 var city = cities[i]
                 // Tiles already walked on another phone aren't the open walk's to claim.
                 disown(remote.visited, in: remote.id)
+                addedTiles[remote.id] = addedTiles[remote.id]?.subtracting(remote.tiles)
                 let hadMore = city.merge(remote)
                 city.updatedAt = hadMore ? .now : max(city.lastChanged, remote.lastChanged)
                 cities[i] = city
@@ -2222,7 +2243,8 @@ final class AppModel {
         rebuildCountingTiles()
         placeStickers()
         for city in cities { unlockStickers(in: city, on: city.visited, notify: false, popUp: false) }
-        saveCities()
+        // The open walk's file too, so a relaunch doesn't claim what it gave up.
+        saveNow()
         refreshNeighbours()
         fillInLastWalked()
     }
@@ -2250,11 +2272,15 @@ final class AppModel {
         historyTask = nil
         historyReady = true
         worldGridResetPending = false
+        // Before always on goes off, so turning it off doesn't close a walk into the
+        // next account's files, and no retry writes this account's walks back.
+        activeWalk = nil
+        uncommitted = [:]
+        askingSteps = []
         alwaysOn = false
         setupDone = false
         tracker.stop()
         tracker.stopAlwaysOn()
-        activeWalk = nil
         activePath = []
         freshTiles = [:]
         recap = nil

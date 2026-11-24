@@ -89,11 +89,16 @@ nonisolated struct Walk: Codable, Identifiable, Sendable {
         var arrival: TrackPoint
         var point: TrackPoint?
         var following: [TrackPoint]?
+        var continuation: String?
+        var resumeAnchor: TrackPoint?
 
         var walk: Walk {
             let points = [arrival] + (point.map { [$0] } ?? []) + (following ?? [])
-            return Walk(id: id, startedAt: Date(timeIntervalSince1970: arrival.time), points: points,
-                        distance: CoverageTracer.distance(for: points), automatic: true)
+            var walk = Walk(id: id, startedAt: Date(timeIntervalSince1970: arrival.time), points: points,
+                            distance: CoverageTracer.distance(for: points), automatic: true)
+            walk.continuation = continuation
+            walk.resumeAnchor = resumeAnchor
+            return walk
         }
     }
 

@@ -96,7 +96,11 @@ nonisolated struct Store {
 
     func finishWorldGridReset(cities: [City], walks: [Walk], stickers: [String: Date], progress: Ledger) throws {
         // Failures must leave the retry marker intact, unlike ordinary best-effort saves.
-        for walk in walks { try JSONEncoder().encode(walk).write(to: file(for: walk), options: .atomic) }
+        // Latest first: an outing an older version carried inside an earlier walk gets its
+        // own file before that walk is written without it.
+        for walk in walks.sorted(by: { $0.startedAt > $1.startedAt }) {
+            try JSONEncoder().encode(walk).write(to: file(for: walk), options: .atomic)
+        }
         try cityFiles.write(cities)
         try JSONEncoder().encode(stickers).write(to: stickersURL, options: .atomic)
         try JSONEncoder().encode(progress).write(to: progressURL, options: .atomic)

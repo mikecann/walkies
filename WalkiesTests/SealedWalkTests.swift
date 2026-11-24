@@ -332,4 +332,79 @@ struct SealedWalkTests {
         model.finishStaleAutoWalk()
         #expect(model.walks.first { $0.id == open }?.newTiles == 0)
     }
+
+    @Test func aSealedWalkWithUnknownCreditStillPutsItsTilesInThePlacesAfterARelaunch() async throws {
+        let (store, _) = store("SealedUnknown")
+        defer { store.wipe() }
+        store.save([ModelFixesTests().city(origin: Coordinate(lat: 0, lon: 0))])
+        store.flush()
+        let points = (0...8).map { point(Double($0) * 50, Double($0) * 40) }
+        let sealed = Walk(startedAt: Date(timeIntervalSince1970: start), endedAt: Date(timeIntervalSince1970: start + 320),
+                          points: points, distance: CoverageTracer.distance(for: points), automatic: true, stage: .sealed)
+        store.save(sealed)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        #expect(!store.loadCities()[0].visited.isEmpty)
+        #expect(model.walks.first?.stage == .done)
+        #expect((model.walks.first?.newTiles ?? 0) > 0)
+    }
+
+    @Test func closingAWalkMarksItsPlacesChangedSoTheyGoUpAgain() async throws {
+        let (store, _) = store("SealedPlaceChanged")
+        defer { store.wipe() }
+        store.save([ModelFixesTests().city(origin: Coordinate(lat: 0, lon: 0))])
+        let clock = Clock(start)
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true, now: clock.now)
+        await model.waitForHistory()
+        walk(model, clock: clock, (0...10).map { Double($0) * 50 }, from: 0)
+        let before = model.committedCities[0].lastChanged
+        try await Task.sleep(for: .milliseconds(5))
+        model.endAutoWalk()
+        #expect(model.committedCities[0].lastChanged > before)
+    }
+
+    @Test func aRetriedCommitKeepsStepsThatArrivedMeanwhile() async throws {
+        let (store, root) = store("SealedRetrySteps")
+        defer { store.wipe() }
+        store.save([ModelFixesTests().city(origin: Coordinate(lat: 0, lon: 0))])
+        store.flush()
+        let steps = HeldSteps()
+        let previous = UserDefaults.standard.object(forKey: "countSteps")
+        UserDefaults.standard.set(true, forKey: "countSteps")
+        defer { UserDefaults.standard.set(previous, forKey: "countSteps") }
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false, stepQuery: steps.count)
+        await model.waitForHistory()
+        let cities = root.appending(path: "cities.json")
+        try FileManager.default.removeItem(at: cities)
+        try FileManager.default.createDirectory(at: cities, withIntermediateDirectories: false)
+        model.startWalk()
+        let id = try #require(model.activeWalk?.id)
+        model.endWalk()
+        #expect(store.loadWalks().first { $0.id == id }?.stage == .sealed)
+        await steps.waitForQuestion()
+        steps.reply(321)
+        for _ in 0..<1000 where model.walks.first?.steps == nil { await Task.yield() }
+        try FileManager.default.removeItem(at: cities)
+        model.saveNow(waiting: true)
+        let saved = try #require(store.loadWalks().first { $0.id == id })
+        #expect(saved.stage == .done && saved.steps == 321 && saved.stepsPending == nil)
+    }
+
+    @Test func signingOutForgetsCommitsStillWaitingToBeWritten() async throws {
+        let (store, root) = store("SealedWipe")
+        defer { store.wipe() }
+        store.save([ModelFixesTests().city(origin: Coordinate(lat: 0, lon: 0))])
+        store.flush()
+        let model = AppModel(store: store, servicesEnabled: false, alwaysOn: false)
+        await model.waitForHistory()
+        let cities = root.appending(path: "cities.json")
+        try FileManager.default.removeItem(at: cities)
+        try FileManager.default.createDirectory(at: cities, withIntermediateDirectories: false)
+        model.startWalk()
+        model.endWalk()
+        model.wipeLocalData()
+        try? FileManager.default.removeItem(at: cities)
+        model.saveNow(waiting: true)
+        #expect(store.loadWalks().isEmpty)
+    }
 }
