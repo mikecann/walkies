@@ -16,6 +16,7 @@ import com.mikecann.walkies.place.Boundary
 import com.mikecann.walkies.place.City
 import com.mikecann.walkies.place.GeoPolygon
 import com.mikecann.walkies.store.Store
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -236,7 +237,8 @@ class SealedWalkLifecycleTest {
             val place = place()
             store.save(listOf(place))
             val points = (0..4).map { point(it * 50.0, 720 + it * 40.0) }
-            val open = Walk(startedAt = SwiftDate.epoch(start + 720), points = points, automatic = true,
+            val open = Walk(startedAt = SwiftDate.epoch(start + 720), points = points, newTilesByPlace = emptyMap(),
+                newTileHexesByPlace = emptyMap(), addedTilesByPlace = emptyMap(), automatic = true,
                 stage = WalkStage.Walking, resumeAnchor = points.last())
             store.save(open)
             now = start + 900
@@ -286,9 +288,9 @@ class SealedWalkLifecycleTest {
         val ended = old.copy(endedAt = SwiftDate(200.0))
         assertEquals(WalkStage.Done, ended.currentStage)
         assertFalse(ended.isLegacyOpen)
-        // Older versions on either phone also saved a continuation, which is no longer read.
+        // Older versions on either phone also saved a continuation, read only to carry a ride over.
         val olderAndroid = Codec.walk(Codec.parse("""{"id":"A1A1A1A1-B2B2-4C3C-8D4D-E5E5E5E5E5E5","startedAt":100,"points":[],"distance":0,"newTiles":0,"continuation":"rode"}"""))
-        assertEquals(old, olderAndroid)
+        assertEquals(old.copy(continuation = "rode"), olderAndroid)
         // As the new iPhone version writes it.
         val iPhone = Codec.walk(Codec.parse("""{"id":"A1A1A1A1-B2B2-4C3C-8D4D-E5E5E5E5E5E5","startedAt":100,"endedAt":300,"points":[],"distance":0,"newTiles":0,"automatic":true,"stage":"done","rideSeen":true,"short":true,"stepsPending":true,"endReason":"rode"}"""))
         assertEquals(WalkStage.Done, iPhone.stage)
@@ -317,5 +319,100 @@ class SealedWalkLifecycleTest {
             "pendingFinish":{"at":320,"reason":"rode","byYou":false,"successor":{"id":"B1A1A1A1-B2B2-4C3C-8D4D-E5E5E5E5E5E5",
             "arrival":{"lat":1,"lon":2,"time":720,"accuracy":5},"continuation":"rode","endReason":"gap"}}}"""))
         assertEquals(1, olderSeed.pendingFinish!!.carried.single().points.size)
+    }
+
+    @Test fun aShortOutingWhosePlacesCantBeWrittenStaysSealedUntilTheyCan() {
+        val (store, root) = tempStore()
+        try {
+            store.save(listOf(place())); store.flush()
+            val model = appModel(store, alwaysOn = true)
+            // 200 m out: far enough to count, but too short to be a walk.
+            walk(model, (0..4).map { it * 50.0 }, from = 0.0)
+            val id = model.activeWalk!!.id
+            assertFalse(model.autoWalkPending)
+            val blocked = File(root, ".cities.json.tmp")
+            assertTrue(blocked.mkdir())
+            now += 700
+            model.finishStaleAutoWalk()
+            assertNull(model.activeWalk)
+            val kept = Store(root).loadWalks().single { it.id == id }
+            assertEquals(WalkStage.Sealed, kept.stage)
+            assertEquals(true, kept.short)
+            assertTrue(blocked.delete())
+            model.saveNow(waiting = true)
+            assertTrue(Store(root).loadWalks().none { it.id == id })
+            assertEquals(1, Store(root).loadCities()[0].tileCredits.orEmpty().count { it.id == id })
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
+    @Test fun aCarriedOutingIsWrittenBeforeItsParentLetsGoOfIt() {
+        val (store, root) = tempStore()
+        try {
+            val points = (0..8).map { point(it * 50.0, it * 40.0) }
+            val next = LegacyNextWalk(arrival = point(900.0, 720.0), point = point(950.0, 760.0),
+                following = (2..7).map { point(900.0 + it * 50, 720.0 + it * 40) })
+            val parent = Walk(startedAt = SwiftDate.epoch(start), points = points, newTileHexesByPlace = emptyMap(), automatic = true,
+                pendingFinish = LegacyFinish(SwiftDate.epoch(start + 320), WalkEndReason.Rode, byYou = false, successor = next))
+            store.save(parent)
+            val blocked = File(root, "walks/.${next.id.uuidString}.json.tmp")
+            assertTrue(blocked.mkdir())
+            now = start + 2000
+            appModel(store, alwaysOn = false)
+            // The only copy of the next outing is still inside its parent.
+            assertEquals(next.id, Store(root).loadWalks().single { it.id == parent.id }.pendingFinish?.successor?.id)
+            assertTrue(blocked.delete())
+            val again = appModel(Store(root), alwaysOn = false)
+            assertEquals(setOf(parent.id, next.id), again.walks.map { it.id }.toSet())
+            assertTrue(Store(root).loadWalks().all { it.stage == WalkStage.Done && it.pendingFinish == null })
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
+    @Test fun aRideAnOlderVersionSawStillSplitsTheOutingAfterTheUpdate() {
+        val (store, root) = tempStore()
+        try {
+            val place = place()
+            store.save(listOf(place))
+            val points = (0..8).map { point(it * 50.0, it * 40.0) }
+            val legacy = Walk(startedAt = SwiftDate.epoch(start), points = points,
+                newTileHexesByPlace = mapOf(place.id.uuidString to emptySet()), automatic = true, continuation = "rode")
+            store.save(legacy)
+            now = start + 330
+            val model = appModel(store, alwaysOn = true)
+            assertEquals(legacy.id, model.activeWalk?.id)
+            assertEquals(true, model.activeWalk?.rideSeen)
+            // 500 m on in 400 s is walking pace, but the ride says it wasn't walked.
+            for ((x, t) in listOf(900.0 to 720.0, 950.0 to 760.0, 1000.0 to 800.0)) {
+                now = start + t
+                model.record(point(x, t))
+            }
+            assertEquals(listOf(legacy.id), model.walks.map { it.id })
+            assertNotEquals(legacy.id, model.activeWalk?.id)
+            assertEquals(point(900.0, 720.0), model.activeWalk?.points?.first())
+        } finally { root.parentFile.deleteRecursively() }
+    }
+
+    @Test fun aWalkPulledFromAnotherPhoneOwnsTheTilesItCoveredBeforeTheOpenWalkCloses() = runBlocking {
+        val (store, root) = tempStore()
+        try {
+            val place = place()
+            store.save(listOf(place))
+            now = start + 5000
+            val model = appModel(store, alwaysOn = true)
+            walk(model, (0..10).map { it * 50.0 }, from = 5000.0)
+            val open = model.activeWalk!!.id
+            val fresh = model.freshTiles.getValue(place.id)
+            // The same route, walked earlier on another phone, whose steps it was still waiting on.
+            val route = (0..10).map { point(it * 50.0, it * 40.0) }
+            val remote = Walk(startedAt = SwiftDate.epoch(start), endedAt = SwiftDate.epoch(start + 400), points = route,
+                distance = CoverageTracer.distance(route), automatic = true, stage = WalkStage.Done, stepsPending = true)
+            model.addRemote(emptyList(), listOf(remote), null, emptyMap())
+            assertNull(model.walks.single { it.id == remote.id }.stepsPending)
+            assertTrue(model.freshTiles[place.id].orEmpty().none { it in fresh })
+            model.saveNow(waiting = true)
+            assertTrue(Store(root).loadCities()[0].visited.containsAll(fresh))
+            now += 700
+            model.finishStaleAutoWalk()
+            assertEquals(0, model.walks.single { it.id == open }.newTiles)
+        } finally { root.parentFile.deleteRecursively() }
     }
 }

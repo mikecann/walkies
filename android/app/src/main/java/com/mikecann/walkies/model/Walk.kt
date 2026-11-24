@@ -95,6 +95,8 @@ data class Walk(
     val short: Boolean? = null,
     /** Steps were asked for and haven't come back yet. Asked again at launch. */
     val stepsPending: Boolean? = null,
+    /** Only read from files saved by older versions: "rode" there means a ride was seen. */
+    val continuation: String? = null,
     /** Only read when opening files from older versions. */
     val pendingFinish: LegacyFinish? = null,
 ) {

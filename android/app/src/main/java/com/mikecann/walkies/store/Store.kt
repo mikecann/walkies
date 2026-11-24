@@ -91,6 +91,12 @@ class Store(private val root: File) {
     /** Waits for any cities still being written, say before the app is stopped. */
     fun flush() = cityFiles.flush()
 
+    /**
+     * Writes the cities now, and says whether they reached the disk. Closing a walk
+     * waits on this before it marks the walk done or deletes a short outing's file.
+     */
+    fun writeCities(cities: List<City>): Boolean = cityFiles.write(cities)
+
     /** When each sticker was found, by lore id. */
     fun loadStickers(): Map<String, SwiftDate> = read(stickersFile, Codec::stickers) ?: emptyMap()
     fun saveStickers(stickers: Map<String, SwiftDate>) = write(Codec.stickers(stickers), stickersFile)
@@ -221,6 +227,19 @@ private class CityFiles private constructor(private val citiesFile: File, privat
     fun flush() {
         queue.submit { writeWaiting() }.get()
     }
+
+    /** Writes [cities] now, newer than anything waiting, and says whether they reached the disk. */
+    fun write(cities: List<City>): Boolean = queue.submit<Boolean> {
+        synchronized(lock) { waiting = PendingWrite.Idle }
+        try {
+            writeFiles(cities)
+            true
+        } catch (e: Exception) {
+            Store.log.severe("Couldn't save cities.json: $e")
+            synchronized(lock) { if (waiting == PendingWrite.Idle) waiting = PendingWrite.Retry(cities) }
+            false
+        }
+    }.get()
 
     /** For changing the files some other way: after anything waiting is written, and forgetting what's on disk. */
     fun replace(change: () -> Unit) {

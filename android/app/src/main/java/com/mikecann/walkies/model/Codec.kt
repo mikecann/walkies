@@ -230,6 +230,7 @@ object Codec {
         w.endReason?.let { put("endReason", it.rawValue) }
         w.short?.let { put("short", it) }
         w.stepsPending?.let { put("stepsPending", it) }
+        w.continuation?.let { put("continuation", it) }
         // Never written by this version (closing a walk clears it), but kept so a legacy
         // file read and written again comes out the same.
         w.pendingFinish?.let { finish ->
@@ -258,7 +259,6 @@ object Codec {
             newTileHexesByPlace = o.opt("newTileHexesByPlace")?.let(::hexesByPlace),
             addedTilesByPlace = o.opt("addedTilesByPlace")?.let(::hexesByPlace),
             automatic = o.opt("automatic")?.bool(),
-            // Older versions' "continuation" is no longer read, as on the iPhone.
             stage = o.opt("stage")?.let { value ->
                 WalkStage.entries.firstOrNull { it.rawValue == (value as JsonPrimitive).content }
                     ?: throw Invalid("Unknown walk stage $value")
@@ -271,6 +271,7 @@ object Codec {
             },
             short = o.opt("short")?.bool(),
             stepsPending = o.opt("stepsPending")?.bool(),
+            continuation = o.opt("continuation")?.let { (it as JsonPrimitive).content },
             pendingFinish = o.opt("pendingFinish")?.obj()?.let { finish ->
                 LegacyFinish(
                     at = finish.date("at"),
