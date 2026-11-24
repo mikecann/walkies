@@ -269,7 +269,8 @@ final class SyncEngine {
             save()
         }
 
-        for city in model.cities {
+        // Not the open walk's tiles: those go up once it closes.
+        for city in model.committedCities {
             let changed = city.lastChanged
             if let sent = state.uploadedPlaces[city.id], sent >= changed { continue }
             let file = try await upload(JSONEncoder().encode(city), client)

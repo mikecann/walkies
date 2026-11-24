@@ -96,7 +96,11 @@ nonisolated struct Store {
 
     func finishWorldGridReset(cities: [City], walks: [Walk], stickers: [String: Date], progress: Ledger) throws {
         // Failures must leave the retry marker intact, unlike ordinary best-effort saves.
-        for walk in walks { try JSONEncoder().encode(walk).write(to: file(for: walk), options: .atomic) }
+        // Latest first: an outing an older version carried inside an earlier walk gets its
+        // own file before that walk is written without it.
+        for walk in walks.sorted(by: { $0.startedAt > $1.startedAt }) {
+            try JSONEncoder().encode(walk).write(to: file(for: walk), options: .atomic)
+        }
         try cityFiles.write(cities)
         try JSONEncoder().encode(stickers).write(to: stickersURL, options: .atomic)
         try JSONEncoder().encode(progress).write(to: progressURL, options: .atomic)
@@ -135,6 +139,18 @@ nonisolated struct Store {
     /// Waits for any cities still being written, say before the app is suspended.
     func flush() {
         cityFiles.flush()
+    }
+
+    /// Writes the cities now, and says whether they reached the disk. Closing a walk
+    /// waits on this before it marks the walk done or deletes a short outing's file.
+    func writeCities(_ cities: [City]) -> Bool {
+        do {
+            try cityFiles.write(cities)
+            return true
+        } catch {
+            Self.log.error("Couldn't save cities.json: \(error)")
+            return false
+        }
     }
 
     private var teamsURL: URL { root.appending(path: "teams.json") }

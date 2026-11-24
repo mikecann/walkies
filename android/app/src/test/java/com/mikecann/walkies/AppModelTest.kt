@@ -27,10 +27,9 @@ import kotlin.math.abs
 
 /**
  * Always-on and button walks through the model: ModelFixesTests.swift and the walk
- * parts of ProgressionIntegrationTests.swift. Both phones put off finishing a walk
- * until the saved history's tile counts are worked out; these models work them out
- * before the constructor returns, so walks finish straight away. The progression
- * parts are in ProgressionModelTest.
+ * parts of ProgressionIntegrationTests.swift. A walk closes the moment it ends, without
+ * waiting for the saved history's tile counts or its steps (docs/walk-lifecycle.md).
+ * The progression parts are in ProgressionModelTest.
  */
 class AppModelTest {
     private var now = 1_790_000_000.0
@@ -181,7 +180,7 @@ class AppModelTest {
     }
 
     @Test
-    fun whileTheStepCountComesInTheNextWalkStillStartsWhereYouArrived() {
+    fun theNextWalkStartsWhereYouArrivedWhileTheStepCountComesIn() {
         val (store, _) = tempStore()
         val place = city(origin = Coordinate(-33.65, 45.678))
         store.save(listOf(place))
@@ -192,7 +191,10 @@ class AppModelTest {
         val arrivalTime = old.points.last().time - now + 519
         visit(model, place, 2900.0, arrivalTime, speed = 1.2)
         visit(model, place, 2950.0, arrivalTime + 40)
-        assertTrue(model.walks.isEmpty())
+        // Closed straight away, and the next outing is already recording.
+        assertEquals(listOf(old.id), model.walks.map { it.id })
+        assertNotEquals(old.id, model.activeWalk?.id)
+        assertNull(model.walks.single().steps)
         reply!!(100)
         assertEquals(old.id, model.walks.single().id)
         assertEquals(100, model.walks.single().steps)

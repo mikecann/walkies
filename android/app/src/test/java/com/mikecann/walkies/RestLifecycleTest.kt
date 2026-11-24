@@ -4,7 +4,6 @@ import com.mikecann.walkies.model.Codec
 import com.mikecann.walkies.model.SwiftDate
 import com.mikecann.walkies.model.TrackPoint
 import com.mikecann.walkies.model.Walk
-import com.mikecann.walkies.model.WalkContinuation
 import com.mikecann.walkies.model.WalkEndReason
 import com.mikecann.walkies.store.Store
 import kotlinx.coroutines.CoroutineDispatcher
@@ -39,7 +38,7 @@ class RestLifecycleTest {
         }
     }
 
-    @Test(timeout = 10000) fun historyAndStepCompletionsCannotAppendPostGapFixesToThePreviousWalk() = runBlocking {
+    @Test(timeout = 10000) fun fixesAfterTheGapCloseThePreviousWalkStraightAwayWhileHistoryIsHeld() = runBlocking {
         val (store, root) = tempStore()
         try {
             val queued = ArrayDeque<Runnable>()
@@ -62,14 +61,16 @@ class RestLifecycleTest {
             model.record(point(450.0, now))
             now += 40
             model.record(point(500.0, now))
-            assertEquals(original.points, model.activeWalk!!.points)
+            // Closed straight away, without waiting for the history or the steps.
+            assertEquals(original.id, model.walks.single().id)
+            assertEquals(original.points, model.walks.single().points)
+            assertNotNull(Store(root).loadWalks().single { it.id == original.id }.endedAt)
+            assertNotEquals(original.id, model.activeWalk?.id)
+            assertNotNull(reply)
             holding = false
             while (queued.isNotEmpty()) queued.removeFirst().run()
             model.waitForHistory()
             stepsRequested.await()
-            assertNotNull(reply)
-            assertTrue(model.walks.isEmpty())
-            assertNull(Store(root).loadWalks().single().endedAt)
             reply!!(400)
             reply!!(9999)
             assertEquals(original.id, model.walks.single().id)
@@ -77,18 +78,6 @@ class RestLifecycleTest {
             assertEquals(400, model.walks.single().steps)
             assertEquals(WalkEndReason.Gap, model.walks.single().endReason)
         } finally { root.parentFile.deleteRecursively() }
-    }
-
-    @Test fun legacyWalkAndContinuationRoundTrip() {
-        val old = Codec.walk(Codec.parse("""{"id":"A1A1A1A1-B2B2-4C3C-8D4D-E5E5E5E5E5E5","startedAt":100,"points":[],"distance":0,"newTiles":0}"""))
-        assertEquals(WalkContinuation.Walking, old.continuationState)
-        assertNull(old.resumeAnchor)
-        assertNull(old.endReason)
-        val riding = old.transition(WalkContinuation.Event.ObservedRide).copy(resumeAnchor = point(900.0, 1000.0))
-        assertEquals(riding, Codec.walk(Codec.walk(riding)))
-        val finished = riding.transition(WalkContinuation.Event.Finished).copy(endReason = WalkEndReason.Rode)
-        assertNull(finished.resumeAnchor)
-        assertEquals(finished, Codec.walk(Codec.walk(finished)))
     }
 
     @Test fun explicitEndKeepsPendingAndConfirmedShortWalks() {
@@ -151,7 +140,7 @@ class RestLifecycleTest {
         }
     }
 
-    @Test fun aRelaunchWhileStepsArePendingPreservesRideAndOriginalEnd() {
+    @Test fun aRelaunchWhileStepsArePendingKeepsTheRideAndOriginalEnd() {
         val (store, root) = tempStore()
         try {
             var now = 100000.0
@@ -166,9 +155,10 @@ class RestLifecycleTest {
             model.record(point(900.0, now))
             now += 40
             model.record(point(950.0, now))
+            // Closed as soon as the ride showed, before its steps came back.
             assertNotNull(reply)
-            assertTrue(model.walks.isEmpty())
-            assertNull(Store(root).loadWalks().single().endedAt)
+            assertEquals(original.id, model.walks.single().id)
+            assertNotNull(Store(root).loadWalks().single { it.id == original.id }.endedAt)
             model = AppModel(Store(root), FakeSettings(alwaysOn = true), FakeLocation(), clock = { now })
             now += 40
             model.record(point(1000.0, now))

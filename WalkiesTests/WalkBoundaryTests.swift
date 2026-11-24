@@ -93,19 +93,22 @@ struct WalkBoundaryTests {
         #expect(store.loadWalks().first?.endedAt == Date(timeIntervalSince1970: start + 320))
     }
 
-    @Test func continuationMetadataRoundTripsAndOldFilesStillLoad() throws {
+    @Test func stageMetadataRoundTripsAndOldFilesStillLoad() throws {
         let old = Data(#"{"id":"A1A1A1A1-B2B2-4C3C-8D4D-E5E5E5E5E5E5","startedAt":100,"points":[],"distance":0,"newTiles":0}"#.utf8)
         let decoded = try JSONDecoder().decode(Walk.self, from: old)
-        #expect(decoded.continuation == nil)
-        #expect(decoded.resumeAnchor == nil)
-        var walk = Walk(startedAt: Date(timeIntervalSince1970: start))
-        walk.continueAfter(.observedRide)
+        #expect(decoded.stage == nil && decoded.rideSeen == nil && decoded.resumeAnchor == nil)
+        #expect(decoded.isLegacyOpen)
+        var ended = decoded
+        ended.endedAt = Date(timeIntervalSince1970: 200)
+        #expect(ended.currentStage == .done && !ended.isLegacyOpen)
+        var walk = Walk(startedAt: Date(timeIntervalSince1970: start), automatic: true, stage: .tentative)
+        walk.rideSeen = true
         walk.resumeAnchor = point(900, 720)
         let saved = try JSONDecoder().decode(Walk.self, from: JSONEncoder().encode(walk))
-        #expect(saved.continuation == .rode)
+        #expect(saved.stage == .tentative && saved.rideSeen == true)
         #expect(saved.resumeAnchor == walk.resumeAnchor)
-        walk.continueAfter(.acceptedWalkingStep)
-        #expect(walk.continuation == .walking)
+        #expect(walk.move(.confirmed) && walk.stage == .walking)
+        #expect(!walk.move(.committed) && walk.stage == .walking)
     }
 
     @Test(arguments: [149.999, 150.0, 150.001])
@@ -176,24 +179,30 @@ struct WalkBoundaryTests {
         await model.waitForHistory()
     }
 
-    @Test func aConfirmedSuccessorSeedReplaysCoverageAfterItsPredecessorHasFinished() async throws {
-        let store = Store(root: URL.temporaryDirectory.appending(path: "WalkiesSeedCoverage-\(UUID())"))
+    @Test func aRecordingWalkIsTracedAgainOnRelaunchAndItsTilesStayOutOfSavedPlaces() async throws {
+        let store = Store(root: URL.temporaryDirectory.appending(path: "WalkiesResumeCoverage-\(UUID())"))
         defer { store.wipe() }
         let place = ModelFixesTests().city(origin: Coordinate(lat: 0, lon: 0))
         store.save([place])
-        let seed = Walk.NextWalk(arrival: point(0, 720), point: point(50, 760),
-                                 following: [point(100, 800), point(150, 840), point(200, 880)])
-        let saved = seed.walk
-        #expect(saved.newTileHexesByPlace == nil)
-        store.save(saved)
+        let points = (0...4).map { point(Double($0) * 50, 720 + Double($0) * 40) }
+        var open = Walk(startedAt: Date(timeIntervalSince1970: start + 720), points: points, newTilesByPlace: [:],
+                        newTileHexesByPlace: [:], addedTilesByPlace: [:], automatic: true, stage: .walking)
+        open.resumeAnchor = points.last
+        store.save(open)
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true,
                              now: { Date(timeIntervalSince1970: start + 900) })
         await model.waitForHistory()
-        #expect(model.activeWalk?.id == saved.id)
+        #expect(model.activeWalk?.id == open.id)
         #expect(!model.autoWalkPending)
         #expect(!model.cities[0].visited.isEmpty)
-        #expect(model.activeWalk?.newTileHexesByPlace?[place.id.uuidString]?.isEmpty == false)
+        #expect(model.freshTiles[place.id] == model.cities[0].visited)
+        model.saveNow(waiting: true)
+        #expect(store.loadCities()[0].visited.isEmpty)
+        model.endAutoWalk()
+        #expect(model.activeWalk == nil)
         #expect(store.loadCities()[0].visited == model.cities[0].visited)
+        #expect(store.loadWalks().first { $0.id == open.id }?.stage == .done)
+        #expect(store.loadWalks().first { $0.id == open.id }?.newTileHexesByPlace?[place.id.uuidString] == model.cities[0].visited)
     }
 
     @Test func replayingADropAfterCityCreditButBeforeDeleteCannotAwardTwice() async throws {
@@ -221,29 +230,24 @@ struct WalkBoundaryTests {
         #expect(store.loadWalks().isEmpty)
     }
 
-
     @Test(arguments: [false, true])
-    func aRetryDuringLaunchStillHonoursTheGapAndAlwaysOn(restartExpired: Bool) async throws {
-        let root = URL.temporaryDirectory.appending(path: "WalkiesLoadRetry-\(UUID())")
-        let store = Store(root: root)
+    func aFinishThatAnOlderVersionLeftWaitingClosesBothOutingsAtLaunch(restartExpired: Bool) async throws {
+        let store = Store(root: URL.temporaryDirectory.appending(path: "WalkiesLegacyFinish-\(UUID())"))
         defer { store.wipe() }
         let points = (0...8).map { point(Double($0) * 50, Double($0) * 40) }
-        let next = Walk.NextWalk(arrival: point(900, 720), point: point(950, 760),
-                                 following: (2...7).map { point(900 + Double($0) * 50, 720 + Double($0) * 40) })
-        var old = Walk(startedAt: Date(timeIntervalSince1970: start), points: points, automatic: true)
-        old.pendingFinish = Walk.PendingFinish(at: Date(timeIntervalSince1970: start + 320), reason: .rode, byYou: false, successor: next)
+        let next = Walk.LegacyNextWalk(arrival: point(900, 720), point: point(950, 760),
+                                       following: (2...7).map { point(900 + Double($0) * 50, 720 + Double($0) * 40) })
+        var old = Walk(startedAt: Date(timeIntervalSince1970: start), points: points, newTileHexesByPlace: [:], automatic: true)
+        old.pendingFinish = Walk.LegacyFinish(at: Date(timeIntervalSince1970: start + 320), reason: .rode, byYou: false, successor: next)
         store.save(old)
-        let blocked = root.appending(path: "walks/\(next.id.uuidString).json")
-        try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: false)
         let time = start + (restartExpired ? 1700 : 1010)
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: restartExpired,
                              now: { Date(timeIntervalSince1970: time) })
-        // Initial materialization failed. Let the history-task retry succeed.
-        try FileManager.default.removeItem(at: blocked)
         await model.waitForHistory()
         #expect(model.activeWalk == nil)
         #expect(Set(model.walks.map(\.id)) == [old.id, next.id])
-        #expect(model.walks.allSatisfy { $0.endedAt != nil })
+        #expect(model.walks.allSatisfy { $0.endedAt != nil && $0.stage == .done && $0.pendingFinish == nil })
+        #expect(store.loadWalks().allSatisfy { $0.stage == .done })
     }
 
     @Test(arguments: [200.0, 350.0])
@@ -272,7 +276,7 @@ struct WalkBoundaryTests {
         }
     }
 
-    @Test func aSinglePointSuccessorRebasesAgainIfTheNextFixIsStale() async throws {
+    @Test func aRideArrivalThatGoesStaleStartsTheNextWalkFromAFreshFix() async throws {
         let store = Store(root: URL.temporaryDirectory.appending(path: "WalkiesSingleAnchor-\(UUID())"))
         defer { store.wipe() }
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true,
@@ -283,23 +287,12 @@ struct WalkBoundaryTests {
         model.recordAlwaysOnForTesting(wheels)
         model.recordAlwaysOnForTesting(point(900, 400))
         model.recordAlwaysOnForTesting(point(950, 700))
-        #expect(model.activeWalk?.points.count == 1)
         model.recordAlwaysOnForTesting(point(1000, 950))
         model.recordAlwaysOnForTesting(point(1050, 990))
         #expect(model.activeWalk?.startedAt == Date(timeIntervalSince1970: start + 950))
         #expect(model.activeWalk?.points == [point(1000, 950), point(1050, 990)])
     }
 
-
-    @Test func anAcceptedSeedWithAGapIsNoLongerASingleAnchor() {
-        var seed = Walk.NextWalk(arrival: point(2000, 800), point: nil)
-        seed.accept(from: point(2200, 840), point: point(2250, 880))
-        #expect(seed.point != nil)
-        #expect(seed.walk.points == [point(2000, 800), point(2200, 840), point(2250, 880)])
-        seed.accept(from: point(2250, 880), point: point(2300, 960))
-        #expect(seed.walk.points.count == 4)
-        #expect(abs(seed.walk.distance - 100) < 0.001)
-    }
 
 
     @Test(arguments: [200.0, 400.0])

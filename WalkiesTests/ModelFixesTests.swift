@@ -163,7 +163,7 @@ struct ModelFixesTests {
         #expect(!model.tracker.isOnScreen())
     }
 
-    @Test func fixesAfterTheGapNeverJoinAWalkStillWaitingToFinish() async throws {
+    @Test func fixesAfterTheGapCloseTheOldWalkStraightAwayAndStartAnother() async throws {
         let store = store()
         defer { store.wipe() }
         let place = city()
@@ -173,23 +173,20 @@ struct ModelFixesTests {
             let c = coordinate(in: place, x: x)
             return TrackPoint(lat: c.lat, lon: c.lon, time: start.timeIntervalSince1970 + Double(index) * 80, accuracy: 5, speed: 1)
         }
-        let old = Walk(startedAt: start, points: points, distance: 200, automatic: true)
+        let old = Walk(startedAt: start, points: points, distance: 200, automatic: true, stage: .walking)
         store.save(old)
         let model = AppModel(store: store, servicesEnabled: false, alwaysOn: true)
-        // History is still being prepared, so finishing the old walk has to wait.
+        // Closing doesn't wait for history to be prepared, or for steps.
         #expect(!model.historyReady)
         #expect(model.activeWalk?.id == old.id)
         for (i, x) in [100.0, 150, 200].enumerated() { visit(model, in: place, x: x, seconds: 400 + Double(i) * 40) }
-        #expect(model.activeWalk?.points.count == 2)
-        await model.waitForHistory()
-        for _ in 0..<50 where model.activeWalk != nil { await Task.yield() }
-        #expect(model.activeWalk == nil)
-        for (i, x) in [300.0, 350, 400].enumerated() { visit(model, in: place, x: x, seconds: 600 + Double(i) * 40) }
+        // 200 m is a short outing: closed, and its file gone.
+        #expect(model.walks.isEmpty)
+        #expect(!store.loadWalks().contains { $0.id == old.id })
         let next = try #require(model.activeWalk)
         #expect(next.id != old.id)
-        #expect(next.points.allSatisfy { $0.time > Date.now.timeIntervalSince1970 + 500 })
-        // The other deferred finishes were for the old walk, so this one carries on.
-        for _ in 0..<20 { await Task.yield() }
+        #expect(next.points.allSatisfy { $0.time > Date.now.timeIntervalSince1970 + 300 })
+        await model.waitForHistory()
         #expect(model.activeWalk?.id == next.id)
     }
 

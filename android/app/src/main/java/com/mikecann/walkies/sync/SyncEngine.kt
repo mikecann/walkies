@@ -273,7 +273,8 @@ class SyncEngine(
             save()
         }
 
-        for (city in model.cities.toList()) {
+        // Not the open walk's tiles: those go up once it closes.
+        for (city in model.committedCities) {
             val changed = city.lastChanged
             val sent = state.uploadedPlaces[city.id]
             if (sent != null && sent >= changed) continue

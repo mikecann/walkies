@@ -27,91 +27,38 @@ data class TrackPoint(
     val coordinate get() = Coordinate(lat, lon)
 }
 
-/** How the next accepted walking segment may continue this saved outing. */
-enum class WalkContinuation(val rawValue: String) {
-    Walking("walking"),
-    Rode("rode");
-
-    enum class Event { ObservedRide, AcceptedWalkingStep, Finished }
-
-    /** A ride persists until walking is accepted again or this outing finishes. */
-    fun after(event: Event): WalkContinuation = when (event) {
-        Event.ObservedRide -> Rode
-        Event.AcceptedWalkingStep, Event.Finished -> Walking
-    }
-}
-
 enum class WalkEndReason(val rawValue: String) {
     Gap("gap"), Quiet("quiet"), Rode("rode"), You("you"), Recovered("recovered"), AlwaysOnOff("always on off")
 }
 
-/** The first confirmed segment after a ride, with an identity before its parent finishes. */
-data class NextWalk(
-    val id: UUID = UUID.randomUUID(), val arrival: TrackPoint, val point: TrackPoint? = null,
-    val following: List<TrackPoint>? = null, val continuation: WalkContinuation? = null,
-    val resumeAnchor: TrackPoint? = null, val endReason: WalkEndReason? = null,
-) {
-    private val route: List<TrackPoint> get() = (listOf(arrival) + listOfNotNull(point) + following.orEmpty())
-        .fold(emptyList<TrackPoint>()) { points, next -> if (points.lastOrNull() == next) points else points + next }
-    fun walk() = Walk(
-        id = id, startedAt = SwiftDate.epoch(arrival.time), points = route,
-        distance = CoverageTracer.distance(route), automatic = true,
-        continuation = continuation,
-        resumeAnchor = resumeAnchor ?: route.last().takeIf { continuation != WalkContinuation.Rode },
-        endReason = endReason,
-    )
-
-    fun shouldSeparate(anchor: TrackPoint): Boolean {
-        val last = route.last()
-        val distance = last.coordinate.distance(anchor.coordinate)
-        if (distance <= CoverageTracer.MAX_GAP) return false
-        val elapsed = anchor.time - last.time
-        return continuation == WalkContinuation.Rode || elapsed <= 0 || distance / elapsed > CoverageTracer.MAX_SPEED
-    }
-
-    fun accept(anchor: TrackPoint, point: TrackPoint): NextWalk {
-        var points = route
-        if (points.lastOrNull() != anchor) points = points + anchor
-        points = points + point
-        return copy(point = points.getOrNull(1), following = points.drop(2).takeIf { it.isNotEmpty() },
-            continuation = null, resumeAnchor = point, endReason = null)
-    }
-}
-
-/** A durable finish request; endedAt remains absent until history and steps are attached. */
-data class PendingWalkFinish(
+/**
+ * Only read when opening files from older versions, which waited for steps before
+ * closing a walk and carried the next outing inside this one.
+ */
+data class LegacyFinish(
     val at: SwiftDate,
     val reason: WalkEndReason,
     val byYou: Boolean,
-    val successor: NextWalk? = null,
-    /** Confirmed legs frozen by another ride while the first handoff was still waiting. */
-    val closedSuccessors: List<NextWalk>? = null,
+    val successor: LegacyNextWalk? = null,
+    val closedSuccessors: List<LegacyNextWalk>? = null,
 ) {
-    /** Each file owns the remaining queue before its predecessor can finish. */
-    val handoff: Walk? get() {
-        val closed = closedSuccessors?.firstOrNull() ?: return successor?.walk()
-        val walk = closed.walk()
-        return walk.transition(WalkContinuation.Event.ObservedRide).copy(pendingFinish = PendingWalkFinish(
-            at = SwiftDate.epoch(walk.points.last().time), reason = closed.endReason ?: WalkEndReason.Rode, byYou = false,
-            successor = successor, closedSuccessors = closedSuccessors.orEmpty().drop(1).takeIf { it.isNotEmpty() },
-        ))
-    }
+    /** Every outing it was carrying, oldest first. */
+    val carried: List<Walk> get() = (closedSuccessors.orEmpty() + listOfNotNull(successor)).map { it.walk() }
+}
 
-    fun observedRide(confirmationDistance: Double): PendingWalkFinish {
-        val open = successor
-        val points = open?.walk()?.points.orEmpty()
-        val origin = points.firstOrNull()?.coordinate
-        val confirmed = origin != null && points.any { origin.distance(it.coordinate) >= confirmationDistance }
-        return copy(successor = if (confirmed) open!!.copy(continuation = WalkContinuation.Rode, resumeAnchor = null) else null)
-    }
-
-    fun expired(confirmationDistance: Double): PendingWalkFinish {
-        val open = successor ?: return this
-        val points = open.walk().points
-        val origin = points.first().coordinate
-        val confirmed = points.any { origin.distance(it.coordinate) >= confirmationDistance }
-        return copy(successor = null, closedSuccessors = (closedSuccessors.orEmpty() +
-            if (confirmed) listOf(open.copy(endReason = WalkEndReason.Gap)) else emptyList()).takeIf { it.isNotEmpty() })
+/** An outing an older version carried inside the walk before it. Read only. */
+data class LegacyNextWalk(
+    val id: UUID = UUID.randomUUID(), val arrival: TrackPoint, val point: TrackPoint? = null,
+    val following: List<TrackPoint>? = null,
+    val continuation: String? = null,
+    val resumeAnchor: TrackPoint? = null,
+) {
+    fun walk(): Walk {
+        val route = (listOf(arrival) + listOfNotNull(point) + following.orEmpty())
+            .fold(emptyList<TrackPoint>()) { points, next -> if (points.lastOrNull() == next) points else points + next }
+        return Walk(id = id, startedAt = SwiftDate.epoch(arrival.time), points = route,
+            distance = CoverageTracer.distance(route), automatic = true, continuation = continuation,
+            resumeAnchor = resumeAnchor)
     }
 }
 
@@ -137,21 +84,41 @@ data class Walk(
     val addedTilesByPlace: Map<String, Set<Hex>>? = null,
     /** Recorded by always-on mode rather than started with the button. */
     val automatic: Boolean? = null,
-    /** Missing on older files, which had no saved ride classification. */
-    val continuation: WalkContinuation? = null,
-    /** The tracer cursor, which may be an arrival fix not yet accepted into the route. */
+    /** Where it is in its life (WalkStage.kt). Null on files from older versions: see [currentStage]. */
+    val stage: WalkStage? = null,
+    /**
+     * The phone saw a car or bike since the last walking fix. Saved, so after a relaunch
+     * the next fix still knows whether you could have walked from the last spot.
+     */
+    val rideSeen: Boolean? = null,
+    /** Where the tracer had got to, so a relaunch carries on the same route. */
     val resumeAnchor: TrackPoint? = null,
     val endReason: WalkEndReason? = null,
-    val pendingFinish: PendingWalkFinish? = null,
+    /** Closed without counting as a walk. Its tiles stay as a TileCredit on each place, and its file goes once they're saved. */
+    val short: Boolean? = null,
+    /** Steps were asked for and haven't come back yet. Asked again at launch. */
+    val stepsPending: Boolean? = null,
+    /** Only read from files saved by older versions: "rode" there means a ride was seen. */
+    val continuation: String? = null,
+    /** Only read when opening files from older versions. */
+    val pendingFinish: LegacyFinish? = null,
 ) {
     val isAutomatic get() = automatic == true
 
-    val continuationState get() = continuation ?: WalkContinuation.Walking
+    /**
+     * The stage, including files saved before stages existed: those are done once they
+     * have an end, and still recording (by the old rules) otherwise.
+     */
+    val currentStage: WalkStage get() = stage ?: if (endedAt != null) WalkStage.Done else WalkStage.Walking
 
-    fun transition(event: WalkContinuation.Event): Walk = copy(
-        continuation = continuationState.after(event).takeIf { it != WalkContinuation.Walking },
-        resumeAnchor = null,
-    )
+    /**
+     * Saved by an older version and never finished there. Its tiles are already in the
+     * saved places, because older versions saved them as you walked.
+     */
+    val isLegacyOpen: Boolean get() = stage == null && endedAt == null
+
+    /** This walk at the stage after [event], or null when that move isn't allowed from here. */
+    fun moved(event: WalkStage.Event): Walk? = currentStage.after(event)?.let { copy(stage = it) }
 
     /** Seconds, up to now for a walk still going. */
     fun duration(now: SwiftDate = SwiftDate.now()) = (endedAt ?: now).sinceReference - startedAt.sinceReference
