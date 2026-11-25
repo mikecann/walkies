@@ -29,7 +29,7 @@ const PRIVATE_FIELDS = new Set(["contactPhone", "contactEmail"]);
 
 // ---- checks on the copy, before anything talks to Apple ----
 
-const limits = { subtitle: 30, keywords: 100, promotionalText: 170, description: 4000, name: 30 };
+const limits = { subtitle: 30, keywords: 100, promotionalText: 170, description: 4000, whatsNew: 4000, name: 30 };
 for (const [field, max] of Object.entries(limits)) {
   if ((meta[field] ?? "").length > max) fail(`${field} is ${meta[field].length} characters; the limit is ${max}.`);
 }
@@ -177,6 +177,7 @@ async function appStoreVersion(app) {
   const want = {
     description: meta.description, keywords: meta.keywords, promotionalText: meta.promotionalText,
     supportUrl: meta.supportUrl, marketingUrl: meta.marketingUrl,
+    ...(meta.whatsNew ? { whatsNew: meta.whatsNew } : {}),
   };
   if (loc) await patchAttrs("appStoreVersionLocalizations", loc.id, `version[${meta.locale}]`, loc.attributes, want);
   else {
