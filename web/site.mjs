@@ -11,7 +11,7 @@ export const APP_STORE_URL = "https://apps.apple.com/app/id6826001880";
  * on the site says "Coming soon to the App Store" and isn't a link, and the structured
  * data leaves out the download link.
  */
-export const APP_STORE_LIVE = false;
+export const APP_STORE_LIVE = true;
 
 /** The code, for the GitHub corner. */
 export const GITHUB_URL = "https://github.com/mikecann/walkies";
