@@ -28,8 +28,8 @@ export const PRIVACY_UPDATED = "27 November 2026";
  * The still shown before it plays is web/public/img/promo-poster.webp.
  */
 export const PROMO_VIDEO = {
-  id: "7R7aL-WP6lk",
+  id: "COYWYYE8OYg",
   title: "Walkies, an app that turns dog walks into exploring",
   seconds: 26,
-  uploaded: "2026-10-24",
+  uploaded: "2026-11-27",
 };
