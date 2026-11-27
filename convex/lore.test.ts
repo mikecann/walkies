@@ -882,6 +882,52 @@ describe("the checks", () => {
     expect(reversed[1]?.pin).toBeNull();
   });
 
+  test("placeStreets streams from signed storage URLs and aborts early without buffering the full file", async () => {
+    const { t } = await setup();
+    vi.stubEnv("CONVEX_CLOUD_URL", "https://savory-bee-296.ap-southeast-2.convex.cloud");
+    const file = await t.run((ctx) => ctx.storage.store(new Blob(["placeholder"])));
+    const head = new TextEncoder().encode(`{"boundary":${JSON.stringify(boundary)},"ways":[`);
+    const filler = new Uint8Array(64 * 1024).fill(0x20);
+    let bytesSent = 0;
+    let aborted = false;
+    let fetches = 0;
+    vi.stubGlobal("fetch", vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      fetches++;
+      init?.signal?.addEventListener("abort", () => { aborted = true; });
+      let chunkIndex = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (chunkIndex === 0) {
+            chunkIndex++;
+            bytesSent += head.byteLength;
+            controller.enqueue(head);
+            return;
+          }
+          // Would be 8.4 MB total if buffered; streaming cancels right after the header.
+          if (chunkIndex++ > 130) { controller.close(); return; }
+          bytesSent += filler.byteLength;
+          controller.enqueue(filler);
+        },
+      });
+      return new Response(body, { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    const raw = await t.action(internal.placeStreets.boundary, { file });
+    expect(JSON.parse(raw)).toEqual(boundary);
+    expect(fetches).toBe(1);
+    expect(aborted).toBe(true);
+    expect(bytesSent).toBeLessThan(200 * 1024);
+  });
+
+  test("citySummary returns unreadable on oversized names and malformed skipped fields instead of crashing or accepting", async () => {
+    const { t } = await setup();
+    const hugeName = await t.run((ctx) => ctx.storage.store(new Blob([JSON.stringify({ osmId: somewhere, name: "x".repeat(1_100_000), visited: [] })])));
+    expect(await t.action(internal.placeStreets.citySummary, { file: hugeName })).toEqual({ ok: false, reason: "unreadable" });
+    const badRoads = await t.run((ctx) => ctx.storage.store(new Blob([
+      "{\"osmId\":4242,\"name\":\"Somewhere\",\"visited\":[[1,2],[3,4],[5,6]],\"roads\":[}}",
+    ])));
+    expect(await t.action(internal.placeStreets.citySummary, { file: badRoads })).toEqual({ ok: false, reason: "unreadable" });
+  });
+
   test("lorePipeline never reads street files directly in the 64 MB default runtime", () => {
     const source = import.meta.glob<string>("./lorePipeline.ts", { eager: true, query: "?raw", import: "default" });
     expect(Object.values(source)[0]).not.toContain("ctx.storage.get");

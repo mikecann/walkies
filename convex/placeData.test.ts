@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import {
-  isWalkable, readBoundaryFromStream, readCitySummaryFromStream, speedLimit, streamPlaceData, streamPlaceWays, waysFromOverpass,
+  isWalkable, readBoundaryFromStream, readCitySummaryFromStream, scanJsonObject, speedLimit, streamPlaceData, streamPlaceWays, waysFromOverpass,
   type PlaceData,
 } from "./placeData";
 
@@ -156,7 +156,77 @@ test("readCitySummaryFromStream extracts osmId, name and walked tiles while skip
     name: "No ID",
     walkedTiles: 0,
   });
+  // Valid scientific notation, booleans, null, unicode escapes and empty containers in skipped fields.
+  const validWeird = "{\"extra\":[true,false,null,-0,1.5e+2,1e-3,{},[],\"\\u0041\\n\"],\"osmId\":42,\"name\":\"Ok\",\"visited\":[]}";
+  expect(await readCitySummaryFromStream(chunkedStream(validWeird, 5))).toEqual({ osmId: 42, name: "Ok", walkedTiles: 0 });
   await expect(readCitySummaryFromStream(chunkedStream("{broken", 3))).rejects.toThrow(SyntaxError);
   await expect(readCitySummaryFromStream(chunkedStream("{\"osmId\": 42", 4))).rejects.toThrow(SyntaxError);
   await expect(readCitySummaryFromStream(chunkedStream("[]", 2))).rejects.toThrow(SyntaxError);
+});
+
+test("scanJsonObject rejects malformed JSON inside skipped values and counted arrays", async () => {
+  const invalidCases = [
+    "{\"osmId\":4242,\"name\":\"Somewhere\",\"visited\":[[1,2],[3,4],[5,6]],\"roads\":[}}",
+    "{\"roads\":[1,2},\"osmId\":123,\"name\":\"X\",\"visited\":[]}",
+    "{\"foo\":123abc,\"osmId\":123}",
+    "{\"visited\":[[1,2},[3,4]],\"osmId\":123}",
+    "{\"visited\":[truex],\"osmId\":123}",
+    "{\"roads\":[1,],\"osmId\":123}",
+    "{\"roads\":{\"a\":1,},\"osmId\":123}",
+    "{\"roads\":01,\"osmId\":123}",
+    "{\"roads\":1.,\"osmId\":123}",
+    "{\"roads\":1e,\"osmId\":123}",
+    "{\"roads\":\"bad\nnewline\",\"osmId\":123}",
+    "{\"roads\":\"\\x\",\"osmId\":123}",
+    "{\"roads\":\"\\u123g\",\"osmId\":123}",
+    "{\"roads\":{bad:1},\"osmId\":123}",
+    "{\"osmId\":123} trailing",
+  ];
+  for (const raw of invalidCases) {
+    await expect(readCitySummaryFromStream(chunkedStream(raw, 5)), raw).rejects.toThrow(SyntaxError);
+  }
+});
+
+test("readCitySummaryFromStream matches JSON.parse on duplicate keys and bounds untrusted uploads", async () => {
+  // Duplicate keys override earlier values even when the new value has a non-matching type.
+  const dup = "{\"osmId\":123,\"osmId\":null,\"name\":\"A\",\"name\":42,\"visited\":[[0,0]],\"visited\":null}";
+  expect(await readCitySummaryFromStream(chunkedStream(dup, 6))).toEqual({ osmId: null, name: "", walkedTiles: 0 });
+  expect(await readCitySummaryFromStream(chunkedStream("{\"osmId\":123,\"osmId\":-5,\"name\":\"A\",\"name\":\"B\"}", 6))).toEqual({
+    osmId: null, name: "B", walkedTiles: 0,
+  });
+
+  // Non-number osmId container is skipped without buffering or JSON.parsing.
+  const hugeWrongOsmId = `{"osmId":[${Array.from({ length: 5000 }, () => "0").join(",")}],"name":"Ok","visited":[]}`;
+  expect(await readCitySummaryFromStream(chunkedStream(hugeWrongOsmId, 1024))).toEqual({ osmId: null, name: "Ok", walkedTiles: 0 });
+
+  // Oversized name is rejected and cancels the stream immediately rather than buffering >1 MiB.
+  let pulls = 0;
+  let cancelled = false;
+  const chunk = new TextEncoder().encode("x".repeat(1024));
+  const hugeNameStream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls++;
+      controller.enqueue(pulls === 1 ? new TextEncoder().encode("{\"osmId\":123,\"name\":\"") : chunk);
+    },
+    cancel() { cancelled = true; },
+  });
+  await expect(readCitySummaryFromStream(hugeNameStream)).rejects.toThrow(RangeError);
+  expect(cancelled).toBe(true);
+  expect(pulls).toBeLessThan(10);
+
+  // Oversized top-level key and excessive nesting depth are rejected too.
+  await expect(readCitySummaryFromStream(chunkedStream(`{"${"k".repeat(20_000)}":1}`, 1024))).rejects.toThrow(RangeError);
+  const deep = `{"a":${"[".repeat(600)}${"]".repeat(600)}}`;
+  await expect(readCitySummaryFromStream(chunkedStream(deep, 64))).rejects.toThrow(RangeError);
+});
+
+test("scanJsonObject always clears capture state even when onValue or onItem is omitted", async () => {
+  // Without finishCapture running, the trailing 200-byte field would blow the 20-char capture cap.
+  const payload = JSON.stringify({ a: [1, 2], b: "x".repeat(200), c: [1, 2, 3], d: "y".repeat(200) });
+  await expect(
+    scanJsonObject(chunkedStream(payload, 7), {
+      onKey: (k) => k === "a" ? "capture" : k === "c" ? "items" : "skip",
+      maxCaptureChars: 20,
+    }),
+  ).resolves.toBeUndefined();
 });

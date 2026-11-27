@@ -6,8 +6,9 @@
 // error comes back to the caller's runAction and places.ts records a failed fetch
 // rather than dying with it.
 import { v } from "convex/values";
-import { internalAction, type ActionCtx } from "./_generated/server";
+import { env, internalAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { pinSnappers, type PinResult } from "./loreChecks";
 import { fetchJSON, OsmError, overpassEndpoints, tileWays, TooBig, utf8Length, waysInTiles, type Box } from "./osm";
 import {
@@ -124,14 +125,50 @@ export const download = internalAction({
   },
 });
 
-/** Reads only a cached place's boundary as JSON, without loading its streets into the 64 MB runtime. */
+// convex-test returns a placeholder URL under this host that isn't served over HTTP;
+// real Convex deployments always set CONVEX_CLOUD_URL and return a real signed URL.
+const convexTestStorage = "https://some-deployment.convex.cloud/api/storage/";
+
+/** Opens a streaming reader for a stored file via its signed URL so Node never buffers the
+ * entire file in memory (Convex's `storage.get` awaits `response.blob()`). Calling `close`
+ * aborts the HTTP request so early cancellation stops downloading the rest of the file. */
+export async function openStorageStream(
+  ctx: Pick<ActionCtx, "storage">,
+  file: Id<"_storage">,
+): Promise<{ stream: ReadableStream<Uint8Array>; close: () => void } | null> {
+  const url = await ctx.storage.getUrl(file);
+  if (!url) return null;
+  if (!env.CONVEX_CLOUD_URL && url.startsWith(convexTestStorage)) {
+    const blob = await ctx.storage.get(file);
+    return blob ? { stream: blob.stream(), close: () => {} } : null;
+  }
+  const controller = new AbortController();
+  const response = await fetch(url, { signal: controller.signal });
+  if (response.status === 404) {
+    controller.abort();
+    void response.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  if (!response.ok || !response.body) {
+    controller.abort();
+    void response.body?.cancel().catch(() => undefined);
+    throw new Error(`Storage read failed (${response.status})`);
+  }
+  return { stream: response.body, close: () => controller.abort() };
+}
+
+/** Reads only a cached place's boundary as JSON, without loading its streets into memory. */
 export const boundary = internalAction({
   args: { file: v.id("_storage") },
   returns: v.string(),
   handler: async (ctx, { file }) => {
-    const blob = await ctx.storage.get(file);
-    if (!blob) throw new Error("Place data file is missing");
-    return JSON.stringify(await readBoundaryFromStream(blob.stream()));
+    const opened = await openStorageStream(ctx, file);
+    if (!opened) throw new Error("Place data file is missing");
+    try {
+      return JSON.stringify(await readBoundaryFromStream(opened.stream));
+    } finally {
+      opened.close();
+    }
   },
 });
 
@@ -150,20 +187,32 @@ export const placePins = internalAction({
   returns: v.array(vPinResult),
   handler: async (ctx, { file, spots, maxMetres }): Promise<PinResult[]> => {
     if (spots.length === 0) return [];
-    const blob = await ctx.storage.get(file);
-    if (!blob) throw new Error("Place data file is missing");
+    const first = await openStorageStream(ctx, file);
+    if (!first) throw new Error("Place data file is missing");
     let snapper: ReturnType<typeof pinSnappers> | undefined;
-    const { sawBoundary, waysSkipped } = await streamPlaceData(
-      blob.stream(),
-      (outline) => {
-        snapper = pinSnappers(outline, spots, maxMetres);
-        return snapper.needsWays;
-      },
-      (way) => snapper!.considerWay(way),
-    );
+    let sawBoundary = false;
+    let waysSkipped = false;
+    try {
+      ({ sawBoundary, waysSkipped } = await streamPlaceData(
+        first.stream,
+        (outline) => {
+          snapper = pinSnappers(outline, spots, maxMetres);
+          return snapper.needsWays;
+        },
+        (way) => snapper!.considerWay(way),
+      ));
+    } finally {
+      first.close();
+    }
     if (!sawBoundary || !snapper) throw new Error("Place data has no boundary");
     if (waysSkipped && snapper.needsWays) {
-      await streamPlaceWays(blob.stream(), (way) => snapper!.considerWay(way));
+      const second = await openStorageStream(ctx, file);
+      if (!second) throw new Error("Place data file is missing");
+      try {
+        await streamPlaceWays(second.stream, (way) => snapper!.considerWay(way));
+      } finally {
+        second.close();
+      }
     }
     return snapper.results();
   },
@@ -177,13 +226,18 @@ export const citySummary = internalAction({
     v.object({ ok: v.literal(true), osmId: v.union(v.null(), v.number()), name: v.string(), walkedTiles: v.number() }),
   ),
   handler: async (ctx, { file }) => {
-    const blob = await ctx.storage.get(file);
-    if (!blob) return { ok: false as const, reason: "gone" as const };
+    const opened = await openStorageStream(ctx, file);
+    if (!opened) return { ok: false as const, reason: "gone" as const };
     try {
-      const summary = await readCitySummaryFromStream(blob.stream());
+      const summary = await readCitySummaryFromStream(opened.stream);
       return { ok: true as const, ...summary };
-    } catch {
-      return { ok: false as const, reason: "unreadable" as const };
+    } catch (error) {
+      if (error instanceof SyntaxError || error instanceof RangeError) {
+        return { ok: false as const, reason: "unreadable" as const };
+      }
+      throw error;
+    } finally {
+      opened.close();
     }
   },
 });
