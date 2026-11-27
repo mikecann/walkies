@@ -32,10 +32,10 @@ try {
       // Lazy images only load once they're near the screen, so scroll through first.
       await page.evaluate(async () => {
         for (let y = 0; y < document.body.scrollHeight; y += 400) {
-          window.scrollTo(0, y);
-          await new Promise((r) => setTimeout(r, 40));
+          window.scrollTo({ top: y, behavior: "instant" });
+          await new Promise((r) => setTimeout(r, 80));
         }
-        window.scrollTo(0, 0);
+        window.scrollTo({ top: 0, behavior: "instant" });
       });
       await page.waitForLoadState("networkidle");
       const wide = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

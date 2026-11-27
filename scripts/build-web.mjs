@@ -183,7 +183,7 @@ const version = Date.now().toString(36);
 const appId = APP_STORE_URL.match(/id(\d+)/)?.[1];
 const shared = {
   site: SITE_URL, email: SUPPORT_EMAIL, github: GITHUB_URL, privacyUpdated: PRIVACY_UPDATED, version,
-  appStoreBadge: appStoreBadge(), gallery: gallery(), promoVideo: promoVideo(),
+  appStoreBadge: appStoreBadge(), downloadHref: APP_STORE_LIVE ? APP_STORE_URL : "/#download", gallery: gallery(), promoVideo: promoVideo(),
   // Safari's Smart App Banner. It shows "View" until the app's out, then "Open" or "Get".
   appStoreMeta: appId ? `<meta name="apple-itunes-app" content="app-id=${appId}">` : "",
 };
