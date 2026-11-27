@@ -172,14 +172,13 @@ export const recentWalks = internalQuery({
 
 type Boundary = PlaceData["boundary"];
 
-/** The relation's outline from the street cache, when it's there and small enough to read. */
+/** The relation's outline from the street cache, read in Node so a dense city's ways never enter this 64 MB runtime. */
 async function cachedBoundary(ctx: ActionCtx, osmId: number): Promise<Boundary | null> {
   const file = await ctx.runQuery(internal.lore.placeDataFile, { osmId });
-  const blob = file && await ctx.storage.get(file);
-  // The file holds every street too; a big one isn't worth reading, and isn't a suburb.
-  if (!blob || blob.size > 8_000_000) return null;
+  if (!file) return null;
   try {
-    const boundary = (JSON.parse(await blob.text()) as Partial<PlaceData>).boundary;
+    const raw: string = await ctx.runAction(internal.placeStreets.boundary, { file });
+    const boundary = JSON.parse(raw) as Boundary;
     return Array.isArray(boundary) && boundary.length > 0 ? boundary : null;
   } catch {
     return null;
@@ -236,19 +235,13 @@ export const readPlace = internalAction({
   handler: async (ctx, { placeId, walkId }): Promise<string> => {
     const place = await ctx.runQuery(internal.lore.placeFile, { placeId });
     // Gone already: deleted, or replaced by a newer copy, which gets its own look.
-    const blob = place && await ctx.storage.get(place.file);
-    if (!place || !blob) return "gone";
-    let city: { osmId?: unknown; name?: unknown; visited?: unknown };
-    try {
-      city = JSON.parse(await blob.text());
-    } catch {
-      return "unreadable";
-    }
-    const osmId = city.osmId;
+    if (!place) return "gone";
+    const summary: { ok: false; reason: "gone" | "unreadable" } | { ok: true; osmId: number | null; name: string; walkedTiles: number } =
+      await ctx.runAction(internal.placeStreets.citySummary, { file: place.file });
+    if (!summary.ok) return summary.reason;
+    const { osmId, name, walkedTiles } = summary;
     // Places drawn before they kept their relation, or found some other way, have none.
-    if (typeof osmId !== "number" || !Number.isSafeInteger(osmId) || osmId <= 0) return "no relation";
-    const name = typeof city.name === "string" ? city.name : "";
-    const walkedTiles = Array.isArray(city.visited) ? city.visited.length : 0;
+    if (osmId === null) return "no relation";
     const first: string = await ctx.runMutation(internal.lore.notePlace, { userId: place.userId, placeId, osmId, walkedTiles });
     if (first !== "check") return first;
     const notSuburb = async (why: string) => {

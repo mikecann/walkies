@@ -10,7 +10,7 @@ import { z } from "zod";
 import { components, internal } from "./_generated/api";
 import { env, internalAction, type ActionCtx } from "./_generated/server";
 import { isOverBudget, meteredFetch } from "./loreBudget";
-import { boundingBox, fetchPage, findQuote, insideBoundary, leadOnly, leadOnlyProblem, placePin, type Page } from "./loreChecks";
+import { boundingBox, fetchPage, findQuote, insideBoundary, leadOnly, leadOnlyProblem, type Page } from "./loreChecks";
 import { caps, entries as wanted, holds, maxPinToStreet, models, research as limits, timeLimits } from "./loreConfig";
 import {
   angles, categories, checkerInstructions, researchInstructions, reviserInstructions, untrusted, writerInstructions, type Angle, type PlaceBrief,
@@ -94,10 +94,11 @@ async function placeBrief(ctx: ActionCtx, osmId: number, wa: boolean): Promise<B
   return { name: row.name, displayName: row.displayName, wa, country: row.country, runCost: row.runCost };
 }
 
-async function placeData(ctx: ActionCtx, osmId: number): Promise<PlaceData> {
-  const blob = await ctx.storage.get(await cachedFile(ctx, osmId));
-  if (!blob) throw new Error("Place data file is missing");
-  return JSON.parse(await blob.text()) as PlaceData;
+/** Reads only the suburb's outline in Node, so a dense city's streets never enter this 64 MB runtime. */
+async function placeBoundary(ctx: ActionCtx, osmId: number): Promise<PlaceData["boundary"]> {
+  const file = await cachedFile(ctx, osmId);
+  const raw: string = await ctx.runAction(internal.placeStreets.boundary, { file });
+  return JSON.parse(raw) as PlaceData["boundary"];
 }
 
 /** Caches the suburb's streets and finds out where in the world it is. */
@@ -128,8 +129,8 @@ export const research = internalAction({
   returns: v.object({ notes: v.number(), steps: v.number(), stopped: v.string() }),
   handler: async (ctx, { osmId, run, angle, wa }): Promise<{ notes: number; steps: number; stopped: string }> => {
     const brief = await placeBrief(ctx, osmId, wa);
-    const data = await placeData(ctx, osmId);
-    const box = boundingBox(data.boundary);
+    const boundary = await placeBoundary(ctx, osmId);
+    const box = boundingBox(boundary);
     const earlier = (await ctx.runQuery(internal.loreRun.notes, { osmId, run }) as Note[]).filter((n) => n.angle === angle);
     const state = { notes: earlier.length, othersSeen: 0, runCost: brief.runCost, spent: 0, startedAt: Date.now() };
     const stopReason = () =>
@@ -186,7 +187,7 @@ export const research = internalAction({
           return {
             found: (answer as { display_name?: string; type?: string; lat?: string; lon?: string }[]).map((item) => {
               const lat = Number(item.lat), lon = Number(item.lon);
-              return { name: item.display_name?.split(",").slice(0, 2).join(",") ?? query, kind: item.type, lat, lon, inside: insideBoundary(data.boundary, lat, lon) };
+              return { name: item.display_name?.split(",").slice(0, 2).join(",") ?? query, kind: item.type, lat, lon, inside: insideBoundary(boundary, lat, lon) };
             }),
           };
         },
@@ -522,14 +523,18 @@ export const checkPins = internalAction({
   args: { osmId: v.number(), run: v.number() },
   returns: v.object({ pinned: v.number(), scattered: v.number() }),
   handler: async (ctx, { osmId, run }): Promise<{ pinned: number; scattered: number }> => {
-    const data = await placeData(ctx, osmId);
-    let pinned = 0, scattered = 0;
-    for (const entry of await ctx.runQuery(internal.loreRun.checking, { osmId, run }) as Entry[]) {
-      if (!entry.place) {
-        scattered++;
-        continue;
-      }
-      const { pin, note } = placePin(data, entry.place.lat, entry.place.lon, maxPinToStreet);
+    const entries = await ctx.runQuery(internal.loreRun.checking, { osmId, run }) as Entry[];
+    const withPlace = entries.filter((entry): entry is Entry & { place: NonNullable<Entry["place"]> } => entry.place !== undefined);
+    let pinned = 0, scattered = entries.length - withPlace.length;
+    if (withPlace.length === 0) return { pinned, scattered };
+    const file = await cachedFile(ctx, osmId);
+    const results: { pin: { lat: number; lon: number } | null; note: string }[] = await ctx.runAction(
+      internal.placeStreets.placePins,
+      { file, spots: withPlace.map((entry) => ({ lat: entry.place.lat, lon: entry.place.lon })), maxMetres: maxPinToStreet },
+    );
+    for (let i = 0; i < withPlace.length; i++) {
+      const entry = withPlace[i]!;
+      const { pin, note } = results[i]!;
       await ctx.runMutation(internal.loreRun.updateEntry, {
         entryId: entry.entryId, place: pin ? { name: entry.place.name, ...pin } : null, notes: [`Pins: ${note}`],
       });

@@ -320,18 +320,13 @@ export function insideBoundary(boundary: PlaceData["boundary"], lat: number, lon
   return boundary.some(([outer, ...holes]) => outer !== undefined && inRing(outer, lon, lat) && !holes.some((hole) => inRing(hole, lon, lat)));
 }
 
-/**
- * The point on a walkable way nearest to a spot, and how far away it is in metres.
- * With `inside`, only points that pass it count: where a way crosses the border, the
- * nearest point on it can be outside while a few metres along it is in.
- */
-export function nearestStreet(
-  ways: PlaceData["ways"], lat: number, lon: number, inside?: { test: (lat: number, lon: number) => boolean; within: number },
-): { metres: number; lat: number; lon: number } | null {
-  // Metres east and north of the spot. Flat-earth is plenty over a few hundred metres.
-  const kx = 111_320 * Math.cos((lat * Math.PI) / 180);
-  const ky = 110_540;
-  let best: { metres: number; lat: number; lon: number } | null = null;
+type NearestHit = { metres: number; lat: number; lon: number };
+type InsideCheck = { test: (lat: number, lon: number) => boolean; within: number };
+
+function nearestOnWay(
+  way: PlaceData["ways"][number], lat: number, lon: number, kx: number, ky: number,
+  best: NearestHit | null, inside?: InsideCheck,
+): NearestHit | null {
   const consider = (x: number, y: number) => {
     const metres = Math.hypot(x, y);
     if (best !== null && metres >= best.metres) return;
@@ -339,49 +334,94 @@ export function nearestStreet(
     if (inside && !inside.test(point.lat, point.lon)) return;
     best = point;
   };
-  for (const way of ways) {
-    for (let i = 0; i + 1 < way.points.length; i++) {
-      const [alat, alon] = way.points[i]!;
-      const [blat, blon] = way.points[i + 1]!;
-      const ax = (alon! - lon) * kx, ay = (alat! - lat) * ky;
-      const bx = (blon! - lon) * kx, by = (blat! - lat) * ky;
-      const dx = bx - ax, dy = by - ay;
-      const length = dx * dx + dy * dy;
-      const t = length === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / length));
-      const x = ax + t * dx, y = ay + t * dy;
-      if (!inside) {
-        consider(x, y);
-        continue;
-      }
-      // Nothing on this segment is close enough.
-      if (Math.hypot(x, y) > inside.within) continue;
+  for (let i = 0; i + 1 < way.points.length; i++) {
+    const [alat, alon] = way.points[i]!;
+    const [blat, blon] = way.points[i + 1]!;
+    const ax = (alon! - lon) * kx, ay = (alat! - lat) * ky;
+    const bx = (blon! - lon) * kx, by = (blat! - lat) * ky;
+    const dx = bx - ax, dy = by - ay;
+    const length = dx * dx + dy * dy;
+    const t = length === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / length));
+    const x = ax + t * dx, y = ay + t * dy;
+    if (!inside) {
       consider(x, y);
-      // Every 5 m along it as well, for the part that's over the border.
-      const steps = Math.min(400, Math.ceil(Math.sqrt(length) / 5));
-      for (let k = 0; k <= steps; k++) consider(ax + (dx * k) / steps, ay + (dy * k) / steps);
+      continue;
     }
+    // Nothing on this segment is close enough.
+    if (Math.hypot(x, y) > inside.within) continue;
+    consider(x, y);
+    // Every 5 m along it as well, for the part that's over the border.
+    const steps = Math.min(400, Math.ceil(Math.sqrt(length) / 5));
+    for (let k = 0; k <= steps; k++) consider(ax + (dx * k) / steps, ay + (dy * k) / steps);
   }
   return best;
 }
 
+/**
+ * The point on a walkable way nearest to a spot, and how far away it is in metres.
+ * With `inside`, only points that pass it count: where a way crosses the border, the
+ * nearest point on it can be outside while a few metres along it is in.
+ */
+export function nearestStreet(
+  ways: PlaceData["ways"], lat: number, lon: number, inside?: InsideCheck,
+): NearestHit | null {
+  // Metres east and north of the spot. Flat-earth is plenty over a few hundred metres.
+  const kx = 111_320 * Math.cos((lat * Math.PI) / 180);
+  const ky = 110_540;
+  let best: NearestHit | null = null;
+  for (const way of ways) best = nearestOnWay(way, lat, lon, kx, ky, best, inside);
+  return best;
+}
+
 const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
+
+export type PinResult = { pin: { lat: number; lon: number } | null; note: string };
+
+/**
+ * Snaps a batch of candidate spots to their nearest walkable streets inside `boundary`
+ * as ways arrive one at a time, so a large city's streets never have to sit in memory at once.
+ */
+export function pinSnappers(
+  boundary: PlaceData["boundary"],
+  spots: { lat: number; lon: number }[],
+  maxMetres: number,
+): { needsWays: boolean; considerWay: (way: PlaceData["ways"][number]) => void; results: () => PinResult[] } {
+  const inside: InsideCheck = { test: (a, b) => insideBoundary(boundary, a, b), within: maxMetres };
+  const ky = 110_540;
+  const states = spots.map(({ lat, lon }) => {
+    const inSuburb = insideBoundary(boundary, lat, lon);
+    return { lat, lon, kx: 111_320 * Math.cos((lat * Math.PI) / 180), inSuburb, best: null as NearestHit | null };
+  });
+  const active = states.filter((state) => state.inSuburb);
+  return {
+    needsWays: active.length > 0,
+    considerWay: (way) => {
+      for (const state of active) state.best = nearestOnWay(way, state.lat, state.lon, state.kx, ky, state.best, inside);
+    },
+    results: () => states.map((state): PinResult => {
+      if (!state.inSuburb) return { pin: null, note: "Its spot is outside the suburb, so it's scattered over the streets instead." };
+      const street = state.best;
+      if (street === null || street.metres > maxMetres) {
+        return { pin: null, note: `Its spot is more than ${maxMetres} m from any walkable street inside the suburb, so it's scattered instead.` };
+      }
+      const moved = Math.round(street.metres);
+      return {
+        pin: { lat: round6(street.lat), lon: round6(street.lon) },
+        note: moved < 2 ? "Its pin is on a walkable street." : `Its pin moved ${moved} m onto the nearest walkable street inside the suburb.`,
+      };
+    }),
+  };
+}
 
 /**
  * Where a story's pin ends up: on the nearest walkable way inside the suburb, so it's
  * never in the sea, on someone's lot or over the border. Null means scatter it over
  * the suburb instead.
  */
-export function placePin(data: PlaceData, lat: number, lon: number, maxMetres: number): { pin: { lat: number; lon: number } | null; note: string } {
-  if (!insideBoundary(data.boundary, lat, lon)) return { pin: null, note: "Its spot is outside the suburb, so it's scattered over the streets instead." };
-  const street = nearestStreet(data.ways, lat, lon, { test: (a, b) => insideBoundary(data.boundary, a, b), within: maxMetres });
-  if (street === null || street.metres > maxMetres) {
-    return { pin: null, note: `Its spot is more than ${maxMetres} m from any walkable street inside the suburb, so it's scattered instead.` };
-  }
-  const moved = Math.round(street.metres);
-  return {
-    pin: { lat: round6(street.lat), lon: round6(street.lon) },
-    note: moved < 2 ? "Its pin is on a walkable street." : `Its pin moved ${moved} m onto the nearest walkable street inside the suburb.`,
-  };
+export function placePin(data: PlaceData, lat: number, lon: number, maxMetres: number): PinResult {
+  const snapper = pinSnappers(data.boundary, [{ lat, lon }], maxMetres);
+  if (snapper.needsWays) for (const way of data.ways) snapper.considerWay(way);
+  return snapper.results()[0]!;
 }
 
 /** Square metres inside the outlines, less their holes. Flat-earth around the middle,

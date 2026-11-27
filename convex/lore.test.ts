@@ -845,6 +845,48 @@ describe("the checks", () => {
     expect(onIt.lat).toBeCloseTo(-33.005, 6);
   });
 
+  test("checkPins snaps and scatters entries via the Node streaming action without loading streets into the 64 MB runtime", async () => {
+    const { t } = await setup();
+    const ways = [
+      { highway: "residential", points: [[-33.005, 115.001], [-33.005, 115.009]] },
+      { highway: "footway", points: [[-33.002, 115.002], [-33.002, 115.004]] },
+    ];
+    await t.run(async (ctx) => {
+      const file = await ctx.storage.store(new Blob([JSON.stringify({ boundary, ways })]));
+      await ctx.db.insert("placeData", { osmId: somewhere, name: "Somewhere", fetchedAt: Date.now(), version: 2, file });
+    });
+    await addPlace(t);
+    await addEntry(t, { slug: "near", place: { name: "Jetty", lat: -33.0058, lon: 115.005 } });
+    await addEntry(t, { slug: "outside", place: { name: "Far", lat: -33.02, lon: 115.005 } });
+    await addEntry(t, { slug: "too-far", place: { name: "Bush", lat: -33.0095, lon: 115.005 } });
+    await addEntry(t, { slug: "scattered" });
+
+    expect(await t.action(internal.lorePipeline.checkPins, { osmId: somewhere, run: 1 })).toEqual({ pinned: 1, scattered: 3 });
+    const byTitle = Object.fromEntries((await entryRows(t)).map((e) => [e.title, e]));
+    expect(byTitle.near?.place).toEqual({ name: "Jetty", lat: -33.005, lon: 115.005 });
+    expect(byTitle.near?.checkNotes.at(-1)).toMatch(/moved 88 m/);
+    expect(byTitle.outside?.place).toBeUndefined();
+    expect(byTitle.outside?.checkNotes.at(-1)).toMatch(/outside the suburb/);
+    expect(byTitle["too-far"]?.place).toBeUndefined();
+    expect(byTitle["too-far"]?.checkNotes.at(-1)).toMatch(/more than 300 m/);
+    expect(byTitle.scattered?.place).toBeUndefined();
+
+    // Also works if a street file has `ways` before `boundary` (two-pass streaming).
+    const reversedFile = await t.run((ctx) => ctx.storage.store(new Blob([JSON.stringify({ ways, boundary })])));
+    const reversed = await t.action(internal.placeStreets.placePins, {
+      file: reversedFile,
+      spots: [{ lat: -33.0058, lon: 115.005 }, { lat: -33.02, lon: 115.005 }],
+      maxMetres: 300,
+    });
+    expect(reversed[0]?.pin).toEqual({ lat: -33.005, lon: 115.005 });
+    expect(reversed[1]?.pin).toBeNull();
+  });
+
+  test("lorePipeline never reads street files directly in the 64 MB default runtime", () => {
+    const source = import.meta.glob<string>("./lorePipeline.ts", { eager: true, query: "?raw", import: "default" });
+    expect(Object.values(source)[0]).not.toContain("ctx.storage.get");
+  });
+
   test("death, crime and First Nations words send a story for review", () => {
     expect(sensitiveWords("The barque was wrecked and two crew drowned.")).toEqual(["death-or-crime"]);
     expect(sensitiveWords("Wardandi people fished here.")).toEqual(["first-nations"]);

@@ -138,3 +138,340 @@ export function* walkableElements(value: unknown): Generator<{ id: number; way: 
     yield { id: typeof element.id === "number" ? element.id : Number.NaN, way };
   }
 }
+
+type ArrayMode = "items" | "count";
+type KeyAction = "capture" | ArrayMode | "skip";
+
+type ObjectHandlers = {
+  onKey: (key: string) => KeyAction;
+  onValue?: (key: string, json: string) => boolean | void;
+  onItem?: (key: string, json: string) => boolean | void;
+  onCount?: (key: string, count: number) => boolean | void;
+};
+
+const isSpace = (code: number) => code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
+const isPrimitiveStart = (code: number) =>
+  code === 0x2d || (code >= 0x30 && code <= 0x39) || code === 0x74 || code === 0x66 || code === 0x6e;
+
+/**
+ * Streams a top-level JSON object from `stream`, capturing only the fields the caller
+ * asks for, iterating or counting elements of chosen arrays one by one, and skipping
+ * everything else without buffering it. Returning `false` from a callback stops and
+ * cancels the stream immediately.
+ */
+export async function scanJsonObject(stream: ReadableStream<Uint8Array>, handlers: ObjectHandlers): Promise<void> {
+  type Phase =
+    | "start" | "firstKey" | "nextKey" | "inKey" | "colon" | "valueStart" | "afterValue"
+    | "inContainer" | "inStringValue" | "inPrimitive"
+    | "arrayFirst" | "arrayNext" | "arrayAfterItem"
+    | "arrayItemContainer" | "arrayItemString" | "arrayItemPrimitive"
+    | "done";
+  const reader = stream.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let phase: Phase = "start";
+  let currentKey = "";
+  let capture = false;
+  let arrayMode: ArrayMode = "items";
+  let arrayCount = 0;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let captureStart = -1;
+  let captureParts: string[] = [];
+  let stopped = false;
+
+  const finishCapture = (chunk: string, end: number): string => {
+    const tail = chunk.slice(captureStart, end);
+    const text = captureParts.length === 0 ? tail : (captureParts.push(tail), captureParts.join(""));
+    captureParts = [];
+    captureStart = -1;
+    return text;
+  };
+  const beginCapture = (index: number) => {
+    captureParts = [];
+    captureStart = index;
+  };
+  const unexpected = (ch: string) => new SyntaxError(`Unexpected character ${JSON.stringify(ch)} in JSON`);
+
+  const processChunk = (chunk: string) => {
+    for (let i = 0; i < chunk.length && !stopped; i++) {
+      const code = chunk.charCodeAt(i);
+      const ch = chunk[i]!;
+      switch (phase) {
+        case "start":
+          if (isSpace(code)) break;
+          if (ch !== "{") throw unexpected(ch);
+          phase = "firstKey";
+          break;
+        case "firstKey":
+          if (isSpace(code)) break;
+          if (ch === "}") { phase = "done"; break; }
+          if (ch !== "\"") throw unexpected(ch);
+          escaped = false;
+          beginCapture(i);
+          phase = "inKey";
+          break;
+        case "nextKey":
+          if (isSpace(code)) break;
+          if (ch !== "\"") throw unexpected(ch);
+          escaped = false;
+          beginCapture(i);
+          phase = "inKey";
+          break;
+        case "inKey":
+          if (escaped) escaped = false;
+          else if (ch === "\\") escaped = true;
+          else if (ch === "\"") {
+            currentKey = JSON.parse(finishCapture(chunk, i + 1)) as string;
+            phase = "colon";
+          }
+          break;
+        case "colon":
+          if (isSpace(code)) break;
+          if (ch !== ":") throw unexpected(ch);
+          phase = "valueStart";
+          break;
+        case "afterValue":
+          if (isSpace(code)) break;
+          if (ch === ",") phase = "nextKey";
+          else if (ch === "}") phase = "done";
+          else throw unexpected(ch);
+          break;
+        case "valueStart": {
+          if (isSpace(code)) break;
+          const action = handlers.onKey(currentKey);
+          if ((action === "items" || action === "count") && ch === "[") {
+            arrayMode = action;
+            arrayCount = 0;
+            phase = "arrayFirst";
+            break;
+          }
+          capture = action === "capture";
+          if (ch === "{" || ch === "[") {
+            depth = 1; inString = false; escaped = false;
+            if (capture) beginCapture(i);
+            phase = "inContainer";
+          } else if (ch === "\"") {
+            escaped = false;
+            if (capture) beginCapture(i);
+            phase = "inStringValue";
+          } else if (isPrimitiveStart(code)) {
+            if (capture) beginCapture(i);
+            phase = "inPrimitive";
+          } else {
+            throw unexpected(ch);
+          }
+          break;
+        }
+        case "inContainer":
+          if (inString) {
+            if (escaped) escaped = false;
+            else if (ch === "\\") escaped = true;
+            else if (ch === "\"") inString = false;
+          } else if (ch === "\"") {
+            inString = true;
+          } else if (ch === "{" || ch === "[") {
+            depth++;
+          } else if (ch === "}" || ch === "]") {
+            depth--;
+            if (depth === 0) {
+              if (capture && handlers.onValue?.(currentKey, finishCapture(chunk, i + 1)) === false) stopped = true;
+              phase = "afterValue";
+            }
+          }
+          break;
+        case "inStringValue":
+          if (escaped) escaped = false;
+          else if (ch === "\\") escaped = true;
+          else if (ch === "\"") {
+            if (capture && handlers.onValue?.(currentKey, finishCapture(chunk, i + 1)) === false) stopped = true;
+            phase = "afterValue";
+          }
+          break;
+        case "inPrimitive":
+          if (isSpace(code) || ch === "," || ch === "}") {
+            if (capture && handlers.onValue?.(currentKey, finishCapture(chunk, i)) === false) stopped = true;
+            phase = "afterValue";
+            i--;
+          }
+          break;
+        case "arrayFirst":
+          if (isSpace(code)) break;
+          if (ch === "]") {
+            if (arrayMode === "count" && handlers.onCount?.(currentKey, 0) === false) stopped = true;
+            phase = "afterValue";
+            break;
+          }
+          phase = "arrayNext";
+          i--;
+          break;
+        case "arrayNext":
+          if (isSpace(code)) break;
+          capture = arrayMode === "items";
+          if (ch === "{" || ch === "[") {
+            depth = 1; inString = false; escaped = false;
+            if (capture) beginCapture(i);
+            phase = "arrayItemContainer";
+          } else if (ch === "\"") {
+            escaped = false;
+            if (capture) beginCapture(i);
+            phase = "arrayItemString";
+          } else if (isPrimitiveStart(code)) {
+            if (capture) beginCapture(i);
+            phase = "arrayItemPrimitive";
+          } else {
+            throw unexpected(ch);
+          }
+          break;
+        case "arrayAfterItem":
+          if (isSpace(code)) break;
+          if (ch === ",") phase = "arrayNext";
+          else if (ch === "]") {
+            if (arrayMode === "count" && handlers.onCount?.(currentKey, arrayCount) === false) stopped = true;
+            phase = "afterValue";
+          } else {
+            throw unexpected(ch);
+          }
+          break;
+        case "arrayItemContainer":
+          if (inString) {
+            if (escaped) escaped = false;
+            else if (ch === "\\") escaped = true;
+            else if (ch === "\"") inString = false;
+          } else if (ch === "\"") {
+            inString = true;
+          } else if (ch === "{" || ch === "[") {
+            depth++;
+          } else if (ch === "}" || ch === "]") {
+            depth--;
+            if (depth === 0) {
+              arrayCount++;
+              if (capture && handlers.onItem?.(currentKey, finishCapture(chunk, i + 1)) === false) stopped = true;
+              phase = "arrayAfterItem";
+            }
+          }
+          break;
+        case "arrayItemString":
+          if (escaped) escaped = false;
+          else if (ch === "\\") escaped = true;
+          else if (ch === "\"") {
+            arrayCount++;
+            if (capture && handlers.onItem?.(currentKey, finishCapture(chunk, i + 1)) === false) stopped = true;
+            phase = "arrayAfterItem";
+          }
+          break;
+        case "arrayItemPrimitive":
+          if (isSpace(code) || ch === "," || ch === "]") {
+            arrayCount++;
+            if (capture && handlers.onItem?.(currentKey, finishCapture(chunk, i)) === false) stopped = true;
+            phase = "arrayAfterItem";
+            i--;
+          }
+          break;
+        case "done":
+          if (!isSpace(code)) throw unexpected(ch);
+          break;
+      }
+    }
+    if (!stopped && captureStart >= 0) {
+      captureParts.push(chunk.slice(captureStart));
+      captureStart = 0;
+    }
+  };
+
+  try {
+    while (!stopped) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      processChunk(decoder.decode(value, { stream: true }));
+    }
+    if (!stopped) {
+      const tail = decoder.decode();
+      if (tail) processChunk(tail);
+      if ((phase as Phase) !== "done") throw new SyntaxError("Unexpected end of JSON input");
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
+
+/** Reads only `boundary` from a cached PlaceData JSON stream, cancelling before `ways`. */
+export async function readBoundaryFromStream(stream: ReadableStream<Uint8Array>): Promise<PlaceData["boundary"]> {
+  let boundary: PlaceData["boundary"] | undefined;
+  await scanJsonObject(stream, {
+    onKey: (key) => key === "boundary" ? "capture" : "skip",
+    onValue: (_key, json) => {
+      boundary = JSON.parse(json) as PlaceData["boundary"];
+      return false;
+    },
+  });
+  if (!Array.isArray(boundary) || boundary.length === 0) throw new Error("Place data has no boundary");
+  return boundary;
+}
+
+/**
+ * Streams a cached PlaceData file: calls `onBoundary` once the outline is read (return
+ * `false` to skip the streets), then `onWay` for each street one at a time. Reports
+ * `waysSkipped` if a non-standard file put `ways` before `boundary` so the caller can
+ * make a second pass over `ways`.
+ */
+export async function streamPlaceData(
+  stream: ReadableStream<Uint8Array>,
+  onBoundary: (boundary: PlaceData["boundary"]) => boolean | void,
+  onWay: (way: PlaceData["ways"][number]) => void,
+): Promise<{ sawBoundary: boolean; waysSkipped: boolean }> {
+  let sawBoundary = false;
+  let waysSkipped = false;
+  await scanJsonObject(stream, {
+    onKey: (key) => {
+      if (key === "boundary") return "capture";
+      if (key === "ways") {
+        if (!sawBoundary) { waysSkipped = true; return "skip"; }
+        return "items";
+      }
+      return "skip";
+    },
+    onValue: (_key, json) => {
+      const boundary = JSON.parse(json) as PlaceData["boundary"];
+      if (!Array.isArray(boundary) || boundary.length === 0) throw new Error("Place data has no boundary");
+      sawBoundary = true;
+      return onBoundary(boundary);
+    },
+    onItem: (_key, json) => {
+      onWay(JSON.parse(json) as PlaceData["ways"][number]);
+    },
+  });
+  return { sawBoundary, waysSkipped };
+}
+
+/** Streams only `ways` from a cached PlaceData file, one way at a time. */
+export async function streamPlaceWays(
+  stream: ReadableStream<Uint8Array>,
+  onWay: (way: PlaceData["ways"][number]) => void,
+): Promise<void> {
+  await scanJsonObject(stream, {
+    onKey: (key) => key === "ways" ? "items" : "skip",
+    onItem: (_key, json) => {
+      onWay(JSON.parse(json) as PlaceData["ways"][number]);
+    },
+  });
+}
+
+/** Reads a saved phone City file's relation id, name and walked-tile count without loading its roads or tiles. */
+export async function readCitySummaryFromStream(
+  stream: ReadableStream<Uint8Array>,
+): Promise<{ osmId: number | null; name: string; walkedTiles: number }> {
+  let osmId: number | null = null;
+  let name = "";
+  let walkedTiles = 0;
+  await scanJsonObject(stream, {
+    onKey: (key) => key === "osmId" || key === "name" ? "capture" : key === "visited" ? "count" : "skip",
+    onValue: (key, json) => {
+      const value: unknown = JSON.parse(json);
+      if (key === "osmId" && typeof value === "number" && Number.isSafeInteger(value) && value > 0) osmId = value;
+      if (key === "name" && typeof value === "string") name = value;
+    },
+    onCount: (_key, count) => { walkedTiles = count; },
+  });
+  return { osmId, name, walkedTiles };
+}

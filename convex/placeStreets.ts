@@ -8,8 +8,11 @@
 import { v } from "convex/values";
 import { internalAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { pinSnappers, type PinResult } from "./loreChecks";
 import { fetchJSON, OsmError, overpassEndpoints, tileWays, TooBig, utf8Length, waysInTiles, type Box } from "./osm";
-import { boundaryBox, walkableBoxQuery, type PlaceData } from "./placeData";
+import {
+  boundaryBox, readBoundaryFromStream, readCitySummaryFromStream, streamPlaceData, streamPlaceWays, walkableBoxQuery, type PlaceData,
+} from "./placeData";
 
 // One Overpass answer bigger than this is fetched in quarters instead. Parsed, an
 // answer takes several times its size, and one suburb ran even 512 MB out (WALKIES-9).
@@ -118,5 +121,69 @@ export const download = internalAction({
     ways.forEach((way, i) => parts.push(i === 0 ? way : `,${way}`));
     parts.push("]}");
     return await ctx.storage.store(new Blob(parts, { type: "application/json" }));
+  },
+});
+
+/** Reads only a cached place's boundary as JSON, without loading its streets into the 64 MB runtime. */
+export const boundary = internalAction({
+  args: { file: v.id("_storage") },
+  returns: v.string(),
+  handler: async (ctx, { file }) => {
+    const blob = await ctx.storage.get(file);
+    if (!blob) throw new Error("Place data file is missing");
+    return JSON.stringify(await readBoundaryFromStream(blob.stream()));
+  },
+});
+
+const vPinResult = v.object({
+  pin: v.union(v.null(), v.object({ lat: v.number(), lon: v.number() })),
+  note: v.string(),
+});
+
+/** Snaps candidate secret pins onto walkable streets inside a cached place, streaming ways one by one in Node. */
+export const placePins = internalAction({
+  args: {
+    file: v.id("_storage"),
+    spots: v.array(v.object({ lat: v.number(), lon: v.number() })),
+    maxMetres: v.number(),
+  },
+  returns: v.array(vPinResult),
+  handler: async (ctx, { file, spots, maxMetres }): Promise<PinResult[]> => {
+    if (spots.length === 0) return [];
+    const blob = await ctx.storage.get(file);
+    if (!blob) throw new Error("Place data file is missing");
+    let snapper: ReturnType<typeof pinSnappers> | undefined;
+    const { sawBoundary, waysSkipped } = await streamPlaceData(
+      blob.stream(),
+      (outline) => {
+        snapper = pinSnappers(outline, spots, maxMetres);
+        return snapper.needsWays;
+      },
+      (way) => snapper!.considerWay(way),
+    );
+    if (!sawBoundary || !snapper) throw new Error("Place data has no boundary");
+    if (waysSkipped && snapper.needsWays) {
+      await streamPlaceWays(blob.stream(), (way) => snapper!.considerWay(way));
+    }
+    return snapper.results();
+  },
+});
+
+/** Reads a saved phone City file's relation id, name and walked-tile count in Node without parsing its roads or tiles. */
+export const citySummary = internalAction({
+  args: { file: v.id("_storage") },
+  returns: v.union(
+    v.object({ ok: v.literal(false), reason: v.union(v.literal("gone"), v.literal("unreadable")) }),
+    v.object({ ok: v.literal(true), osmId: v.union(v.null(), v.number()), name: v.string(), walkedTiles: v.number() }),
+  ),
+  handler: async (ctx, { file }) => {
+    const blob = await ctx.storage.get(file);
+    if (!blob) return { ok: false as const, reason: "gone" as const };
+    try {
+      const summary = await readCitySummaryFromStream(blob.stream());
+      return { ok: true as const, ...summary };
+    } catch {
+      return { ok: false as const, reason: "unreadable" as const };
+    }
   },
 });
